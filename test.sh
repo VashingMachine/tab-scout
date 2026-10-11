@@ -26,6 +26,9 @@ done
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/ResultKeyboard.swift" \
     "$SOURCE_DIR/Tests/ResultKeyboardTests.swift" -o "$WORK_DIR/ResultKeyboardTests"
 "$WORK_DIR/ResultKeyboardTests"
+/usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/PanelPlacement.swift" \
+    "$SOURCE_DIR/Tests/PanelPlacementTests.swift" -o "$WORK_DIR/PanelPlacementTests"
+"$WORK_DIR/PanelPlacementTests"
 /usr/bin/xcrun swiftc -swift-version 5 -O "$SOURCE_DIR/Sources/Core.swift" \
     "$SOURCE_DIR/Sources/History.swift" "$SOURCE_DIR/Sources/SearchResults.swift" \
     "$SOURCE_DIR/Sources/HistoryRanking.swift" "$SOURCE_DIR/Tests/HistoryPerformanceTests.swift" \

@@ -346,10 +346,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         searchField.stringValue = ""
         remoteSuggestions = []
         let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main
-        if let screen {
-            let visible = screen.visibleFrame
-            panel.setFrameOrigin(NSPoint(x: visible.midX - panel.frame.width / 2, y: visible.midY - panel.frame.height / 2 + 80))
+        let screens = NSScreen.screens
+        let fallback = screens.first(where: { $0.frame.contains(mouse) }) ?? screens.first
+        let safariFrame = screens.first.flatMap { preview ? nil : SafariWindowFrame.current(primaryScreenTop: $0.frame.maxY) }
+        if let origin = PanelPlacement.origin(panelSize: panel.frame.size, safariFrame: safariFrame,
+                                              screens: screens.map { .init(frame: $0.frame, visibleFrame: $0.visibleFrame) },
+                                              fallbackScreen: fallback.map { .init(frame: $0.frame, visibleFrame: $0.visibleFrame) }) {
+            panel.setFrameOrigin(origin)
         }
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)

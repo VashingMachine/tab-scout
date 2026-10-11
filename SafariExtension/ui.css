@@ -29,6 +29,9 @@ button:disabled { cursor: default; opacity: 0.45; }
   margin: 40px auto;
 }
 
+body[data-surface="newtab"] { display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; min-height: 100dvh; padding: 40px 20px; }
+body[data-surface="newtab"] .scout { width: min(660px, 100%); min-width: 0; margin: 0; }
+
 .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 0 20px; }
 .toolbar h1 { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 24px; font-weight: 600; line-height: 1.3; min-width: 0; }
 .toolbar h1 > img { flex: 0 0 28px; object-fit: contain; }
@@ -91,6 +94,8 @@ body[data-surface="popup"] #query { font-size: 16px; }
 
 @media (max-width: 420px) {
   .scout { width: calc(100vw - 24px); height: calc(100dvh - 40px); margin: 20px auto; }
+  body[data-surface="newtab"] { padding: 20px 12px; }
+  body[data-surface="newtab"] .scout { width: 100%; }
   .toolbar { gap: 8px; padding-bottom: 14px; }
   .toolbar h1 { font-size: 21px; gap: 7px; }
   body[data-surface="popup"] .scout { padding: 12px 12px 8px; }

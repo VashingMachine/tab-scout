@@ -98,6 +98,25 @@ async function main() {
       }
       return { page, context, errors };
     }
+    async function checkNewTabPlacement(page, name, viewport) {
+      const layout = await page.evaluate(() => {
+        const bounds = node => {
+          const rect = node.getBoundingClientRect();
+          return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom,
+            centerX: rect.left + rect.width / 2, centerY: rect.top + rect.height / 2 };
+        };
+        return { scout: bounds(document.querySelector('.scout')), height: document.documentElement.scrollHeight,
+          controls: [...document.querySelectorAll('.toolbar button, #query, #clear-search, .result-footer')]
+            .filter(node => !node.hidden).map(bounds) };
+      });
+      assert.ok(Math.abs(layout.scout.centerX - viewport.width / 2) <= 0.5, `${name} centers horizontally in the viewport`); checks++;
+      assert.ok(Math.abs(layout.scout.centerY - viewport.height / 2) <= 0.5, `${name} centers vertically in the viewport`); checks++;
+      assert.ok(layout.scout.left >= 0 && layout.scout.right <= viewport.width && layout.scout.top >= 0 && layout.scout.bottom <= viewport.height,
+        `${name} search surface fits the viewport`); checks++;
+      assert.ok(layout.controls.every(rect => rect.left >= 0 && rect.right <= viewport.width && rect.top >= 0 && rect.bottom <= viewport.height),
+        `${name} toolbar, search, and footer remain visible`); checks++;
+      assert.ok(layout.height <= viewport.height, `${name} has no document-level vertical overflow`); checks++;
+    }
     for (const [name, surface, viewport] of [
       ['desktop', 'newtab', { width: 1280, height: 900 }],
       ['narrow', 'newtab', { width: 320, height: 700 }],
@@ -111,6 +130,15 @@ async function main() {
         }) }));
       assert.ok(layout.width <= layout.viewport, `${name} has no horizontal overflow`); checks++;
       assert.ok(layout.controls.every(rect => rect.width > 0 && rect.left >= 0 && rect.right <= viewport.width + 1), `${name} controls fit`); checks++;
+      if (surface === 'newtab') await checkNewTabPlacement(page, name, viewport);
+      if (surface === 'popup') {
+        const bounds = await page.locator('.scout').boundingBox();
+        assert.deepEqual(bounds, { x: 0, y: 0, width: 520, height: 500 }, 'popup remains anchored to its own surface'); checks++;
+      }
+      if (surface === 'options') {
+        const bounds = await page.locator('.settings-page').boundingBox();
+        assert.equal(bounds.y, 24, 'narrow settings retain their existing top margin'); checks++;
+      }
       if (surface !== 'options') {
         assert.equal(await page.locator('#query').evaluate(node => document.activeElement === node), true); checks++;
         assert.ok(await page.locator('.result-image').first().evaluate(node => node.complete && node.naturalWidth > 0)); checks++;
@@ -119,6 +147,28 @@ async function main() {
       assert.deepEqual(errors, []); checks++;
       await context.close();
     }
+    const resizing = await pageFor('newtab', { width: 1280, height: 900 });
+    await resizing.page.locator('#query').fill('cafe');
+    await resizing.page.locator('.result-title', { hasText: 'Caf\u00e9 Research' }).waitFor();
+    const resultTitles = await resizing.page.locator('.result-title').allTextContents();
+    const selectedTitle = await resizing.page.locator('.is-selected .result-title').textContent();
+    for (const [name, viewport] of [
+      ['resized-narrow', { width: 320, height: 700 }],
+      ['resized-wide-tall', { width: 1920, height: 1440 }],
+      ['resized-short', { width: 960, height: 320 }],
+      ['resized-desktop', { width: 1280, height: 900 }],
+    ]) {
+      await resizing.page.setViewportSize(viewport);
+      await checkNewTabPlacement(resizing.page, name, viewport);
+      assert.equal(await resizing.page.locator('#query').inputValue(), 'cafe', `${name} preserves the query`); checks++;
+      assert.deepEqual(await resizing.page.locator('.result-title').allTextContents(), resultTitles, `${name} preserves results`); checks++;
+      assert.equal(await resizing.page.locator('.is-selected .result-title').textContent(), selectedTitle, `${name} preserves selection`); checks++;
+      await resizing.page.screenshot({ path: resolve(output, `${name}.png`), fullPage: true });
+    }
+    assert.deepEqual(await resizing.page.evaluate(() => ({ updates: testFixture.updates, creates: testFixture.creates, removed: testFixture.removed })),
+      { updates: [], creates: [], removed: [] }, 'resizing does not act on Safari tabs'); checks++;
+    assert.deepEqual(resizing.errors, []); checks++;
+    await resizing.context.close();
     const { page, context, errors } = await pageFor('newtab', { width: 1000, height: 800 });
     await page.locator('#query').fill('cafe');
     await page.locator('.result-title', { hasText: 'Caf\u00e9 Research' }).waitFor();
@@ -147,6 +197,7 @@ async function main() {
     await popup.context.close();
 
     const options = await pageFor('options', { width: 700, height: 700 });
+    assert.equal((await options.page.locator('.settings-page').boundingBox()).y, 40, 'desktop settings retain their existing top margin'); checks++;
     await options.page.locator('#engine').selectOption('duckduckgo');
     await options.page.waitForFunction(() => testFixture.store.settings.engine === 'duckduckgo'); checks++;
     await options.context.close();
