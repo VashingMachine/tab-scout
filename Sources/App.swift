@@ -572,8 +572,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     @objc private func activateSelection(_ sender: Any?) {
-        // AppKit can send the table action while keyboard selection changes. Enter is handled separately.
-        guard NSApp.currentEvent?.type != .keyDown, NSApp.currentEvent?.type != .keyUp else { return }
+        // Ignore keyboard actions and heading clicks that leave an earlier row selected.
+        let keyboard = NSApp.currentEvent?.type == .keyDown || NSApp.currentEvent?.type == .keyUp
+        guard ResultActivation.allowsClick(in: rows, clickedRow: table.clickedRow, selectedRow: table.selectedRow, keyboardEvent: keyboard) else { return }
         activate(forceNew: false)
     }
 

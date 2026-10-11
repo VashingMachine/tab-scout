@@ -12,6 +12,7 @@ struct HistoryRankingTests {
         resultComposition()
         queryIdentity()
         navigation()
+        clickActivation()
         selectionRetention()
         print("Passed \(checks) history ranking and result navigation checks")
     }
@@ -314,6 +315,41 @@ struct HistoryRankingTests {
         expect(ResultNavigation.next(in: [.section(.tabs)], from: 0, step: 1) == nil,
                "Headers alone cannot become a navigated selection")
         expect(SearchRow.section(.google).destination == nil, "Headers never execute a search")
+    }
+
+    static func clickActivation() {
+        let list: [SearchRow] = [
+            .section(.tabs), .tab(tab("A", "https://example.com/a")),
+            .section(.recent), .recentSearch(search("a query")),
+            .section(.history), .history(visit("B", "https://example.com/b")),
+            .newTab(.search("raw query")), .section(.google), .suggestion("a suggestion")
+        ]
+        for index in [1, 3, 5, 6, 8] {
+            expect(ResultActivation.allowsClick(in: list, clickedRow: index, selectedRow: index, keyboardEvent: false),
+                   "A mouse click activates each selectable row type: \(index)")
+            expect(!ResultActivation.allowsClick(in: list, clickedRow: index, selectedRow: index, keyboardEvent: true),
+                   "Keyboard selection changes never activate a selectable row: \(index)")
+        }
+        for index in [0, 2, 4, 7] {
+            expect(!ResultActivation.allowsClick(in: list, clickedRow: index, selectedRow: index, keyboardEvent: false),
+                   "Even a selected section header cannot activate a result: \(index)")
+            expect(!ResultActivation.allowsClick(in: list, clickedRow: index, selectedRow: 1, keyboardEvent: false),
+                   "A section-header click cannot activate the earlier selected content row: \(index)")
+        }
+        expect(!ResultActivation.allowsClick(in: list, clickedRow: 3, selectedRow: 1, keyboardEvent: false),
+               "A clicked row that differs from the selected row cannot activate the previous choice")
+        expect(!ResultActivation.allowsClick(in: list, clickedRow: 1, selectedRow: -1, keyboardEvent: false),
+               "An unselected result cannot activate through a stale clicked-row index")
+        expect(!ResultActivation.allowsClick(in: list, clickedRow: -1, selectedRow: 1, keyboardEvent: false),
+               "A click outside table rows cannot activate the selected result")
+        expect(!ResultActivation.allowsClick(in: list, clickedRow: -1, selectedRow: -1, keyboardEvent: false),
+               "Matching invalid negative indices cannot activate a row")
+        expect(!ResultActivation.allowsClick(in: list, clickedRow: list.count, selectedRow: list.count, keyboardEvent: false),
+               "Matching out-of-range indices cannot activate a row")
+        expect(!ResultActivation.allowsClick(in: [], clickedRow: 0, selectedRow: 0, keyboardEvent: false),
+               "Empty results cannot activate a row")
+        expect(!ResultActivation.allowsClick(in: [], clickedRow: -1, selectedRow: -1, keyboardEvent: true),
+               "Keyboard actions are harmless even with empty results and invalid indices")
     }
 
     static func selectionRetention() {

@@ -74,3 +74,9 @@ enum ResultNavigation {
         return rows[selected].isSelectable ? selected : first(in: rows)
     }
 }
+
+enum ResultActivation {
+    static func allowsClick(in rows: [SearchRow], clickedRow: Int, selectedRow: Int, keyboardEvent: Bool) -> Bool {
+        !keyboardEvent && rows.indices.contains(clickedRow) && clickedRow == selectedRow && rows[clickedRow].isSelectable
+    }
+}
