@@ -1,0 +1,27 @@
+name: Test And Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    env:
+      TAB_SCOUT_OUTPUT_DIR: ${{ runner.temp }}/tab-scout-build
+      TAB_SCOUT_WORK_DIR: ${{ runner.temp }}/tab-scout-work
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run Automated Tests
+        run: bash test.sh
+      - name: Build App
+        run: bash build.sh
+      - name: Verify App Signature
+        run: /usr/bin/codesign --verify --strict "$TAB_SCOUT_OUTPUT_DIR/Tab Scout.app"

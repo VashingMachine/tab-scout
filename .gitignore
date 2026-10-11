@@ -1,0 +1,14 @@
+# Local application bundles and compiler/test output.
+*.app/
+build/
+work/
+.build/
+ModuleCache/
+*.dSYM/
+
+# macOS and editor state.
+.DS_Store
+*.xcuserstate
+xcuserdata/
+.idea/
+.vscode/
