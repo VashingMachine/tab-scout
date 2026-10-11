@@ -1,0 +1,35 @@
+:host {
+  all: initial !important;
+  position: fixed !important;
+  inset: 0 !important;
+  display: grid !important;
+  place-items: center !important;
+  box-sizing: border-box !important;
+  width: 100% !important;
+  height: 100dvh !important;
+  max-width: none !important;
+  max-height: none !important;
+  padding: 20px !important;
+  margin: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  z-index: 2147483647 !important;
+  overflow: hidden !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+  color-scheme: light dark !important;
+}
+:host::backdrop { background: transparent; }
+iframe {
+  display: block;
+  width: min(660px, 100%);
+  height: min(440px, calc(100dvh - 40px));
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: 0 18px 48px rgb(0 0 0 / 24%);
+}
+@media (max-width: 420px) { :host { padding: 20px 12px !important; } }

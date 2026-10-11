@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const projectPath = resolve(root, 'SafariApp/Tab Scout/Tab Scout.xcodeproj/project.pbxproj');
 const project = JSON.parse(execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', projectPath], { encoding: 'utf8' }));
+const manifest = JSON.parse(readFileSync(resolve(root, 'SafariExtension/manifest.json'), 'utf8'));
 
 function validateProject(value) {
   assert.equal(Number(value.objectVersion), 56, 'Use the stable Xcode 14 project format');
@@ -76,6 +77,33 @@ test('both targets remain sandboxed in Debug and Release without legacy permissi
     assert.equal(buildSettings.INFOPLIST_KEY_NSMainStoryboardFile, undefined);
     assert.ok(['local.tabscout.safari', 'local.tabscout.safari.Extension'].includes(buildSettings.PRODUCT_BUNDLE_IDENTIFIER));
   }
+});
+
+test('direct Xcode builds use the same version as the extension manifest', () => {
+  const configurations = Object.values(project.objects).filter(object => object.isa === 'XCBuildConfiguration'
+    && object.buildSettings.PRODUCT_BUNDLE_IDENTIFIER);
+  assert.equal(configurations.length, 4);
+  for (const { buildSettings } of configurations) {
+    assert.equal(buildSettings.MARKETING_VERSION, manifest.version);
+  }
+});
+
+test('the Xcode extension resource phase includes the overlay and protected frame dependencies', () => {
+  const target = Object.values(project.objects).find(object => object.isa === 'PBXNativeTarget'
+    && object.productType === 'com.apple.product-type.app-extension');
+  const resourcePhase = target.buildPhases.map(id => project.objects[id])
+    .find(object => object.isa === 'PBXResourcesBuildPhase');
+  const references = resourcePhase.files.map(id => project.objects[project.objects[id].fileRef]);
+  if (references.some(reference => basename(reference.path) === 'SafariExtension'
+    && (reference.lastKnownFileType === 'folder' || reference.explicitFileType === 'folder'))) return;
+  const resources = new Set(references.map(reference => basename(reference.path)));
+  const required = ['manifest.json', 'overlay.js', 'overlay-entry.mjs', 'overlay-controller.mjs', 'overlay.css', 'overlay-frame.html',
+    'background.mjs', 'search.mjs', 'core.mjs', 'services.mjs', 'ui.css', 'popup.html', 'options.html', 'icons'];
+  const frameHTML = readFileSync(resolve(root, 'SafariExtension/overlay-frame.html'), 'utf8');
+  for (const match of frameHTML.matchAll(/(?:src|href)=["']([^"']+\.(?:mjs|js|css))["']/g)) {
+    required.push(basename(match[1]));
+  }
+  for (const filename of required) assert.ok(resources.has(filename), `${filename} must survive a Store archive`);
 });
 
 test('the storyboard-free setup app explicitly retains and attaches its delegate', () => {

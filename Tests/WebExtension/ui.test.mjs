@@ -88,6 +88,7 @@ test('history and recent details use the app-style inline age', () => {
 });
 
 test('action details name the real extension provider rather than claiming Safari default access', () => {
+  assert.equal(formatRowDetail({ kind: 'action', target: { kind: 'newtab' } }), 'Safari default page');
   const row = action('weather');
   for (const [engine, title] of [['google', 'Google'], ['bing', 'Bing'], ['duckduckgo', 'DuckDuckGo']]) {
     assert.equal(formatRowDetail(row, engine), `${title} search`);

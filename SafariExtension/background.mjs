@@ -1,5 +1,6 @@
 import { DEFAULT_SETTINGS, ENGINES, address, buildRows, destination, rememberChoice, sanitizeChoices, sanitizeSettings, webURL } from './core.mjs';
 import { FaviconService, PersistentFaviconCache, SuggestionsService, TabCache } from './services.mjs';
+import { createOverlayController, validOverlayToken } from './overlay-controller.mjs';
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const keys = (value, allowed) => object(value) && Object.keys(value).every(key => allowed.includes(key));
@@ -8,6 +9,11 @@ const validQuery = value => typeof value === 'string' && value.length <= 2048 &&
 
 export function validMessage(message) {
   if (!object(message) || typeof message.type !== 'string') return false;
+  if (Object.hasOwn(message, 'overlayToken')) {
+    if (!validOverlayToken(message.overlayToken) || !['state', 'query', 'suggest', 'favicon', 'activate', 'overlayClose', 'overlayReady'].includes(message.type)) return false;
+    const { overlayToken, ...request } = message;
+    return ['overlayClose', 'overlayReady'].includes(request.type) ? keys(request, ['type']) : validMessage(request);
+  }
   switch (message.type) {
     case 'state': case 'clearChoices': return keys(message, ['type']);
     case 'query': return keys(message, ['type', 'query', 'force']) && validQuery(message.query)
@@ -19,7 +25,8 @@ export function validMessage(message) {
     case 'activate': {
       if (!keys(message, ['type', 'target', 'forceNew']) || (message.forceNew !== undefined && typeof message.forceNew !== 'boolean')) return false;
       const target = message.target;
-      return (keys(target, ['kind', 'tabId']) && target.kind === 'tab' && validID(target.tabId))
+      return (keys(target, ['kind']) && target.kind === 'newtab')
+        || (keys(target, ['kind', 'tabId']) && target.kind === 'tab' && validID(target.tabId))
         || (keys(target, ['kind', 'query']) && target.kind === 'query' && validQuery(target.query))
         || (keys(target, ['kind', 'url']) && target.kind === 'url' && !!webURL(target.url));
     }
@@ -28,6 +35,7 @@ export function validMessage(message) {
 }
 
 export function createBackground({ browser, fetch = globalThis.fetch, now = Date.now,
+  overlayController = createOverlayController({ browser, now }),
   suggestions = new SuggestionsService({ fetch, now }), favicons = new FaviconService({ fetch, now,
     persistence: new PersistentFaviconCache({ storage: browser.storage.local, now }) }) }) {
   const tabCache = new TabCache(browser, { now });
@@ -78,6 +86,7 @@ export function createBackground({ browser, fetch = globalThis.fetch, now = Date
     }).catch(() => {});
   }
   async function createOrUpdate(url, ctx, forceNew) {
+    if (ctx.surface === 'overlay' && !await overlayController.verify(ctx)) throw new Error('stale');
     if (ctx.surface === 'newtab' && !forceNew) {
       const tab = await browser.tabs.get(ctx.tabId);
       if (tab.url !== pageURLs.newtab || tab.windowId !== ctx.windowId || !!tab.incognito !== ctx.incognito) throw new Error('stale');
@@ -91,9 +100,14 @@ export function createBackground({ browser, fetch = globalThis.fetch, now = Date
   async function activate(message, ctx) {
     const { target, forceNew = false } = message;
     if (ctx.surface === 'options') throw new Error('invalid');
-    if (target.kind === 'tab') {
+    if (target.kind === 'newtab') {
+      if (!validID(ctx.windowId) || (ctx.surface === 'overlay' && !await overlayController.verify(ctx))) throw new Error('stale');
+      await browser.tabs.create({ active: true, windowId: ctx.windowId });
+      tabCache.invalidate();
+    } else if (target.kind === 'tab') {
       const tab = await browser.tabs.get(target.tabId);
       if (!!tab.incognito !== ctx.incognito || tab.url?.startsWith(extensionRoot)) throw new Error('stale');
+      if (ctx.surface === 'overlay' && !await overlayController.verify(ctx)) throw new Error('stale');
       if (forceNew) {
         const address = webURL(tab.url);
         if (!address) throw new Error('invalid');
@@ -112,22 +126,34 @@ export function createBackground({ browser, fetch = globalThis.fetch, now = Date
       await record({ kind: 'url', url: tab.url }, tab.title, ctx);
     } else {
       const url = target.kind === 'url' ? webURL(target.url) : destination(target.query, settings.engine);
-      if (!url) return { closePopup: false };
+      if (!url) return { closePopup: false, ...(ctx.surface === 'overlay' ? { closeOverlay: false } : {}) };
       await createOrUpdate(url, ctx, forceNew);
       const direct = target.kind === 'url' || address(target.query);
       const remembered = target.kind === 'url' || direct ? { kind: 'url', url } : { kind: 'query', query: target.query };
       await record(remembered, remembered.kind === 'url' ? url : target.query.trim(), ctx);
     }
-    return { closePopup: ctx.surface === 'popup' };
+    if (ctx.surface === 'overlay') await overlayController.dismiss(ctx.tabId, ctx.overlayToken);
+    return { closePopup: ctx.surface === 'popup', ...(ctx.surface === 'overlay' ? { closeOverlay: true } : {}) };
   }
   async function handle(message, sender) {
-    const surface = trustedSurface(sender);
-    if (!surface || !validMessage(message)) return { ok: false, error: 'This request is not allowed.' };
+    if (!validMessage(message)) return { ok: false, error: 'This request is not allowed.' };
+    const overlay = Object.hasOwn(message, 'overlayToken');
+    const surface = overlay ? 'overlay' : trustedSurface(sender);
+    if (!surface) return { ok: false, error: 'This request is not allowed.' };
     try {
       await load();
-      const ctx = await context(sender, surface);
+      const ctx = overlay ? await overlayController.validate(sender, message.overlayToken) : await context(sender, surface);
+      if (!ctx) throw new Error('stale');
       switch (message.type) {
-        case 'state': return { ok: true, settings: { ...settings }, context: ctx };
+        case 'state': {
+          const { overlayToken, ...publicContext } = ctx;
+          return { ok: true, settings: { ...settings }, context: publicContext };
+        }
+        case 'overlayReady': {
+          if (!await overlayController.ready(ctx)) throw new Error('stale');
+          return { ok: true };
+        }
+        case 'overlayClose': await overlayController.dismiss(ctx.tabId, ctx.overlayToken); return { ok: true, closeOverlay: true };
         case 'query': {
           const { tabs, refreshing } = await tabCache.get({ force: message.force, incognito: ctx.incognito });
           const visible = tabs.filter(tab => validID(tab.id) && !tab.url?.startsWith(extensionRoot));
@@ -157,6 +183,7 @@ export function createBackground({ browser, fetch = globalThis.fetch, now = Date
     } catch { return { ok: false, error: 'Safari could not complete this action. Refresh and try again.' }; }
   }
   function install() {
+    overlayController.install();
     const invalidate = () => tabCache.invalidate();
     for (const name of ['onCreated', 'onRemoved', 'onUpdated', 'onMoved', 'onAttached', 'onDetached', 'onReplaced']) {
       browser.tabs[name]?.addListener(invalidate);
@@ -168,7 +195,7 @@ export function createBackground({ browser, fetch = globalThis.fetch, now = Date
     });
     browser.runtime.onMessage.addListener(handle);
   }
-  return { handle, install, tabCache };
+  return { handle, install, tabCache, overlayController };
 }
 
 if (globalThis.browser?.runtime?.onMessage) createBackground({ browser: globalThis.browser }).install();

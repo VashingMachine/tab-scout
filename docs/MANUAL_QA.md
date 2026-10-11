@@ -1,6 +1,6 @@
 # Suggestions And History QA
 
-This checklist supplements [core manual QA](../Tests/MANUAL_TESTS.md) and [Safari search research](SAFARI_SEARCH.md). Automated tests use injected network responses and synthetic SQLite databases; they must not inspect a developer's real Safari history. Physical Cmd+T, macOS permission state, live rendering, and perceived responsiveness still require manual verification.
+This checklist covers the separate native menu-bar edition and supplements [core manual QA](../Tests/MANUAL_TESTS.md) and [Safari search research](SAFARI_SEARCH.md). The Safari extension uses Cmd+Shift+Y and has its own [live acceptance checklist](SAFARI_EXTENSION_QA.md); it does not import Safari history or require these native permissions. Automated tests use injected network responses and synthetic SQLite databases; they must not inspect a developer's real Safari history. Physical Cmd+T, macOS permission state, live rendering, and perceived responsiveness still require manual verification.
 
 Use a throwaway Safari window and public fixture queries. Record the build revision, macOS/Safari version, active profile, enabled menu settings, and cold/warm cache state. Never clear a user's Safari history to test the app. Tests involving database corruption, large inventories, precise visit dates, or permission errors belong in isolated fixtures.
 

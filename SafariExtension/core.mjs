@@ -151,7 +151,7 @@ export function buildRows(tabs, query, choices = [], now = Date.now()) {
     }
   }
   const action = { id: `action:${needle}`, kind: 'action', section: 'action', title: clean ? `${address(clean) ? 'Open' : 'Search for'} ${clean}` : 'New tab',
-    subtitle: '', target: { kind: 'query', query: clean } };
+    subtitle: '', target: clean ? { kind: 'query', query: clean } : { kind: 'newtab' } };
   if (!clean) rows.push(action);
   const rankedTabs = rankTabs(tabs, clean, choices, now);
   const displayedTabIDs = new Set();

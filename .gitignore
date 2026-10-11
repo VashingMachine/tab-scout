@@ -3,6 +3,7 @@
 build/
 work/
 .build/
+node_modules/
 ModuleCache/
 *.dSYM/
 

@@ -71,6 +71,7 @@ export function formatRowDetail(row, engine = "google", now = Date.now(), locale
   if (row.kind === "recent") return age || subtitle;
   if (row.kind === "history") return subtitle + (age ? ` | ${age}` : "");
   if (row.kind === "action") {
+    if (row.target?.kind === "newtab") return "Safari default page";
     const query = typeof row.target?.query === "string" ? row.target.query.trim() : "";
     if (!query) return "Tab Scout search page";
     if (address(query)) return "New Safari tab";
@@ -95,16 +96,21 @@ export function formatResultSummary(rows, query, inventory = null) {
   return `${count} ${count === 1 ? "tab" : "tabs"} in ${windows} ${windows === 1 ? "window" : "windows"}`;
 }
 
-async function startSearch(api) {
-  const input = document.querySelector("#query");
-  const results = document.querySelector("#results");
-  const status = document.querySelector("#status");
-  const summary = document.querySelector("#summary");
-  const providerStatus = document.querySelector("#provider-status");
-  const refresh = document.querySelector("#refresh");
-  const settingsButton = document.querySelector("#settings");
-  const clear = document.querySelector("#clear-search");
-  const popup = document.body.dataset.surface === "popup";
+export async function startSearch(api, { root = document, surface = document.body?.dataset.surface,
+  onClose = () => window.close(), signal, initialState } = {}) {
+  const input = root.querySelector("#query");
+  const results = root.querySelector("#results");
+  const status = root.querySelector("#status");
+  const summary = root.querySelector("#summary");
+  const providerStatus = root.querySelector("#provider-status");
+  const refresh = root.querySelector("#refresh");
+  const settingsButton = root.querySelector("#settings");
+  const clear = root.querySelector("#clear-search");
+  const popup = surface === "popup";
+  const overlay = surface === "overlay";
+  const lifetime = new AbortController();
+  const listen = (target, event, handler) => target.addEventListener(event, handler, { signal: lifetime.signal });
+  let disposed = false;
   let settings = { engine: "google", googleSuggestions: false, rememberChoices: true };
   let incognito = true;
   let baseRows = [];
@@ -120,13 +126,28 @@ async function startSearch(api) {
   let pendingActivation = null;
   const favicons = new Map();
 
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    generation += 1;
+    window.clearTimeout(suggestTimer);
+    lifetime.abort();
+    api.runtime.onMessage?.removeListener?.(tabsChanged);
+    signal?.removeEventListener("abort", dispose);
+    favicons.clear();
+  }
+  signal?.addEventListener("abort", dispose, { once: true });
+  if (signal?.aborted) { dispose(); return dispose; }
+
   async function send(message) {
     const response = await api.runtime.sendMessage(message);
+    if (disposed) throw new Error("Search closed.");
     if (!response?.ok) throw new Error(response?.error || "Tab Scout is unavailable.");
     return response;
   }
 
   function showStatus(text, error = false) {
+    if (disposed) return;
     status.textContent = text;
     status.classList.toggle("is-error", error);
     status.hidden = !text;
@@ -190,9 +211,10 @@ async function startSearch(api) {
       button.setAttribute("role", "option");
       button.tabIndex = -1;
       button.title = [row.title, formatRowDetail(row, settings.engine)].filter(Boolean).join("\n");
+      const icon = fallbackIcon(row);
       const image = document.createElement("img");
       image.className = "result-image is-symbol";
-      image.dataset.icon = fallbackIcon(row);
+      image.dataset.icon = icon;
       image.dataset.kind = row.kind;
       const fallbackSource = `icons/${image.dataset.icon}.svg`;
       image.src = fallbackSource;
@@ -206,7 +228,7 @@ async function startSearch(api) {
       image.height = 23;
       if (row.url && ["tab", "history"].includes(row.kind)) {
         favicon(row.url).then(data => {
-          if (!data || !image.isConnected || button.dataset.rowId !== row.id) return;
+          if (!data || disposed || !image.isConnected || button.dataset.rowId !== row.id) return;
           image.src = data;
           image.classList.remove("is-symbol");
         });
@@ -233,7 +255,7 @@ async function startSearch(api) {
   }
 
   async function activate(forceNew = false) {
-    if (acting) return;
+    if (acting || disposed) return;
     if (loading) { pendingActivation = { generation, forceNew }; return; }
     const target = forceNew ? { kind: "query", query: input.value.trim() } : selectedRow()?.target;
     if (!target) return;
@@ -246,10 +268,12 @@ async function startSearch(api) {
     try {
       const response = await send({ type: "activate", target, forceNew });
       if (popup && response.closePopup) window.close();
+      if (overlay && response.closeOverlay) onClose();
       showStatus("");
     } catch (error) {
       showStatus(error.message, true);
     } finally {
+      if (disposed) return;
       acting = false;
       input.readOnly = false;
       refresh.disabled = false;
@@ -265,7 +289,7 @@ async function startSearch(api) {
     refresh.disabled = true;
     try {
       const response = await send({ type: "query", query, ...(force ? { force: true } : {}) });
-      if (ticket !== generation || request !== queryRequest || acting || response.query !== query) return;
+      if (disposed || ticket !== generation || request !== queryRequest || acting || response.query !== query) return;
       baseRows = Array.isArray(response.rows) ? response.rows.filter(row => typeof row.id === "string" && typeof row.title === "string" && row.target) : [];
       inventory = response.inventory;
       loading = false;
@@ -329,11 +353,11 @@ async function startSearch(api) {
     const response = await send({ type: "state" });
     settings = response.settings;
     incognito = response.context?.incognito !== false;
-    document.querySelector("#private-badge").hidden = !incognito;
+    root.querySelector("#private-badge").hidden = !incognito;
   }
 
-  input.addEventListener("input", queryChanged);
-  input.addEventListener("keydown", event => {
+  listen(input, "input", queryChanged);
+  listen(input, "keydown", event => {
     if (event.isComposing) return;
     if (["ArrowDown", "ArrowUp"].includes(event.key) && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
       event.preventDefault();
@@ -342,47 +366,58 @@ async function startSearch(api) {
     } else if (event.key === "Enter") {
       event.preventDefault();
       activate(event.metaKey || event.ctrlKey);
-    } else if (event.key === "Escape" && popup) {
+    } else if (event.key === "Escape" && (popup || overlay)) {
       event.preventDefault();
-      if (!acting) window.close();
+      if (!acting) onClose();
     }
   });
-  document.querySelector("#search-form").addEventListener("submit", event => { event.preventDefault(); activate(); });
-  results.addEventListener("mousedown", event => {
+  listen(root.querySelector("#search-form"), "submit", event => { event.preventDefault(); activate(); });
+  listen(results, "mousedown", event => {
     if (event.target.closest(".result")) event.preventDefault();
   });
-  results.addEventListener("click", event => {
+  listen(results, "click", event => {
     const button = event.target.closest("button[data-row-id]");
     if (!button || !rows.some(row => row.id === button.dataset.rowId)) return;
     selectedID = button.dataset.rowId;
     applySelection();
     activate();
   });
-  clear.addEventListener("click", () => { input.value = ""; queryChanged(); input.focus(); });
-  refresh.addEventListener("click", () => { favicons.clear(); runQuery(generation, true, true); input.focus(); });
-  settingsButton.addEventListener("click", async () => {
+  listen(clear, "click", () => { input.value = ""; queryChanged(); input.focus(); });
+  listen(refresh, "click", () => { favicons.clear(); runQuery(generation, true, true); input.focus(); });
+  listen(settingsButton, "click", async () => {
     try {
       await api.runtime.openOptionsPage();
       if (popup) window.close();
+      if (overlay) onClose();
     } catch { showStatus("Settings could not be opened.", true); }
   });
-  api.runtime.onMessage?.addListener(message => {
+  function tabsChanged(message) {
     if (message?.type === "tabsChanged" && !acting) runQuery(generation, false, true);
-  });
-  document.addEventListener("visibilitychange", async () => {
+  }
+  api.runtime.onMessage?.addListener(tabsChanged);
+  listen(document, "visibilitychange", async () => {
     if (document.hidden || acting) return;
     try { await loadState(); suggestions = []; runQuery(generation, false, true); requestSuggestions(generation); }
     catch (error) { showStatus(error.message, true); }
   });
+  listen(window, "pagehide", dispose);
+  input.focus({ preventScroll: true });
   try {
-    await loadState();
+    if (initialState) {
+      settings = initialState.settings;
+      incognito = initialState.context?.incognito !== false;
+      root.querySelector("#private-badge").hidden = !incognito;
+    } else await loadState();
+    if (disposed) return dispose;
     queryChanged();
     input.focus();
   } catch (error) { loading = false; showStatus(error.message, true); }
+  return dispose;
 }
 
 const api = globalThis.browser || globalThis.chrome;
-if (typeof document !== "undefined") {
+if (typeof document !== "undefined" && ["popup", "newtab"].includes(document.body?.dataset.surface)
+  && ["popup.html", "newtab.html"].some(file => api?.runtime?.getURL?.(file) === location.href.split("#")[0])) {
   if (api?.runtime?.sendMessage) startSearch(api);
   else {
     const status = document.querySelector("#status");

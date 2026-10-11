@@ -4,7 +4,15 @@ This describes the Safari Web Extension, not the separate native menu-bar editio
 
 ## Permissions And Boundaries
 
-The extension requests `tabs`, `storage`, and host access. Safari requires website permission to expose tab titles and URLs. Safari's permission screen may describe broad webpage access; Tab Scout has no content scripts, does not inspect page bodies, and does not send tab inventory to a server.
+The extension requests `tabs`, `storage`, `scripting`, `activeTab`, and host access. Safari requires website permission to expose tab titles and URLs. `scripting` and permitted website access let Tab Scout insert its centered search overlay into the current HTTP(S) webpage following the Cmd+Shift+Y command. The toolbar button opens a statically declared extension popup without injecting into the webpage. `activeTab` allows temporary access associated with an explicit extension action; it is not a permanent grant to every website.
+
+Safari's permission screen may describe broad webpage access. The injected, bundled code creates and operates Tab Scout's own UI; it does not collect webpage text, form values, passwords, or page bodies. There are no automatically registered `content_scripts` or remote executable assets. `web_accessible_resources` exposes only `overlay-frame.html` for HTTP(S) embedding, not the background worker or other executable resources.
+
+The overlay host is inserted into the webpage, but the search UI runs in a separate extension-origin iframe so the website cannot inspect its DOM or receive its query keyboard events. A closed shadow host provides style isolation; that alone is not a security boundary for typed text. A per-session token is sent directly to the iframe, not placed in a URL or DOM attribute, and the background validates its tab, window, frame, and session before granting requests. A website can still interfere with the outer host or block embedding through its content security policy; injection or embedding failure uses the popup fallback. Website access remains a meaningful permission even with these narrower implementation uses.
+
+The extension does not send tab inventory or existing page contents to a server. Optional Google predictions send only eligible text typed into Tab Scout's own field as described below.
+
+Opening or dismissing search does not create or close a browser tab. On restricted pages or when access is denied, the extension opens its bundled Safari toolbar popup instead. Cmd+T is left to Safari; no new-tab override is registered. Older new-tab resources remain bundled for compatibility but are not the shortcut entry point.
 
 The containing app and extension are sandboxed. They do not request Accessibility, Safari Automation, or Full Disk Access. There is no native messaging bridge, private Safari database reader, analytics service, remote JavaScript, or remotely loaded font.
 

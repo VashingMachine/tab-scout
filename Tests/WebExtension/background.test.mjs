@@ -14,6 +14,10 @@ function fixture({ incognito = false, stored = {}, tabs: initialTabs } = {}) {
   const calls = []; const state = structuredClone(stored); let id = 100;
   const browser = {
     runtime: { id: 'tab-scout', getURL: path => root + path, onMessage: event() },
+    commands: { onCommand: event() },
+    action: { onClicked: event(), setPopup: async details => { calls.push(['setPopup', details]); },
+      openPopup: async details => { calls.push(['openPopup', details]); } },
+    scripting: { executeScript: async details => { calls.push(['inject', details]); return [{ frameId: 0, documentId: 'document-1' }]; } },
     tabs: {
       query: async query => {
         calls.push(['query', query]);
@@ -23,7 +27,9 @@ function fixture({ incognito = false, stored = {}, tabs: initialTabs } = {}) {
       update: async (id, patch) => { calls.push(['update', id, patch]); const tab = tabs.get(id); if (!tab) throw new Error('gone'); Object.assign(tab, patch); return { ...tab }; },
       create: async data => { calls.push(['create', data]); const tab = { id: id++, ...data }; tabs.set(tab.id, tab); return { ...tab }; },
       remove: async id => { calls.push(['remove', id]); tabs.delete(id); },
+      sendMessage: async (id, message, options) => { calls.push(['send', id, message, options]); return { ok: true }; },
       onCreated: event(), onRemoved: event(), onUpdated: event(), onMoved: event(), onAttached: event(), onDetached: event(), onReplaced: event(),
+      onActivated: event(),
     },
     windows: { update: async (id, patch) => { calls.push(['window', id, patch]); } },
     storage: {
@@ -40,15 +46,49 @@ function fixture({ incognito = false, stored = {}, tabs: initialTabs } = {}) {
   return { background, browser, tabs, calls, state, sender, suggestions, favicons };
 }
 const mutations = calls => calls.filter(call => ['update', 'create', 'remove', 'window', 'storage.set'].includes(call[0]));
+async function openOverlay(f) {
+  f.tabs.get(1).url = 'https://example.com/current-page';
+  assert.equal((await f.background.overlayController.toggle()).ok, true);
+  const overlayToken = f.calls.findLast(call => call[0] === 'send' && call[2].type === 'overlayOpen')[2].token;
+  const sender = { id: 'tab-scout', url: f.tabs.get(1).url, frameId: 0, documentId: 'document-1', tab: { ...f.tabs.get(1) } };
+  return { overlayToken, sender, send: message => f.background.handle({ ...message, overlayToken }, sender) };
+}
 
 test('runtime protocol validates type, structure, sizes, engines and safe targets', () => {
   for (const message of [null, [], {}, { type: 'unknown' }, { type: 'state', extra: true }, { type: 'query', query: 'x'.repeat(2049) },
     { type: 'query', query: '\0' }, { type: 'query', query: '', force: 'yes' }, { type: 'settings', settings: { engine: '__proto__' } },
     { type: 'settings', settings: { googleSuggestions: 'true' } }, { type: 'settings', settings: { unknown: true } },
     { type: 'activate', target: { kind: 'url', url: 'javascript:alert(1)' } }, { type: 'activate', target: { kind: 'tab', tabId: -1 } },
+    { type: 'activate', target: { kind: 'newtab', url: 'https://evil.example/' } }, { type: 'activate', target: { kind: 'newtab', tabId: 1 } },
+    { type: 'popupClosed', tabId: 1 }, { type: 'popupClosed', tabId: -1, popupToken: 'a'.repeat(64) },
+    { type: 'popupClosed', tabId: 1, popupToken: 'invalid' }, { type: 'popupClosed', tabId: 1, popupToken: 'a'.repeat(64), extra: true },
     { type: 'activate', target: { kind: 'tab', tabId: 2, url: 'https://other.com' } }, { type: 'activate', target: { kind: 'query', query: '' }, forceNew: 'true' }]) assert.equal(validMessage(message), false);
   for (const message of [{ type: 'state' }, { type: 'query', query: '', force: true }, { type: 'suggest', query: 'weather' },
-    { type: 'settings', settings: { engine: 'bing' } }, { type: 'activate', target: { kind: 'query', query: '' } }, { type: 'clearChoices' }]) assert.equal(validMessage(message), true);
+    { type: 'settings', settings: { engine: 'bing' } }, { type: 'activate', target: { kind: 'query', query: '' } },
+    { type: 'activate', target: { kind: 'newtab' } }, { type: 'clearChoices' }]) assert.equal(validMessage(message), true);
+});
+
+test('fallback uses the static toolbar popup and exposes no lifecycle credentials', async () => {
+  const f = fixture(); f.tabs.get(1).url = 'favorites://';
+  assert.deepEqual(await f.background.overlayController.toggle(), { ok: true, fallback: true });
+  const state = await f.background.handle({ type: 'state' }, f.sender('popup'));
+  assert.equal(state.ok, true);
+  assert.deepEqual(state.context, { surface: 'popup', incognito: false, tabId: 1, windowId: 1 });
+  const options = await f.background.handle({ type: 'state' }, f.sender('options'));
+  assert.equal(Object.hasOwn(options.context, 'popupToken'), false);
+  assert.equal(f.calls.some(call => call[0] === 'create' || call[0] === 'remove'), false);
+  assert.deepEqual(f.calls.filter(call => ['setPopup', 'openPopup'].includes(call[0])), [['openPopup', { windowId: 1 }]]);
+});
+
+test('removed dynamic popup lifecycle requests cannot change Safari configuration', async () => {
+  const f = fixture(); f.tabs.get(1).url = 'favorites://'; await f.background.overlayController.toggle();
+  const message = { type: 'popupClosed', tabId: 1, popupToken: 'a'.repeat(64) };
+  const before = f.calls.length;
+  for (const sender of [f.sender('popup'), f.sender('options'), f.sender('newtab'),
+    { id: 'tab-scout', url: 'https://example.com/popup.html' }]) {
+    assert.equal((await f.background.handle(message, sender)).ok, false);
+  }
+  assert.equal(f.calls.length, before);
 });
 
 test('only exact trusted extension pages and extension ID can invoke background', async () => {
@@ -75,7 +115,7 @@ test('queries show local rows without extension pages, isolate private tabs, and
   assert.equal(first.rows[0].target.tabId, 2); assert.equal(first.rows[1].kind, 'recent'); assert.equal(first.rows.at(-1).kind, 'action');
   assert.deepEqual(first.inventory, { tabCount: 2, windowCount: 2 });
   const second = await f.background.handle({ type: 'query', query: '' }, f.sender());
-  assert.equal(second.rows[0].target.query, ''); assert.deepEqual(second.rows.filter(row => row.kind === 'tab').map(row => row.target.tabId), [2, 3]);
+  assert.deepEqual(second.rows[0].target, { kind: 'newtab' }); assert.deepEqual(second.rows.filter(row => row.kind === 'tab').map(row => row.target.tabId), [2, 3]);
   assert.deepEqual(second.inventory, first.inventory);
   assert.equal(f.calls.filter(call => call[0] === 'query' && !call[1].active).length, 1);
 });
@@ -265,4 +305,159 @@ test('popup without a known active tab privacy context refuses action and networ
     }
     assert.equal(f.suggestions.calls.length, 0); assert.equal(f.favicons.calls.length, 0); assert.deepEqual(mutations(f.calls), []);
   }
+});
+
+test('overlay protocol allows only authorized read/search/activation/close messages', () => {
+  const overlayToken = 'a'.repeat(64);
+  for (const message of [{ type: 'state' }, { type: 'query', query: '' }, { type: 'suggest', query: 'weather' },
+    { type: 'favicon', url: 'https://example.com/' }, { type: 'activate', target: { kind: 'tab', tabId: 2 } },
+    { type: 'overlayClose' }, { type: 'overlayReady' }]) {
+    assert.equal(validMessage({ ...message, overlayToken }), true);
+  }
+  for (const message of [{ type: 'overlayClose' }, { type: 'overlayReady' }, { type: 'overlayReady', overlayToken, extra: true }, { type: 'overlayClose', overlayToken, extra: true },
+    { type: 'state', overlayToken: 'invalid' }, { type: 'settings', settings: { engine: 'bing' }, overlayToken },
+    { type: 'popupClosed', tabId: 1, popupToken: overlayToken, overlayToken },
+    { type: 'clearChoices', overlayToken }, { type: 'query', query: '', overlayToken, extra: true }]) assert.equal(validMessage(message), false);
+});
+
+test('overlay state and inventory are authorized without exposing session credentials', async () => {
+  const f = fixture(); const overlay = await openOverlay(f);
+  const result = await overlay.send({ type: 'state' });
+  assert.deepEqual(result.context, { surface: 'overlay', incognito: false, tabId: 1, windowId: 1 });
+  assert.equal(JSON.stringify(result).includes(overlay.overlayToken), false);
+  const query = await overlay.send({ type: 'query', query: '' });
+  assert.deepEqual(query.inventory, { tabCount: 3, windowCount: 2 });
+  assert.equal(query.rows.some(row => row.target?.tabId === 1), true);
+  assert.deepEqual(mutations(f.calls), []);
+});
+
+test('overlay activation switches existing tabs without closing or navigating its user page', async () => {
+  const f = fixture(); const overlay = await openOverlay(f); const original = f.tabs.get(1).url;
+  const result = await overlay.send({ type: 'activate', target: { kind: 'tab', tabId: 2 } });
+  assert.deepEqual(result, { ok: true, closePopup: false, closeOverlay: true });
+  assert.equal(f.tabs.get(1).url, original); assert.equal(f.tabs.has(1), true);
+  assert.deepEqual(mutations(f.calls).slice(0, 2), [['update', 2, { active: true }], ['window', 2, { focused: true }]]);
+  assert.equal(f.calls.some(call => call[0] === 'remove' || call[0] === 'create'), false);
+  assert.equal((await overlay.send({ type: 'state' })).ok, false);
+});
+
+test('overlay search and direct addresses create one destination tab in its window, preserving source', async () => {
+  for (const target of [{ kind: 'url', url: 'https://example.com/docs' }, { kind: 'query', query: 'weather' }]) {
+    const f = fixture(); const overlay = await openOverlay(f); const original = f.tabs.get(1).url;
+    const result = await overlay.send({ type: 'activate', target });
+    assert.equal(result.ok, true); assert.equal(result.closeOverlay, true);
+    assert.equal(f.tabs.get(1).url, original); assert.equal(f.calls.some(call => call[0] === 'update' || call[0] === 'remove'), false);
+    const creations = f.calls.filter(call => call[0] === 'create'); assert.equal(creations.length, 1); assert.equal(creations[0][1].windowId, 1);
+    assert.equal((await overlay.send({ type: 'state' })).ok, false);
+  }
+});
+
+test('closing an overlay changes no tab or choices and invalidates its token', async () => {
+  const f = fixture(); const overlay = await openOverlay(f); const original = structuredClone([...f.tabs.values()]);
+  assert.deepEqual(await overlay.send({ type: 'overlayClose' }), { ok: true, closeOverlay: true });
+  assert.deepEqual([...f.tabs.values()], original); assert.deepEqual(mutations(f.calls), []);
+  assert.equal((await overlay.send({ type: 'query', query: 'weather' })).ok, false);
+});
+
+test('blank overlay activation stays open without navigating or persisting', async () => {
+  const f = fixture(); const overlay = await openOverlay(f);
+  assert.deepEqual(await overlay.send({ type: 'activate', target: { kind: 'query', query: '  ' } }), { ok: true, closePopup: false, closeOverlay: false });
+  assert.deepEqual(mutations(f.calls), []); assert.equal((await overlay.send({ type: 'state' })).ok, true);
+});
+
+test('explicit newtab action opens Safari default page with no URL or choice record', async () => {
+  for (const surface of ['overlay', 'popup', 'newtab']) {
+    for (const incognito of [false, true]) {
+      const f = fixture({ incognito });
+      const overlay = surface === 'overlay' ? await openOverlay(f) : null;
+      const original = f.tabs.get(1).url;
+      const result = overlay ? await overlay.send({ type: 'activate', target: { kind: 'newtab' } })
+        : await f.background.handle({ type: 'activate', target: { kind: 'newtab' } }, f.sender(surface));
+      assert.equal(result.ok, true);
+      assert.equal(result.closePopup, surface === 'popup');
+      if (overlay) assert.equal(result.closeOverlay, true);
+      assert.deepEqual(f.calls.filter(call => call[0] === 'create'), [['create', { active: true, windowId: 1 }]]);
+      assert.equal(f.tabs.get(1).url, original);
+      assert.equal(f.calls.some(call => ['update', 'remove', 'storage.set'].includes(call[0])), false);
+    }
+  }
+});
+
+test('explicit newtab cannot use a stale overlay session or the options page', async () => {
+  const f = fixture(); const overlay = await openOverlay(f); f.tabs.get(1).url = 'https://example.com/navigated';
+  assert.equal((await overlay.send({ type: 'activate', target: { kind: 'newtab' } })).ok, false);
+  assert.equal((await f.background.handle({ type: 'activate', target: { kind: 'newtab' } }, f.sender('options'))).ok, false);
+  assert.deepEqual(mutations(f.calls), []);
+});
+
+test('overlay cannot change settings or clear choices even with a valid session', async () => {
+  const f = fixture(); const overlay = await openOverlay(f);
+  assert.equal((await overlay.send({ type: 'settings', settings: { engine: 'bing' } })).ok, false);
+  assert.equal((await overlay.send({ type: 'clearChoices' })).ok, false);
+  assert.deepEqual(mutations(f.calls), []);
+});
+
+test('private overlay isolates ranking, external suggestions, favicons and choice persistence', async () => {
+  const f = fixture({ incognito: true, stored: { settings: { googleSuggestions: true },
+    choices: [{ kind: 'query', value: 'secret regular choice', count: 1, lastUsed: now }] } });
+  f.tabs.set(4, { id: 4, windowId: 4, title: 'Regular secret', url: 'https://regular.example.com/', incognito: false });
+  const overlay = await openOverlay(f); const rows = (await overlay.send({ type: 'query', query: '' })).rows;
+  assert.equal(rows.some(row => row.kind === 'recent' || row.kind === 'history' || row.target?.tabId === 4), false);
+  assert.deepEqual((await overlay.send({ type: 'suggest', query: 'private weather' })).suggestions, []);
+  assert.equal(f.suggestions.calls.at(-1).options.incognito, true);
+  assert.equal((await overlay.send({ type: 'favicon', url: 'https://example.com/' })).image, null);
+  assert.equal(f.favicons.calls.at(-1).options.incognito, true);
+  assert.equal((await overlay.send({ type: 'activate', target: { kind: 'tab', tabId: 4 } })).ok, false);
+  assert.equal((await overlay.send({ type: 'activate', target: { kind: 'query', query: 'private weather' } })).ok, true);
+  assert.equal(f.calls.some(call => call[0] === 'storage.set'), false);
+  assert.equal(f.calls.find(call => call[0] === 'create')[1].windowId, 1);
+});
+
+test('forged and stale overlay sessions cannot invoke network or mutations', async () => {
+  for (const mutate of [overlay => { overlay.overlayToken = 'b'.repeat(64); },
+    overlay => { overlay.sender.frameId = 1; }, overlay => { overlay.sender.documentId = 'old-document'; },
+    (overlay, f) => { f.tabs.get(1).url = 'https://example.com/navigated'; },
+    (overlay, f) => { f.tabs.get(1).windowId = 9; }, (overlay, f) => { f.tabs.get(1).incognito = undefined; }]) {
+    const f = fixture(); const overlay = await openOverlay(f); mutate(overlay, f);
+    for (const message of [{ type: 'suggest', query: 'weather' }, { type: 'favicon', url: 'https://example.com/' },
+      { type: 'activate', target: { kind: 'query', query: 'weather' } }]) {
+      const result = await f.background.handle({ ...message, overlayToken: overlay.overlayToken }, overlay.sender);
+      assert.equal(result.ok, false);
+    }
+    assert.equal(f.suggestions.calls.length, 0); assert.equal(f.favicons.calls.length, 0); assert.deepEqual(mutations(f.calls), []);
+  }
+});
+
+test('navigation while resolving an activation target prevents later overlay mutations', async () => {
+  const f = fixture(); const overlay = await openOverlay(f); const get = f.browser.tabs.get;
+  f.browser.tabs.get = async id => { const tab = await get(id); if (id === 2) f.tabs.get(1).url = 'https://example.com/navigated'; return tab; };
+  assert.equal((await overlay.send({ type: 'activate', target: { kind: 'tab', tabId: 2 } })).ok, false);
+  assert.deepEqual(mutations(f.calls), []);
+});
+
+test('protected iframe receives authorized search data but rejects unsolicited embedding and frame reuse', async () => {
+  const f = fixture(); const overlay = await openOverlay(f);
+  const child = { ...overlay.sender, url: `${root}overlay-frame.html`, frameId: 8, documentId: 'protected-frame-document' };
+  assert.equal((await f.background.handle({ type: 'state', overlayToken: overlay.overlayToken }, child)).ok, false);
+  assert.equal((await overlay.send({ type: 'state' })).ok, true);
+  const message = { type: 'query', query: 'swift', overlayToken: overlay.overlayToken };
+  assert.equal((await f.background.handle(message, child)).rows[0].target.tabId, 2);
+  for (const sender of [{ ...child, frameId: 9 }, { ...child, documentId: 'reloaded-frame' },
+    { ...child, url: `${root}overlay-frame.html?fake=1` }]) assert.equal((await f.background.handle(message, sender)).ok, false);
+  assert.equal((await f.background.handle({ type: 'settings', settings: { engine: 'bing' }, overlayToken: overlay.overlayToken }, child)).ok, false);
+  assert.deepEqual(await f.background.handle({ type: 'overlayClose', overlayToken: overlay.overlayToken }, child), { ok: true, closeOverlay: true });
+  assert.equal((await f.background.handle(message, child)).ok, false);
+});
+
+test('overlayReady accepts only an authorized protected child and not website content or arbitrary pages', async () => {
+  const f = fixture(); const overlay = await openOverlay(f);
+  const message = { type: 'overlayReady', overlayToken: overlay.overlayToken };
+  const child = { ...overlay.sender, url: `${root}overlay-frame.html`, frameId: 8, documentId: 'protected-frame-document' };
+  assert.equal((await f.background.handle(message, child)).ok, false);
+  assert.equal((await f.background.handle(message, overlay.sender)).ok, false);
+  await overlay.send({ type: 'state' });
+  assert.deepEqual(await f.background.handle(message, child), { ok: true });
+  assert.equal(f.calls.findLast(call => call[0] === 'send')[2].type, 'overlayReady');
+  assert.equal((await f.background.handle(message, { ...child, frameId: 9 })).ok, false);
+  assert.equal((await f.background.handle(message, { ...child, url: `${root}popup.html` })).ok, false);
 });

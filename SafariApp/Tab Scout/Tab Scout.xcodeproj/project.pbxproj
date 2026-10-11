@@ -22,6 +22,12 @@
 		B2C3FDF5307BF65100862541 /* services.mjs in Resources */ = {isa = PBXBuildFile; fileRef = B2C3FDEA307BF65100862541 /* services.mjs */; };
 		B2C3FDF6307BF65100862541 /* background.mjs in Resources */ = {isa = PBXBuildFile; fileRef = B2C3FDEB307BF65100862541 /* background.mjs */; };
 		B2C3FDF7307BF65100862541 /* search.mjs in Resources */ = {isa = PBXBuildFile; fileRef = B2C3FDEC307BF65100862541 /* search.mjs */; };
+		B2C3FE00307BF65100862541 /* overlay.js in Resources */ = {isa = PBXBuildFile; fileRef = B2C3FDF8307BF65100862541 /* overlay.js */; };
+		B2C3FE01307BF65100862541 /* overlay-entry.mjs in Resources */ = {isa = PBXBuildFile; fileRef = B2C3FDF9307BF65100862541 /* overlay-entry.mjs */; };
+		B2C3FE02307BF65100862541 /* overlay-controller.mjs in Resources */ = {isa = PBXBuildFile; fileRef = B2C3FDFA307BF65100862541 /* overlay-controller.mjs */; };
+		B2C3FE03307BF65100862541 /* overlay.css in Resources */ = {isa = PBXBuildFile; fileRef = B2C3FDFB307BF65100862541 /* overlay.css */; };
+		B2C3FE04307BF65100862541 /* overlay-frame.html in Resources */ = {isa = PBXBuildFile; fileRef = B2C3FDFC307BF65100862541 /* overlay-frame.html */; };
+		B2C3FE05307BF65100862541 /* overlay-frame.mjs in Resources */ = {isa = PBXBuildFile; fileRef = B2C3FDFD307BF65100862541 /* overlay-frame.mjs */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -65,6 +71,12 @@
 		B2C3FDEA307BF65100862541 /* services.mjs */ = {isa = PBXFileReference; lastKnownFileType = text; name = services.mjs; path = ../../../SafariExtension/services.mjs; sourceTree = "<group>"; };
 		B2C3FDEB307BF65100862541 /* background.mjs */ = {isa = PBXFileReference; lastKnownFileType = text; name = background.mjs; path = ../../../SafariExtension/background.mjs; sourceTree = "<group>"; };
 		B2C3FDEC307BF65100862541 /* search.mjs */ = {isa = PBXFileReference; lastKnownFileType = text; name = search.mjs; path = ../../../SafariExtension/search.mjs; sourceTree = "<group>"; };
+		B2C3FDF8307BF65100862541 /* overlay.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = overlay.js; path = ../../../SafariExtension/overlay.js; sourceTree = "<group>"; };
+		B2C3FDF9307BF65100862541 /* overlay-entry.mjs */ = {isa = PBXFileReference; lastKnownFileType = text; name = overlay-entry.mjs; path = ../../../SafariExtension/overlay-entry.mjs; sourceTree = "<group>"; };
+		B2C3FDFA307BF65100862541 /* overlay-controller.mjs */ = {isa = PBXFileReference; lastKnownFileType = text; name = overlay-controller.mjs; path = ../../../SafariExtension/overlay-controller.mjs; sourceTree = "<group>"; };
+		B2C3FDFB307BF65100862541 /* overlay.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; name = overlay.css; path = ../../../SafariExtension/overlay.css; sourceTree = "<group>"; };
+		B2C3FDFC307BF65100862541 /* overlay-frame.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; name = overlay-frame.html; path = ../../../SafariExtension/overlay-frame.html; sourceTree = "<group>"; };
+		B2C3FDFD307BF65100862541 /* overlay-frame.mjs */ = {isa = PBXFileReference; lastKnownFileType = text; name = overlay-frame.mjs; path = ../../../SafariExtension/overlay-frame.mjs; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -133,6 +145,12 @@
 				B2C3FDEA307BF65100862541 /* services.mjs */,
 				B2C3FDEB307BF65100862541 /* background.mjs */,
 				B2C3FDEC307BF65100862541 /* search.mjs */,
+				B2C3FDF8307BF65100862541 /* overlay.js */,
+				B2C3FDF9307BF65100862541 /* overlay-entry.mjs */,
+				B2C3FDFA307BF65100862541 /* overlay-controller.mjs */,
+				B2C3FDFB307BF65100862541 /* overlay.css */,
+				B2C3FDFC307BF65100862541 /* overlay-frame.html */,
+				B2C3FDFD307BF65100862541 /* overlay-frame.mjs */,
 			);
 			name = Resources;
 			path = "Tab Scout Extension";
@@ -233,6 +251,12 @@
 				B2C3FDF2307BF65100862541 /* icons in Resources */,
 				B2C3FDEF307BF65100862541 /* newtab.html in Resources */,
 				B2C3FDEE307BF65100862541 /* popup.html in Resources */,
+				B2C3FE00307BF65100862541 /* overlay.js in Resources */,
+				B2C3FE01307BF65100862541 /* overlay-entry.mjs in Resources */,
+				B2C3FE02307BF65100862541 /* overlay-controller.mjs in Resources */,
+				B2C3FE03307BF65100862541 /* overlay.css in Resources */,
+				B2C3FE04307BF65100862541 /* overlay-frame.html in Resources */,
+				B2C3FE05307BF65100862541 /* overlay-frame.mjs in Resources */,
 			);
 		};
 /* End PBXResourcesBuildPhase section */
@@ -399,7 +423,7 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.3;
-				MARKETING_VERSION = 1.3.0;
+				MARKETING_VERSION = 1.4.0;
 				OTHER_LDFLAGS = (
 					"-framework",
 					SafariServices,
@@ -435,7 +459,7 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.3;
-				MARKETING_VERSION = 1.3.0;
+				MARKETING_VERSION = 1.4.0;
 				OTHER_LDFLAGS = (
 					"-framework",
 					SafariServices,
@@ -473,7 +497,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.3.0;
+				MARKETING_VERSION = 1.4.0;
 				OTHER_LDFLAGS = (
 					"-framework",
 					SafariServices,
@@ -511,7 +535,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.3.0;
+				MARKETING_VERSION = 1.4.0;
 				OTHER_LDFLAGS = (
 					"-framework",
 					SafariServices,

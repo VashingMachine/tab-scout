@@ -13,6 +13,12 @@ test('normalization folds case, whitespace, combining accents and Polish letters
   assert.equal(normalize(null), '');
 });
 
+test('blank search offers an explicit Safari default new-tab action', () => {
+  const [row] = buildRows([], '');
+  assert.equal(row.title, 'New tab');
+  assert.deepEqual(row.target, { kind: 'newtab' });
+});
+
 test('empty destinations never navigate to about:blank', () => {
   for (const query of ['', ' ', '\t\n']) assert.equal(destination(query), null);
 });
@@ -122,7 +128,7 @@ test('equal text matches use recency/frequency then stable source order', () => 
 test('empty row stays first while all tabs and recent searches remain accessible', () => {
   const tabs = [tab(1, 'One', 'https://one.example.com'), tab(2, 'Two', 'https://two.example.com')];
   const rows = buildRows(tabs, ' \n ', [choice('query', 'recent query')], now);
-  assert.equal(rows[0].kind, 'action'); assert.equal(rows[0].target.query, '');
+  assert.equal(rows[0].kind, 'action'); assert.deepEqual(rows[0].target, { kind: 'newtab' });
   assert.equal(rows.filter(row => row.kind === 'tab').length, 2);
   assert.equal(rows.at(-1).kind, 'recent');
 });

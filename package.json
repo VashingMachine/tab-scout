@@ -1,0 +1,12 @@
+{
+  "name": "tab-scout",
+  "private": true,
+  "version": "1.4.0",
+  "scripts": {
+    "build:overlay": "node scripts/build-overlay.mjs",
+    "check:overlay": "node scripts/build-overlay.mjs --check"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

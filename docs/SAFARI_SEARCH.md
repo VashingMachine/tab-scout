@@ -31,11 +31,21 @@ The installed Safari scripting dictionary at `/Applications/Safari.app/Contents/
 
 Safari WebExtensions do not solve this by using `browser.history` or `browser.search`: Mozilla's current compatibility data marks both unsupported in Safari. Apple's compatibility guide directs extension authors to these compatibility tables and to provide workarounds for unsupported APIs. [Apple: Safari extension compatibility](https://developer.apple.com/documentation/safariservices/assessing-your-safari-web-extension-s-browser-compatibility), [Mozilla: history compatibility data](https://github.com/mdn/browser-compat-data/blob/main/webextensions/api/history.json), [Mozilla: search compatibility data](https://github.com/mdn/browser-compat-data/blob/main/webextensions/api/search.json)
 
-Consequently, the suggestions provider should be an explicit Tab Scout setting. Google suggestions must be labeled Google, not described as automatically mirroring every possible Safari search engine. Execution can still use Safari's configured provider.
+Consequently, the suggestions provider is an explicit Tab Scout setting. Google suggestions must be labeled Google, not described as automatically mirroring every possible Safari search engine. The separate native edition can execute a search through Safari's configured provider; the extension instead navigates to its explicitly selected Google, Bing, or DuckDuckGo provider.
+
+## Extension Shortcut And Overlay Boundary
+
+Safari Web Extensions support keyboard commands, including the MV3 `_execute_action` command. A Safari 27 live probe on this development machine found that assigning Cmd+T did not trigger the extension action: Safari opened a new tab and focused its address field. A custom Cmd+Shift+Y command successfully opened a popup over the existing page and accepted typing immediately. This is a version-specific live result, not a claim that all Safari extension shortcuts are unavailable. [WebKit: Commands manifest implementation](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/Extensions/WebExtension.cpp)
+
+The current extension uses Cmd+Shift+Y to insert a centered overlay into a permitted HTTP(S) webpage. Its toolbar button opens a statically declared native popup. It leaves native Cmd+T alone and declares no new-tab override. Content modification requires website access and uses Safari's supported scripting APIs; denied or restricted pages use the toolbar popup fallback. The overlay centers within the page viewport, not over Safari's browser chrome. [Apple: Creating Safari web extensions](https://developer.apple.com/videos/play/wwdc2026/216/), [Apple: Website permissions](https://developer.apple.com/documentation/safariservices/managing-safari-web-extension-permissions)
+
+`action.openPopup()` is not a positioning API for a centered native dialog. In the current WebKit implementation, it performs the action as not user-triggered, so a programmatic popup call does not itself establish temporary `activeTab` website access. Toolbar clicks and extension commands must be distinguished from an arbitrary script calling that API. Physical keyboard focus and the permission-denied fallback require real Safari testing. [WebKit: Action API implementation](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/Extensions/Cocoa/API/WebExtensionContextAPIActionCocoa.mm)
+
+A new-tab override followed by closing its own page and returning to a previous-tab overlay would still create a transient tab, introduce focus races, and depend on that webpage's permission. It would not meet a universal zero-new-tab native Cmd+T contract. Tab Scout does not use that workaround.
 
 ## History Architecture and Privacy
 
-Tab Scout combines Safari history and locally accepted choices as optional ranking inputs:
+The separate native edition combines Safari history and locally accepted choices as optional ranking inputs. The sandboxed Safari extension uses only Tab Scout's accepted choices and does not import Safari's database or request Full Disk Access:
 
 - Keep Tab Scout's accepted-choice history locally. Record only successful actions, not every typed prefix, cancelled choice, or failed action. Expose a clear-history control.
 - Make Safari history access optional and read-only. Safari's `History.db` is a private implementation detail rather than a public, stable API; its schema may change. Use bounded reads, background work, defensive schema handling, and a safe fallback when access fails.

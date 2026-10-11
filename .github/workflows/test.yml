@@ -22,6 +22,10 @@ jobs:
           echo "TAB_SCOUT_WORK_DIR=$RUNNER_TEMP/tab-scout-work" >> "$GITHUB_ENV"
       - name: Run Automated Tests
         run: bash test.sh
+      - name: Verify Overlay Bundle
+        run: |
+          npm ci
+          npm run check:overlay
       - name: Test Safari Extension
         run: bash test-safari.sh
       - name: Test Extension UI Fixtures

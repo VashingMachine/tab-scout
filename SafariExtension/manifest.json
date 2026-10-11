@@ -1,17 +1,24 @@
 {
   "manifest_version": 3,
   "name": "Tab Scout",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Find an open Safari tab before opening another one.",
-  "permissions": ["tabs", "storage"],
+  "permissions": ["tabs", "storage", "scripting", "activeTab"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.mjs",
     "type": "module"
   },
-  "chrome_url_overrides": {
-    "newtab": "newtab.html"
+  "commands": {
+    "toggle-search": {
+      "suggested_key": { "default": "Ctrl+Shift+Y", "mac": "Command+Shift+Y" },
+      "description": "Search Safari tabs"
+    }
   },
+  "web_accessible_resources": [{
+    "resources": ["overlay-frame.html"],
+    "matches": ["http://*/*", "https://*/*"]
+  }],
   "action": {
     "default_title": "Search Safari tabs",
     "default_popup": "popup.html",
