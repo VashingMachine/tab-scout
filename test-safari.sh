@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
-node --test "$SOURCE_DIR/Tests/SafariManifestTests.mjs" "$SOURCE_DIR"/Tests/WebExtension/*.test.mjs
+node --test "$SOURCE_DIR/Tests/SafariManifestTests.mjs" "$SOURCE_DIR/Tests/SafariProjectTests.mjs" "$SOURCE_DIR"/Tests/WebExtension/*.test.mjs
 for source in "$SOURCE_DIR"/SafariExtension/*.mjs; do
     node --check "$source"
 done

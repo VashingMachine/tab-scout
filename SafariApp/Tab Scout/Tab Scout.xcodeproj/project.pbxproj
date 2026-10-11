@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 110;
+	objectVersion = 56;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -38,7 +38,7 @@
 		B2C3FDDD307BF65100862541 /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			dstPath = "";
-			dstSubfolder = PlugIns;
+			dstSubfolderSpec = 13;
 			files = (
 				B2C3FDD1307BF65100862541 /* Tab Scout Extension.appex in Embed Foundation Extensions */,
 			);
@@ -194,6 +194,7 @@
 				};
 			};
 			buildConfigurationList = B2C3FDB0307BF65100862541 /* Build configuration list for PBXProject "Tab Scout" */;
+			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -201,8 +202,6 @@
 				Base,
 			);
 			mainGroup = B2C3FDAC307BF65100862541;
-			minimizedProjectReferenceProxies = 1;
-			preferredProjectObjectVersion = 77;
 			productRefGroup = B2C3FDB6307BF65100862541 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -558,5 +557,4 @@
 /* End XCConfigurationList section */
 	};
 	rootObject = B2C3FDAD307BF65100862541 /* Project object */;
-	validationLevel = 1;
 }

@@ -19,7 +19,7 @@ Enter activates the selected row; arrow keys move the selection. Cmd+Enter opens
 
 ## Build And Test
 
-Requires macOS 13.3 or later, Safari 16.4 or later, Xcode, and Node.js 20 or later for the JavaScript tests. No JavaScript build framework or package installation is required.
+Requires macOS 13.3 or later, Safari 16.4 or later, Xcode, and Node.js 20 or later for build validation and the JavaScript tests. No JavaScript build framework or package installation is required.
 
 ```sh
 git clone https://github.com/VashingMachine/tab-scout.git ~/projects/tabs-scout

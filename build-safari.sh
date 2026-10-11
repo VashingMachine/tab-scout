@@ -22,6 +22,7 @@ if [[ ! -d "$PROJECT" ]]; then
     printf 'Missing Safari Xcode project: %s\n' "$PROJECT" >&2
     exit 1
 fi
+"${TAB_SCOUT_NODE_BINARY:-node}" --test "$SOURCE_DIR/Tests/SafariProjectTests.mjs"
 if [[ -e "$APP_DIR" ]]; then
     printf 'Refusing to overwrite %s. Choose an empty TAB_SCOUT_OUTPUT_DIR.\n' "$APP_DIR" >&2
     exit 1
