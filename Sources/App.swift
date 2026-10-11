@@ -16,6 +16,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var bridge: SafariBridge!
     private var tabStore: TabStore!
     private lazy var favicons = FaviconStore()
+    private lazy var historyStore = HistoryStore()
+    private lazy var googleSuggestions = GoogleSuggestionsService()
+    private let historyQueue = DispatchQueue(label: "local.tabscout.history-index", qos: .userInitiated)
+    private var historyIndex = HistorySearchIndex(.empty)
+    private var openTabs = OpenTabLookup([])
+    private var remoteSuggestions: [String] = []
+    private var historyRequestID = 0
+    private var historyError: Error?
+    private var historyLoaded = false
+    private var googleItems: [NSMenuItem] = []
+    private var historyItems: [NSMenuItem] = []
+    private var historyState: NSTextField?
+    private lazy var relativeDate: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter
+    }()
+    private var googleEnabled: Bool { UserDefaults.standard.bool(forKey: "GoogleSuggestionsEnabled") }
+    private var safariHistoryEnabled: Bool { UserDefaults.standard.bool(forKey: "SafariHistoryEnabled") }
     private var searchIndex = TabSearchIndex([])
     private var windowNumbers: [Int: Int] = [:]
     private var statusItem: NSStatusItem!
@@ -76,15 +95,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
         buildMenu()
         buildPanel()
+        reloadHistory()
         safariActive = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.Safari"
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
             guard let self, let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
             self.safariActive = app.bundleIdentifier == "com.apple.Safari"
-            if self.safariActive && self.safariAllowed { self.tabStore.prewarm() }
+            if !self.preview && self.safariActive && self.safariAllowed { self.tabStore.prewarm() }
         }
         terminationObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] note in
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-                  app.bundleIdentifier == "com.apple.Safari" else { return }
+                  app.bundleIdentifier == "com.apple.Safari", self?.preview == false else { return }
             self?.tabStore.invalidate()
             self?.clearResults()
             if self?.panel.isVisible == true { self?.loadTabs(force: true) }
@@ -125,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         permissionTimer?.invalidate()
         cacheTimer?.invalidate()
+        if !preview { googleSuggestions.cancel() }
     }
 
     private func buildMenu() {
@@ -133,6 +154,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let appItem = NSMenuItem()
         appItem.submenu = appMenu
         main.addItem(appItem)
+        addSearchPreferences(to: appMenu)
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Tab Scout", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let edit = NSMenu(title: "Edit")
         let editItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
@@ -155,12 +178,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         pauseItem.state = .on
         let permissions = menu.addItem(withTitle: "Permissions...", action: #selector(showPermissions(_:)), keyEquivalent: "")
         permissions.target = self
+        menu.addItem(.separator())
+        addSearchPreferences(to: menu)
+        menu.addItem(.separator())
         loginItem = menu.addItem(withTitle: "Start at Login", action: #selector(toggleLogin(_:)), keyEquivalent: "")
         loginItem.target = self
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Tab Scout", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         statusItem.menu = menu
+    }
+
+    private func addSearchPreferences(to menu: NSMenu) {
+        let google = menu.addItem(withTitle: "Google Suggestions", action: #selector(toggleGoogle(_:)), keyEquivalent: "")
+        google.target = self
+        google.state = googleEnabled ? .on : .off
+        googleItems.append(google)
+        let history = menu.addItem(withTitle: "Use Safari History", action: #selector(toggleSafariHistory(_:)), keyEquivalent: "")
+        history.target = self
+        history.state = safariHistoryEnabled ? .on : .off
+        historyItems.append(history)
+        let clear = menu.addItem(withTitle: "Clear Tab Scout History...", action: #selector(clearHistory(_:)), keyEquivalent: "")
+        clear.target = self
     }
 
     private func installTapIfAllowed() {
@@ -305,6 +344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         returnApp = NSWorkspace.shared.frontmostApplication
         setupWindow?.orderOut(nil)
         searchField.stringValue = ""
+        remoteSuggestions = []
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main
         if let screen {
@@ -315,6 +355,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(searchField)
         loadTabs()
+        reloadHistory()
     }
 
     @objc private func refresh(_ sender: Any?) { if !acting { loadTabs(force: true) } }
@@ -350,6 +391,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             let hadResults = ready
             self.tabs = snapshot.tabs
             searchIndex = snapshot.index
+            openTabs = OpenTabLookup(snapshot.tabs)
             windowNumbers = [:]
             for tab in tabs where windowNumbers[tab.windowID] == nil { windowNumbers[tab.windowID] = windowNumbers.count + 1 }
             ready = true
@@ -371,29 +413,105 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
     }
 
-    func controlTextDidChange(_ obj: Notification) { if ready { updateRows() } }
+    func controlTextDidChange(_ obj: Notification) {
+        remoteSuggestions = []
+        if ready { updateRows() }
+        requestSuggestions()
+    }
+
+    private func requestSuggestions() {
+        let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if preview {
+            remoteSuggestions = ["swift programming", "swift documentation", "swift concurrency"].filter {
+                !query.isEmpty && $0.hasPrefix(query.lowercased())
+            }
+            if ready { updateRows(preserveSelection: true) }
+            return
+        }
+        guard googleEnabled, panel.isVisible else { googleSuggestions.cancel(); return }
+        googleSuggestions.suggestions(for: query) { [weak self] response in
+            guard let self, self.googleEnabled, self.panel.isVisible,
+                  self.searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) == response.query else { return }
+            self.remoteSuggestions = response.suggestions
+            if self.ready { self.updateRows(preserveSelection: true) }
+        }
+    }
+
+    private func reloadHistory() {
+        historyRequestID += 1
+        let token = historyRequestID
+        if preview {
+            let now = Date()
+            historyIndex = HistorySearchIndex(HistorySnapshot(visits: [
+                HistoryVisit(url: "https://www.swift.org/documentation/", title: "Swift Documentation", lastVisited: now.addingTimeInterval(-3_600), visitCount: 12)
+            ], searches: [PastSearch(query: "swift concurrency", lastUsed: now.addingTimeInterval(-120), useCount: 3)]))
+            return
+        }
+        historyStore.load(includeSafari: safariHistoryEnabled) { [weak self] result in
+            guard let self, token == self.historyRequestID else { return }
+            self.historyLoaded = true
+            if case .failure(let error) = result { self.historyError = error } else { self.historyError = nil }
+            let snapshot = (try? result.get()) ?? self.historyStore.snapshot
+            self.historyQueue.async {
+                let index = HistorySearchIndex(snapshot)
+                DispatchQueue.main.async {
+                    guard token == self.historyRequestID else { return }
+                    self.historyIndex = index
+                    self.updatePermissionLabels()
+                    if self.ready && self.panel.isVisible { self.updateRows(preserveSelection: true) }
+                }
+            }
+        }
+    }
 
     private func updateRows(preserveSelection: Bool = false) {
         let selected = preserveSelection && rows.indices.contains(table.selectedRow) ? rows[table.selectedRow] : nil
         let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let matches = searchIndex.results(query: query)
-        let new = SearchRow.newTab(NewTabDestination.from(query))
-        rows = query.isEmpty ? [new] + matches.prefix(30).map(SearchRow.tab) : matches.map(SearchRow.tab) + [new]
+        let matches = searchIndex.matches(query: query)
+        rows = SearchResultBuilder.rows(query: query, matches: matches, allTabs: tabs, history: historyIndex,
+                                        suggestions: remoteSuggestions, now: Date(), openTabs: openTabs)
         table.reloadData()
-        let row = selected.flatMap { SearchRow.retainedSelection(of: $0, in: rows) } ?? 0
-        table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-        table.scrollRowToVisible(row)
+        if let row = selected.flatMap({ SearchRow.retainedSelection(of: $0, in: rows) }) ?? ResultNavigation.first(in: rows) {
+            table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            table.scrollRowToVisible(row)
+        }
         emptyLabel.stringValue = ""
         let windows = Set(tabs.map(\.windowID)).count
         let tabCount = "\(tabs.count) \(tabs.count == 1 ? "tab" : "tabs")"
         let windowCount = "\(windows) \(windows == 1 ? "window" : "windows")"
-        footer.stringValue = query.isEmpty ? "\(tabCount) in \(windowCount)" : "\(matches.count) matching \(matches.count == 1 ? "tab" : "tabs")"
+        let localCount = rows.filter { row in
+            switch row { case .tab, .history, .recentSearch: return true; default: return false }
+        }.count
+        let suggestionCount = rows.filter { if case .suggestion = $0 { return true }; return false }.count
+        footer.stringValue = query.isEmpty ? "\(tabCount) in \(windowCount)" : "\(localCount) local \(localCount == 1 ? "result" : "results")" + (suggestionCount > 0 ? " | \(suggestionCount) Google suggestions" : "")
+        footer.toolTip = preview ? nil : historyStore.localStorageError?.localizedDescription
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
 
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        rows.indices.contains(row) && rows[row].isSelectable
+    }
+
+    func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool {
+        rows.indices.contains(row) && !rows[row].isSelectable
+    }
+
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        rows.indices.contains(row) && !rows[row].isSelectable ? 25 : 58
+    }
+
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard rows.indices.contains(row) else { return nil }
+        if case .section(let section) = rows[row] {
+            let label = tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("section"), owner: self) as? NSTextField
+                ?? NSTextField(labelWithString: "")
+            label.identifier = NSUserInterfaceItemIdentifier("section")
+            label.stringValue = section.rawValue
+            label.font = .systemFont(ofSize: 11, weight: .semibold)
+            label.textColor = .secondaryLabelColor
+            return label
+        }
         let cell = tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("resultCell"), owner: self) as? ResultCell ?? ResultCell()
         switch rows[row] {
         case .tab(let tab):
@@ -415,6 +533,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 cell.configure(title: "Search for \(query)", detail: "Safari's default search engine", url: nil,
                                image: symbol("magnifyingglass"), tint: .systemBlue)
             }
+        case .recentSearch(let search):
+            cell.configure(title: search.query, detail: relativeDate.localizedString(for: search.lastUsed, relativeTo: Date()),
+                           url: nil, image: symbol("clock"), tint: .secondaryLabelColor)
+        case .suggestion(let query):
+            cell.configure(title: query, detail: "Google", url: nil, image: symbol("magnifyingglass"), tint: .secondaryLabelColor)
+        case .history(let visit):
+            let image = preview ? nil : favicons.imageFor(url: visit.url)
+            cell.configure(title: visit.title.isEmpty ? visit.url : visit.title,
+                           detail: visit.url + " | " + relativeDate.localizedString(for: visit.lastVisited, relativeTo: Date()),
+                           url: visit.url, image: image ?? symbol("clock"), tint: image == nil ? .secondaryLabelColor : nil)
+            if !preview && image == nil {
+                favicons.request(url: visit.url) { [weak cell] image in cell?.applyFavicon(image, for: visit.url) }
+            }
+        case .section: return nil
         }
         return cell
     }
@@ -431,7 +563,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         if (event.keyCode == 125 || event.keyCode == 126) && flags.isEmpty {
             guard !rows.isEmpty else { return nil }
             let step = event.keyCode == 125 ? 1 : -1
-            let selected = min(max(table.selectedRow + step, 0), rows.count - 1)
+            guard let selected = ResultNavigation.next(in: rows, from: table.selectedRow, step: step) else { return nil }
             table.selectRowIndexes(IndexSet(integer: selected), byExtendingSelection: false)
             table.scrollRowToVisible(selected)
             return nil
@@ -439,7 +571,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         return event
     }
 
-    @objc private func activateSelection(_ sender: Any?) { activate(forceNew: false) }
+    @objc private func activateSelection(_ sender: Any?) {
+        // AppKit can send the table action while keyboard selection changes. Enter is handled separately.
+        guard NSApp.currentEvent?.type != .keyDown, NSApp.currentEvent?.type != .keyUp else { return }
+        activate(forceNew: false)
+    }
 
     private func activate(forceNew: Bool) {
         guard ready, !acting else { return }
@@ -449,6 +585,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             guard rows.indices.contains(table.selectedRow) else { return }
             row = rows[table.selectedRow]
         }
+        guard row.isSelectable else { return }
         if preview { footer.stringValue = "Preview only"; return }
         acting = true
         searchField.isEnabled = false
@@ -461,6 +598,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             self.retryButton.isEnabled = true
             switch result {
             case .success:
+                self.rememberChoice(row)
                 self.tabStore.invalidate()
                 self.dismiss(restoreFocus: false)
                 self.tabStore.prewarm()
@@ -474,12 +612,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
         switch row {
         case .tab(let tab): bridge.select(tab, completion: completion)
-        case .newTab(let destination): bridge.open(destination, windowID: tabs.first?.windowID ?? 0, completion: completion)
+        default:
+            if let destination = row.destination { bridge.open(destination, windowID: tabs.first?.windowID ?? 0, completion: completion) }
         }
+    }
+
+    private func rememberChoice(_ row: SearchRow) {
+        switch row {
+        case .tab(let tab): historyStore.recordVisit(url: tab.url, title: tab.displayTitle)
+        case .history(let visit): historyStore.recordVisit(url: visit.url, title: visit.title)
+        default:
+            if let destination = row.destination {
+                switch destination {
+                case .search(let query): historyStore.recordSearch(query: query)
+                case .url(let url): historyStore.recordVisit(url: url, title: url)
+                }
+            }
+        }
+        reloadHistory()
     }
 
     private func dismiss(restoreFocus: Bool) {
         requestID += 1
+        if !preview { googleSuggestions.cancel() }
+        remoteSuggestions = []
         panel.orderOut(nil)
         clearResults()
         searchField.stringValue = ""
@@ -492,6 +648,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         tabs = []
         rows = []
         searchIndex = TabSearchIndex([])
+        openTabs = OpenTabLookup([])
         windowNumbers = [:]
         ready = false
         table?.reloadData()
@@ -505,6 +662,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     @objc private func toggleCapture(_ sender: Any?) {
         enabled.toggle()
         pauseItem.state = enabled ? .on : .off
+    }
+
+    @objc private func toggleGoogle(_ sender: Any?) {
+        guard !preview else { return }
+        let enable = !googleEnabled
+        if enable {
+            let alert = NSAlert()
+            alert.messageText = "Enable Google Suggestions?"
+            alert.informativeText = "Eligible typed search text will be sent to Google for suggestions. Local history is not sent. These are generic suggestions, not signed-in Google account predictions. Searches still use Safari's configured search engine."
+            alert.addButton(withTitle: "Enable")
+            alert.addButton(withTitle: "Cancel")
+            NSApp.activate(ignoringOtherApps: true)
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        UserDefaults.standard.set(enable, forKey: "GoogleSuggestionsEnabled")
+        googleItems.forEach { $0.state = enable ? .on : .off }
+        googleSuggestions.clearCache()
+        remoteSuggestions = []
+        if panel.isVisible {
+            if ready { updateRows(preserveSelection: true) }
+            requestSuggestions()
+        }
+    }
+
+    @objc private func toggleSafariHistory(_ sender: Any?) {
+        guard !preview else { return }
+        let enable = !safariHistoryEnabled
+        UserDefaults.standard.set(enable, forKey: "SafariHistoryEnabled")
+        historyItems.forEach { $0.state = enable ? .on : .off }
+        // Remove imported results immediately; a denied or superseded read cannot leave them visible.
+        historyIndex = HistorySearchIndex(.empty)
+        historyLoaded = false
+        historyError = nil
+        if ready && panel.isVisible { updateRows(preserveSelection: true) }
+        updatePermissionLabels()
+        reloadHistory()
+    }
+
+    @objc private func clearHistory(_ sender: Any?) {
+        guard !preview else { return }
+        let alert = NSAlert()
+        alert.messageText = "Clear Tab Scout History?"
+        alert.informativeText = "This removes searches and tab choices saved by Tab Scout. Safari's browsing history is not changed."
+        alert.addButton(withTitle: "Clear")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        historyStore.clearLocal()
+        googleSuggestions.clearCache()
+        remoteSuggestions = []
+        reloadHistory()
     }
 
     @objc private func toggleLogin(_ sender: Any?) {
@@ -533,41 +741,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     private func buildPermissions() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 292), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 382), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Tab Scout"
         window.isReleasedWhenClosed = false
         setupWindow = window
         guard let content = window.contentView else { return }
         let heading = NSTextField(labelWithString: "Permissions")
         heading.font = .systemFont(ofSize: 22, weight: .semibold)
-        heading.frame = NSRect(x: 28, y: 237, width: 420, height: 28)
+        heading.frame = NSRect(x: 28, y: 327, width: 420, height: 28)
         content.addSubview(heading)
         let axTitle = NSTextField(labelWithString: controlPermissionName)
         axTitle.font = .systemFont(ofSize: 15, weight: .medium)
-        axTitle.frame = NSRect(x: 28, y: 191, width: 260, height: 22)
+        axTitle.frame = NSRect(x: 28, y: 281, width: 260, height: 22)
         content.addSubview(axTitle)
         accessibilityState = NSTextField(labelWithString: "")
         accessibilityState?.font = .systemFont(ofSize: 12)
         accessibilityState?.textColor = .secondaryLabelColor
-        accessibilityState?.frame = NSRect(x: 28, y: 166, width: 280, height: 20)
+        accessibilityState?.frame = NSRect(x: 28, y: 256, width: 280, height: 20)
         content.addSubview(accessibilityState!)
         let ax = NSButton(title: "Open Settings", target: self, action: #selector(openAccessibility(_:)))
         ax.bezelStyle = .rounded
-        ax.frame = NSRect(x: 322, y: 175, width: 132, height: 32)
+        ax.frame = NSRect(x: 322, y: 265, width: 132, height: 32)
         content.addSubview(ax)
         let safariTitle = NSTextField(labelWithString: "Safari")
         safariTitle.font = .systemFont(ofSize: 15, weight: .medium)
-        safariTitle.frame = NSRect(x: 28, y: 124, width: 260, height: 22)
+        safariTitle.frame = NSRect(x: 28, y: 214, width: 260, height: 22)
         content.addSubview(safariTitle)
         safariState = NSTextField(labelWithString: "")
         safariState?.font = .systemFont(ofSize: 12)
         safariState?.textColor = .secondaryLabelColor
-        safariState?.frame = NSRect(x: 28, y: 99, width: 280, height: 20)
+        safariState?.frame = NSRect(x: 28, y: 189, width: 280, height: 20)
         content.addSubview(safariState!)
         let safari = NSButton(title: "Allow Access", target: self, action: #selector(requestSafari(_:)))
         safari.bezelStyle = .rounded
-        safari.frame = NSRect(x: 322, y: 108, width: 132, height: 32)
+        safari.frame = NSRect(x: 322, y: 198, width: 132, height: 32)
         content.addSubview(safari)
+        let historyTitle = NSTextField(labelWithString: "Safari History (Optional)")
+        historyTitle.font = .systemFont(ofSize: 15, weight: .medium)
+        historyTitle.frame = NSRect(x: 28, y: 124, width: 280, height: 22)
+        content.addSubview(historyTitle)
+        historyState = NSTextField(labelWithString: "")
+        historyState?.font = .systemFont(ofSize: 12)
+        historyState?.textColor = .secondaryLabelColor
+        historyState?.frame = NSRect(x: 28, y: 99, width: 280, height: 20)
+        content.addSubview(historyState!)
+        let history = NSButton(title: "Open Settings", target: self, action: #selector(openHistorySettings(_:)))
+        history.bezelStyle = .rounded
+        history.frame = NSRect(x: 322, y: 108, width: 132, height: 32)
+        content.addSubview(history)
         let line = NSBox(frame: NSRect(x: 28, y: 79, width: 424, height: 1))
         line.boxType = .separator
         content.addSubview(line)
@@ -590,6 +811,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let trusted = AXIsProcessTrusted()
         accessibilityState?.stringValue = trusted ? (eventTap == nil ? "Access granted; shortcut unavailable" : "Allowed") : "Required for Cmd+T"
         safariState?.stringValue = safariAllowed ? "Allowed" : "Required for tab access"
+        historyState?.stringValue = !safariHistoryEnabled ? "Off" : !historyLoaded ? "Checking..." : historyError == nil ? "Allowed" : "Unavailable; local choices still work"
+        historyState?.toolTip = historyError?.localizedDescription
         setupStatus?.stringValue = trusted && safariAllowed && eventTap != nil ? "Ready" : "Permissions needed"
     }
 
@@ -597,6 +820,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") { NSWorkspace.shared.open(url) }
+    }
+
+    @objc private func openHistorySettings(_ sender: Any?) {
+        let alert = NSAlert()
+        alert.messageText = "Safari History Access"
+        alert.informativeText = "macOS protects Safari history with Full Disk Access, a broad permission. Tab Scout reads history locally and never sends it to Google. Add this Tab Scout.app under Privacy & Security > Full Disk Access, then restart Tab Scout. Tab search and local choices work without this permission."
+        alert.addButton(withTitle: "Open Settings")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
     }
 
     @objc private func requestSafari(_ sender: NSButton) {

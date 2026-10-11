@@ -63,6 +63,10 @@ enum TabSearch {
 }
 
 struct TabSearchIndex {
+    struct Match {
+        let tab: SafariTab
+        let relevance: Int
+    }
     private struct Entry {
         let tab: SafariTab
         let title: String
@@ -80,14 +84,18 @@ struct TabSearchIndex {
     }
 
     func results(query: String) -> [SafariTab] {
+        matches(query: query).map(\.tab)
+    }
+
+    func matches(query: String) -> [Match] {
         let query = TabSearch.normalized(query.trimmingCharacters(in: .whitespacesAndNewlines))
-        guard !query.isEmpty else { return entries.map(\.tab) }
+        guard !query.isEmpty else { return entries.map { Match(tab: $0.tab, relevance: 0) } }
         let tokens = query.split(whereSeparator: \.isWhitespace).map(String.init)
         return entries.enumerated().compactMap { offset, entry -> (Int, Int, SafariTab)? in
             guard tokens.allSatisfy({ entry.text.contains($0) }) else { return nil }
             let score = entry.host == query ? 100 : entry.title == query ? 95 : entry.host.hasPrefix(query) ? 90 : entry.title.hasPrefix(query) ? 85 : entry.title.contains(query) ? 80 : 60
             return (score, offset, entry.tab)
-        }.sorted { $0.0 == $1.0 ? $0.1 < $1.1 : $0.0 > $1.0 }.map { $0.2 }
+        }.sorted { $0.0 == $1.0 ? $0.1 < $1.1 : $0.0 > $1.0 }.map { Match(tab: $0.2, relevance: $0.0) }
     }
 }
 

@@ -12,8 +12,25 @@ for SUITE in Cache Performance; do
     "$WORK_DIR/${SUITE}Tests"
 done
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" \
-    "$SOURCE_DIR/Sources/SearchResults.swift" "$SOURCE_DIR/Tests/SearchResultsTests.swift" -o "$WORK_DIR/SearchResultsTests"
+    "$SOURCE_DIR/Sources/History.swift" "$SOURCE_DIR/Sources/SearchResults.swift" \
+    "$SOURCE_DIR/Tests/SearchResultsTests.swift" -lsqlite3 -o "$WORK_DIR/SearchResultsTests"
 "$WORK_DIR/SearchResultsTests"
+/usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/History.swift" \
+    "$SOURCE_DIR/Tests/HistoryTests.swift" -lsqlite3 -o "$WORK_DIR/HistoryTests"
+"$WORK_DIR/HistoryTests"
+/usr/bin/xcrun swiftc -swift-version 5 -O "$SOURCE_DIR/Sources/Core.swift" \
+    "$SOURCE_DIR/Sources/History.swift" "$SOURCE_DIR/Sources/SearchResults.swift" \
+    "$SOURCE_DIR/Sources/HistoryRanking.swift" "$SOURCE_DIR/Tests/HistoryRankingTests.swift" \
+    -lsqlite3 -o "$WORK_DIR/HistoryRankingTests"
+"$WORK_DIR/HistoryRankingTests"
+/usr/bin/xcrun swiftc -swift-version 5 -O "$SOURCE_DIR/Sources/Core.swift" \
+    "$SOURCE_DIR/Sources/History.swift" "$SOURCE_DIR/Sources/SearchResults.swift" \
+    "$SOURCE_DIR/Sources/HistoryRanking.swift" "$SOURCE_DIR/Tests/HistoryPerformanceTests.swift" \
+    -lsqlite3 -o "$WORK_DIR/HistoryPerformanceTests"
+"$WORK_DIR/HistoryPerformanceTests"
+/usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/GoogleSuggestions.swift" \
+    "$SOURCE_DIR/Tests/GoogleSuggestionsTests.swift" -o "$WORK_DIR/GoogleSuggestionsTests"
+"$WORK_DIR/GoogleSuggestionsTests"
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" \
     "$SOURCE_DIR/Sources/SafariBridge.swift" "$SOURCE_DIR/Tests/BridgeTests.swift" -o "$WORK_DIR/BridgeTests"
 "$WORK_DIR/BridgeTests"
