@@ -13,6 +13,10 @@ cp "$SOURCE_DIR/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
 /usr/bin/xcrun swiftc -swift-version 5 -O -target "$(uname -m)-apple-macosx13.0" \
     -module-cache-path "$WORK_DIR/ModuleCache" \
     "$SOURCE_DIR"/Sources/*.swift -lsqlite3 -o "$APP_DIR/Contents/MacOS/TabScout"
+# Interrupted codesign runs can leave a temporary executable that must not be sealed as a resource.
+if [[ -f "$APP_DIR/Contents/MacOS/TabScout.cstemp" ]]; then
+    mv "$APP_DIR/Contents/MacOS/TabScout.cstemp" "$WORK_DIR/TabScout-interrupted.cstemp"
+fi
 /usr/bin/codesign --force --sign "${TAB_SCOUT_SIGN_IDENTITY:--}" --identifier local.tabscout.app \
     --entitlements "$SOURCE_DIR/Resources/Entitlements.plist" "$APP_DIR"
 /usr/bin/codesign --verify --strict "$APP_DIR"

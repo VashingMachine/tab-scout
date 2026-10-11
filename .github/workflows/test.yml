@@ -23,6 +23,10 @@ jobs:
       - name: Run Automated Tests
         run: bash test.sh
       - name: Build App
-        run: bash build.sh
+        run: |
+          mkdir -p "$TAB_SCOUT_OUTPUT_DIR/Tab Scout.app/Contents/MacOS"
+          touch "$TAB_SCOUT_OUTPUT_DIR/Tab Scout.app/Contents/MacOS/TabScout.cstemp"
+          bash build.sh
+          test ! -e "$TAB_SCOUT_OUTPUT_DIR/Tab Scout.app/Contents/MacOS/TabScout.cstemp"
       - name: Verify App Signature
         run: /usr/bin/codesign --verify --strict "$TAB_SCOUT_OUTPUT_DIR/Tab Scout.app"
