@@ -11,7 +11,7 @@ Use public fixture pages and a throwaway window. Do not close or replace a user'
 
 ## Search And Actions
 
-1. Press physical Cmd+T. Confirm exactly one Tab Scout new-tab page opens and the search input receives focus. The search surface must be horizontally and vertically centered in Safari's content viewport, not the monitor. Resize and move a throwaway window, including narrow and short layouts; confirm query/results stay intact and controls remain usable. Toolbar popup placement is controlled by Safari.
+1. Press physical Cmd+T. Confirm exactly one Tab Scout new-tab page opens and check whether the search input receives keyboard focus. Record address-field focus as an unresolved handoff issue, not a passed focus check; click the panel's input to continue functional testing. The search surface must be horizontally and vertically centered in Safari's content viewport, not the monitor. Resize and move a throwaway window, including narrow and short layouts; confirm query/results stay intact and controls remain usable. Toolbar popup placement is controlled by Safari.
 2. Search titles, hostnames, paths, multiword queries, mixed case and accents. Cached results should render promptly; arrow navigation and Enter must activate the intended row.
 3. Select an existing public fixture tab. Confirm Safari focuses its window and closes only the temporary Tab Scout new-tab page. User tab count must return to the pre-Cmd+T count.
 4. Repeat from the toolbar popup. Its underlying browser tab must remain open, even if it has a similar title or URL.

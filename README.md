@@ -19,6 +19,8 @@ The search page and popup share the native edition's compact 660-by-440 layout: 
 
 Enter activates the selected row; arrow keys move the selection. Cmd+Enter opens the query in another tab. Empty input keeps the search page open instead of navigating to `about:blank`.
 
+The page requests search-field focus, but live Safari testing found that Cmd+T can leave keyboard focus in the address field. Click Tab Scout's search field before typing in that case. Automatic focus handoff remains unverified; the injected-browser tests cannot certify Safari's browser-chrome focus.
+
 ## Build And Test
 
 Requires macOS 13.3 or later, Safari 16.4 or later, Xcode, and Node.js 20 or later for build validation and the JavaScript tests. No JavaScript build framework or package installation is required.
