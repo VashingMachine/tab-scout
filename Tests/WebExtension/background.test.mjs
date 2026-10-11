@@ -73,9 +73,45 @@ test('queries show local rows without extension pages, isolate private tabs, and
   f.tabs.set(4, { id: 4, windowId: 3, title: 'Swift private', url: 'https://private.example.com', incognito: true });
   const first = await f.background.handle({ type: 'query', query: 'swift' }, f.sender());
   assert.equal(first.rows[0].target.tabId, 2); assert.equal(first.rows[1].kind, 'recent'); assert.equal(first.rows.at(-1).kind, 'action');
+  assert.deepEqual(first.inventory, { tabCount: 2, windowCount: 2 });
   const second = await f.background.handle({ type: 'query', query: '' }, f.sender());
   assert.equal(second.rows[0].target.query, ''); assert.deepEqual(second.rows.filter(row => row.kind === 'tab').map(row => row.target.tabId), [2, 3]);
+  assert.deepEqual(second.inventory, first.inventory);
   assert.equal(f.calls.filter(call => call[0] === 'query' && !call[1].active).length, 1);
+});
+
+test('inventory counts and tab window ordinals isolate private tabs and exclude extension pages', async () => {
+  for (const incognito of [false, true]) {
+    const f = fixture({ incognito });
+    f.tabs.set(4, { id: 4, windowId: 40, title: 'Other privacy', url: 'https://private.example.com/', incognito: !incognito });
+    f.tabs.set(5, { id: 5, windowId: 50, title: 'Options', url: `${root}options.html`, incognito });
+    f.tabs.set(6, { id: 6, windowId: 60, title: 'Internal', url: `${root}assets/private.html`, incognito });
+    f.tabs.set(7, { id: 7, windowId: 2, title: 'Other docs', url: 'https://other.example.com/', incognito });
+    f.tabs.set(8, { id: 8, windowId: 70, title: 'Another window', url: 'https://another.example.com/', incognito });
+    f.tabs.set(-1, { id: -1, windowId: 80, title: 'Invalid ID', url: 'https://invalid.example.com/', incognito });
+    const result = await f.background.handle({ type: 'query', query: 'ordinary' }, f.sender());
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.inventory, { tabCount: 4, windowCount: 3 });
+    assert.deepEqual(result.rows.filter(row => row.kind === 'tab').map(row => [row.target.tabId, row.windowNumber]), [[3, 2]]);
+    const empty = await f.background.handle({ type: 'query', query: '' }, f.sender());
+    assert.deepEqual(empty.inventory, result.inventory);
+    assert.deepEqual(empty.rows.filter(row => row.kind === 'tab').map(row => [row.target.tabId, row.windowNumber]), [[2, 1], [3, 2], [7, 1], [8, 3]]);
+  }
+});
+
+test('inventory excludes invalid window IDs without changing tab activation identity', async () => {
+  const f = fixture();
+  for (const [index, windowId] of [undefined, null, -1, 0.5, Infinity, '7', Number.MAX_SAFE_INTEGER + 1].entries()) {
+    f.tabs.set(10 + index, { id: 10 + index, windowId, title: `Unknown ${index}`, url: `https://unknown.example.com/${index}`, incognito: false });
+  }
+  const result = await f.background.handle({ type: 'query', query: '' }, f.sender());
+  assert.deepEqual(result.inventory, { tabCount: 9, windowCount: 2 });
+  assert.equal(result.rows.filter(row => row.kind === 'tab' && Object.hasOwn(row, 'windowNumber')).length, 2);
+  const row = result.rows.find(row => row.target.tabId === 2);
+  assert.equal(row.windowNumber, 1);
+  assert.deepEqual(row.target, { kind: 'tab', tabId: 2 });
+  assert.equal((await f.background.handle({ type: 'activate', target: row.target }, f.sender())).ok, true);
+  assert.deepEqual(mutations(f.calls).slice(0, 3), [['update', 2, { active: true }], ['window', 2, { focused: true }], ['remove', 1]]);
 });
 
 test('choosing existing tab activates then focuses then closes only source extension newtab', async () => {

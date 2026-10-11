@@ -1,6 +1,7 @@
-import { normalize, targetIdentity, eligibleSuggestionQuery } from "./core.mjs";
+import { address, normalize, targetIdentity, eligibleSuggestionQuery } from "./core.mjs";
 
 const sectionTitles = { tabs: "Open Tabs", recent: "Recent Searches", history: "History", suggestions: "Google Suggestions" };
+const providerTitles = { google: "Google", bing: "Bing", duckduckgo: "DuckDuckGo" };
 
 export function mergeSuggestionRows(rows, suggestions, query) {
   if (!normalize(query)) return [...rows];
@@ -60,6 +61,40 @@ export function formatLastUsed(timestamp, now = Date.now(), locale = globalThis.
   return new Intl.RelativeTimeFormat(locale, { numeric: "always" }).format(-value, unit);
 }
 
+export function formatRowDetail(row, engine = "google", now = Date.now(), locale = globalThis.navigator?.language) {
+  const subtitle = row.subtitle || "";
+  if (row.kind === "tab") {
+    const window = Number.isSafeInteger(row.windowNumber) && row.windowNumber > 0 ? ` | Window ${row.windowNumber}` : "";
+    return (subtitle || "Start Page") + window;
+  }
+  const age = ["history", "recent"].includes(row.kind) ? formatLastUsed(row.lastUsed, now, locale) : null;
+  if (row.kind === "recent") return age || subtitle;
+  if (row.kind === "history") return subtitle + (age ? ` | ${age}` : "");
+  if (row.kind === "action") {
+    const query = typeof row.target?.query === "string" ? row.target.query.trim() : "";
+    if (!query) return "Tab Scout search page";
+    if (address(query)) return "New Safari tab";
+    const provider = Object.hasOwn(providerTitles, engine) ? providerTitles[engine] : "Google";
+    return `${provider} search`;
+  }
+  return subtitle;
+}
+
+export function formatResultSummary(rows, query, inventory = null) {
+  if (normalize(query)) {
+    const local = rows.filter(row => ["tab", "history", "recent"].includes(row.kind)).length;
+    const suggestions = rows.filter(row => row.kind === "suggestion").length;
+    return `${local} local ${local === 1 ? "result" : "results"}`
+      + (suggestions ? ` | ${suggestions} Google suggestions` : "");
+  }
+  const tabs = rows.filter(row => row.kind === "tab");
+  const validCount = value => Number.isSafeInteger(value) && value >= 0;
+  const count = validCount(inventory?.tabCount) ? inventory.tabCount : tabs.length;
+  const windows = validCount(inventory?.windowCount) ? inventory.windowCount
+    : new Set(tabs.map(row => row.windowNumber).filter(value => Number.isSafeInteger(value) && value > 0)).size;
+  return `${count} ${count === 1 ? "tab" : "tabs"} in ${windows} ${windows === 1 ? "window" : "windows"}`;
+}
+
 async function startSearch(api) {
   const input = document.querySelector("#query");
   const results = document.querySelector("#results");
@@ -73,6 +108,7 @@ async function startSearch(api) {
   let settings = { engine: "google", googleSuggestions: false, rememberChoices: true };
   let incognito = true;
   let baseRows = [];
+  let inventory = null;
   let rows = [];
   let suggestions = [];
   let selectedID = null;
@@ -113,7 +149,8 @@ async function startSearch(api) {
   }
 
   function fallbackIcon(row) {
-    return row.kind === "recent" || row.kind === "history" ? "clock" : row.kind === "tab" ? "panels-top-left" : row.title === "New tab" ? "plus" : "search";
+    return row.kind === "recent" || row.kind === "history" ? "clock" : row.kind === "tab" ? "globe"
+      : row.title === "New tab" || (row.kind === "action" && address(row.target?.query)) ? "square-plus" : "search";
   }
 
   async function favicon(url) {
@@ -152,10 +189,12 @@ async function startSearch(api) {
       button.dataset.rowId = row.id;
       button.setAttribute("role", "option");
       button.tabIndex = -1;
-      button.title = [row.title, row.subtitle].filter(Boolean).join("\n");
+      button.title = [row.title, formatRowDetail(row, settings.engine)].filter(Boolean).join("\n");
       const image = document.createElement("img");
       image.className = "result-image is-symbol";
-      const fallbackSource = `icons/${fallbackIcon(row)}.svg`;
+      image.dataset.icon = fallbackIcon(row);
+      image.dataset.kind = row.kind;
+      const fallbackSource = `icons/${image.dataset.icon}.svg`;
       image.src = fallbackSource;
       image.onerror = () => {
         image.onerror = null;
@@ -163,8 +202,8 @@ async function startSearch(api) {
         image.classList.add("is-symbol");
       };
       image.alt = "";
-      image.width = 24;
-      image.height = 24;
+      image.width = 23;
+      image.height = 23;
       if (row.url && ["tab", "history"].includes(row.kind)) {
         favicon(row.url).then(data => {
           if (!data || !image.isConnected || button.dataset.rowId !== row.id) return;
@@ -179,29 +218,17 @@ async function startSearch(api) {
       title.textContent = row.title;
       const detail = document.createElement("span");
       detail.className = "result-subtitle";
-      const age = ["history", "recent"].includes(row.kind) ? formatLastUsed(row.lastUsed) : null;
-      detail.textContent = row.kind === "recent" && age ? age : row.subtitle || "";
+      detail.textContent = formatRowDetail(row, settings.engine);
       const detailLine = document.createElement("span");
       detailLine.className = "result-detail";
       detailLine.append(detail);
-      if (row.kind === "history" && age) {
-        const date = document.createElement("span");
-        date.className = "result-date";
-        date.textContent = age;
-        detailLine.append(date);
-      }
       text.append(title, detailLine);
-      const action = document.createElement("img");
-      action.className = "result-action";
-      action.src = `icons/${row.target?.kind === "tab" ? "panels-top-left" : "arrow-up-right"}.svg`;
-      action.alt = "";
-      button.append(image, text, action);
+      button.append(image, text);
       fragment.append(button);
     });
     results.replaceChildren(fragment);
     applySelection();
-    const count = baseRows.filter(row => row.kind === "tab").length;
-    summary.textContent = `${count} ${count === 1 ? "tab" : "tabs"}`;
+    summary.textContent = formatResultSummary(rows, input.value, inventory);
     clear.hidden = !input.value;
   }
 
@@ -240,6 +267,7 @@ async function startSearch(api) {
       const response = await send({ type: "query", query, ...(force ? { force: true } : {}) });
       if (ticket !== generation || request !== queryRequest || acting || response.query !== query) return;
       baseRows = Array.isArray(response.rows) ? response.rows.filter(row => typeof row.id === "string" && typeof row.title === "string" && row.target) : [];
+      inventory = response.inventory;
       loading = false;
       render(preserve);
       showStatus(baseRows.length ? "" : "No results");

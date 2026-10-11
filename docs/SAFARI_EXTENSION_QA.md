@@ -26,7 +26,8 @@ Use public fixture pages and a throwaway window. Do not close or replace a user'
 3. Successful accepted choices should improve comparable matches. Failed actions and typed-but-unsubmitted prefixes must not enter local history. Clear choices and check the ranking resets.
 4. In a private window, allow the extension only when deliberately testing it. Verify no private choices, query caches, or favicon entries persist, and no Google predictions are requested. Public and private tab inventories must not be mixed.
 5. Check favicons, missing icons, long titles and URLs, dark/light appearance, loading, denied permissions, and offline states. Icons must not shift row dimensions or land on an unrelated reused row.
-6. Restore website permissions and normal new-tab settings only as directed by the user. Do not alter other extensions or profile settings.
+6. Compare with the native edition: the normal search panel is 660 by 440, with no brand header, a 21-pixel search field, 58-pixel rows, 23-pixel icons, and refresh/settings controls at the bottom right. Confirm selected titles/details remain readable in both appearances, window labels stay stable while filtering, and resizing does not change the query or selection. Safari may constrain toolbar-popup width; its placement remains Safari-controlled.
+7. Restore website permissions and normal new-tab settings only as directed by the user. Do not alter other extensions or profile settings.
 
 ## Distribution
 

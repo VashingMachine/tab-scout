@@ -127,10 +127,43 @@ test('empty row stays first while all tabs and recent searches remain accessible
   assert.equal(rows.at(-1).kind, 'recent');
 });
 
+test('tab window ordinals follow the full inventory before query filtering and ranking', () => {
+  const tabs = [
+    { ...tab(1, 'Other topic', 'https://one.example.com/'), windowId: 80 },
+    { ...tab(2, 'Work notes', 'https://two.example.com/'), windowId: 3 },
+    { ...tab(3, 'Work notes', 'https://three.example.com/'), windowId: 80 },
+    { ...tab(4, 'Work notes', 'https://four.example.com/'), windowId: 999 },
+  ];
+  const records = [choice('url', tabs[3].url, { count: 100 })];
+  const rows = buildRows(tabs, 'work', records, now).filter(row => row.kind === 'tab');
+  assert.deepEqual(rows.map(row => [row.target.tabId, row.windowNumber]), [[4, 3], [2, 2], [3, 1]]);
+  const filtered = buildRows(tabs, 'four.example.com', [], now).filter(row => row.kind === 'tab');
+  assert.deepEqual(filtered.map(row => [row.target.tabId, row.windowNumber]), [[4, 3]]);
+  const all = buildRows(tabs, '', [], now).filter(row => row.kind === 'tab');
+  assert.deepEqual(all.map(row => [row.target.tabId, row.windowNumber]), [[1, 1], [2, 2], [3, 1], [4, 3]]);
+  assert.deepEqual(tabs.map(tab => tab.windowId), [80, 3, 80, 999]);
+});
+
+test('invalid or missing window IDs do not invent tab window ordinals or change targets', () => {
+  const ids = [undefined, null, -1, 1.5, Infinity, NaN, '1', Number.MAX_SAFE_INTEGER + 1, 0, 12, 0];
+  const tabs = ids.map((windowId, index) => ({ ...tab(index + 1, `Window ${index}`, `https://example.com/${index}`), windowId }));
+  const original = structuredClone(tabs);
+  const rows = buildRows(tabs, '', [], now).filter(row => row.kind === 'tab');
+  for (let index = 0; index < 8; index++) assert.equal(Object.hasOwn(rows[index], 'windowNumber'), false);
+  assert.deepEqual(rows.slice(8).map(row => row.windowNumber), [1, 2, 1]);
+  rows.forEach((row, index) => {
+    assert.deepEqual(row.target, { kind: 'tab', tabId: tabs[index].id });
+    assert.equal(row.url, tabs[index].url); assert.equal(row.subtitle, tabs[index].url);
+  });
+  assert.deepEqual(tabs, original);
+});
+
 test('history recovers currently open URL under changed title instead of duplicate creation', () => {
-  const current = tab(1, 'Unrelated new title', 'https://example.com/');
-  const rows = buildRows([current], 'swift', [choice('url', 'https://example.com', { title: 'Swift docs' })], now);
+  const current = { ...tab(1, 'Unrelated new title', 'https://example.com/'), windowId: 9 };
+  const earlier = { ...tab(2, 'Unrelated other topic', 'https://other.example.com/'), windowId: 2 };
+  const rows = buildRows([earlier, current], 'swift', [choice('url', 'https://example.com', { title: 'Swift docs' })], now);
   assert.equal(rows[0].kind, 'tab'); assert.equal(rows[0].target.tabId, 1);
+  assert.equal(rows[0].windowNumber, 2);
   assert.equal(rows.filter(row => row.kind === 'history').length, 0);
   assert.equal(rows.at(-1).kind, 'action');
 });

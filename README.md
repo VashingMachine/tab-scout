@@ -15,6 +15,8 @@ The earlier native menu-bar edition remains available separately. It is not embe
 - Enable optional Google predictions. Local results appear before the network response.
 - Load same-origin favicons asynchronously, with bounded caching and a fallback icon.
 
+The search page and popup share the native edition's compact 660-by-440 layout: search at the top, 58-pixel result rows, inline URL/window details, and refresh/settings controls in the footer. Light and dark appearances follow the system. The new-tab panel remains centered within Safari's content viewport and adapts to smaller windows. Browser-rendered translucency approximates the native window material; it cannot show the previous Safari page behind the new-tab page.
+
 Enter activates the selected row; arrow keys move the selection. Cmd+Enter opens the query in another tab. Empty input keeps the search page open instead of navigating to `about:blank`.
 
 ## Build And Test

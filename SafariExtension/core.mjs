@@ -144,6 +144,12 @@ export function rankTabs(tabs, query, choices = [], now = Date.now()) {
 
 export function buildRows(tabs, query, choices = [], now = Date.now()) {
   const clean = String(query ?? '').trim(); const needle = normalize(clean); const rows = [];
+  const windowNumbers = new Map();
+  for (const tab of tabs) {
+    if (Number.isSafeInteger(tab.windowId) && tab.windowId >= 0 && !windowNumbers.has(tab.windowId)) {
+      windowNumbers.set(tab.windowId, windowNumbers.size + 1);
+    }
+  }
   const action = { id: `action:${needle}`, kind: 'action', section: 'action', title: clean ? `${address(clean) ? 'Open' : 'Search for'} ${clean}` : 'New tab',
     subtitle: '', target: { kind: 'query', query: clean } };
   if (!clean) rows.push(action);
@@ -153,7 +159,9 @@ export function buildRows(tabs, query, choices = [], now = Date.now()) {
     if (displayedTabIDs.has(tab.id)) return;
     displayedTabIDs.add(tab.id);
     rows.push({ id: `tab:${tab.id}`, kind: 'tab', section: 'tabs', title: tab.title || tab.url || 'Untitled',
-      subtitle: tab.url || '', url: tab.url || '', target: { kind: 'tab', tabId: tab.id } });
+      subtitle: tab.url || '', url: tab.url || '',
+      ...(windowNumbers.has(tab.windowId) ? { windowNumber: windowNumbers.get(tab.windowId) } : {}),
+      target: { kind: 'tab', tabId: tab.id } });
   };
   rankedTabs.forEach(appendTab);
   const rankChoices = items => items.map((choice, index) => ({ choice, index, score: matchScore(choice.title, choice.value, clean) }))

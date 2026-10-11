@@ -132,7 +132,9 @@ export function createBackground({ browser, fetch = globalThis.fetch, now = Date
           const { tabs, refreshing } = await tabCache.get({ force: message.force, incognito: ctx.incognito });
           const visible = tabs.filter(tab => validID(tab.id) && !tab.url?.startsWith(extensionRoot));
           return { ok: true, query: message.query, rows: buildRows(visible, message.query,
-            ctx.incognito || !settings.rememberChoices ? [] : choices, now()), refreshing };
+            ctx.incognito || !settings.rememberChoices ? [] : choices, now()),
+            inventory: { tabCount: visible.length,
+              windowCount: new Set(visible.filter(tab => validID(tab.windowId)).map(tab => tab.windowId)).size }, refreshing };
         }
         case 'suggest': return { ok: true, query: message.query,
           suggestions: await suggestions.get(message.query, { enabled: settings.googleSuggestions, incognito: ctx.incognito }) };

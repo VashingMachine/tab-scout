@@ -8,19 +8,11 @@
   <script type="module" src="search.mjs"></script>
 </head>
 <body data-surface="popup">
-  <main class="scout">
-    <header class="toolbar">
-      <h1><img src="icons/app-32.png" alt="" width="28" height="28">Tab Scout</h1>
-      <div class="toolbar-actions">
-        <span id="private-badge" class="private-badge" hidden>Private</span>
-        <button id="refresh" class="icon-button" type="button" title="Refresh tabs" aria-label="Refresh tabs"><img src="icons/refresh-cw.svg" alt=""></button>
-        <button id="settings" class="icon-button" type="button" title="Settings" aria-label="Settings"><img src="icons/settings.svg" alt=""></button>
-      </div>
-    </header>
+  <main class="scout" aria-label="Tab Scout">
     <form id="search-form" class="search-form" role="search">
       <div class="search-field">
         <img class="search-icon" src="icons/search.svg" alt="">
-        <input id="query" name="q" type="search" placeholder="Search tabs or the web" aria-label="Search tabs or the web" role="combobox" aria-autocomplete="list" aria-controls="results" aria-expanded="true" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <input id="query" name="q" type="search" placeholder="Search tabs or enter an address" aria-label="Search tabs or enter an address" role="combobox" aria-autocomplete="list" aria-controls="results" aria-expanded="true" autocomplete="off" autocapitalize="off" spellcheck="false">
         <button id="clear-search" class="icon-button" type="button" title="Clear search" aria-label="Clear search" hidden><img src="icons/x.svg" alt=""></button>
       </div>
     </form>
@@ -28,7 +20,14 @@
       <div id="status" class="status" role="status" aria-live="polite">Loading tabs...</div>
       <div id="results" class="results" role="listbox" aria-label="Search results"></div>
     </section>
-    <footer class="result-footer"><span id="summary" aria-live="polite"></span><span id="provider-status"></span></footer>
+    <footer class="result-footer">
+      <div class="footer-text"><span id="summary" aria-live="polite"></span><span id="provider-status" aria-live="polite"></span></div>
+      <div class="footer-actions">
+        <span id="private-badge" class="private-badge" hidden>Private</span>
+        <button id="refresh" class="icon-button" type="button" title="Refresh tabs" aria-label="Refresh tabs"><img src="icons/refresh-cw.svg" alt=""></button>
+        <button id="settings" class="icon-button" type="button" title="Settings" aria-label="Settings"><img src="icons/settings.svg" alt=""></button>
+      </div>
+    </footer>
   </main>
 </body>
 </html>
