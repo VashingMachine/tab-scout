@@ -23,6 +23,9 @@ done
     "$SOURCE_DIR/Sources/HistoryRanking.swift" "$SOURCE_DIR/Tests/HistoryRankingTests.swift" \
     -lsqlite3 -o "$WORK_DIR/HistoryRankingTests"
 "$WORK_DIR/HistoryRankingTests"
+/usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/ResultKeyboard.swift" \
+    "$SOURCE_DIR/Tests/ResultKeyboardTests.swift" -o "$WORK_DIR/ResultKeyboardTests"
+"$WORK_DIR/ResultKeyboardTests"
 /usr/bin/xcrun swiftc -swift-version 5 -O "$SOURCE_DIR/Sources/Core.swift" \
     "$SOURCE_DIR/Sources/History.swift" "$SOURCE_DIR/Sources/SearchResults.swift" \
     "$SOURCE_DIR/Sources/HistoryRanking.swift" "$SOURCE_DIR/Tests/HistoryPerformanceTests.swift" \

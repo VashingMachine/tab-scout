@@ -560,9 +560,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             activate(forceNew: flags.contains(.command))
             return nil
         }
-        if (event.keyCode == 125 || event.keyCode == 126) && flags.isEmpty {
+        if let step = ResultKeyboard.navigationStep(for: event) {
             guard !rows.isEmpty else { return nil }
-            let step = event.keyCode == 125 ? 1 : -1
             guard let selected = ResultNavigation.next(in: rows, from: table.selectedRow, step: step) else { return nil }
             table.selectRowIndexes(IndexSet(integer: selected), byExtendingSelection: false)
             table.scrollRowToVisible(selected)
