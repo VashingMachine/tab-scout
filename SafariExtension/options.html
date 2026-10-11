@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tab Scout Settings</title>
+  <link rel="stylesheet" href="ui.css">
+  <script type="module" src="options.mjs"></script>
+</head>
+<body data-surface="options">
+  <main class="settings-page">
+    <header class="toolbar"><h1><img src="icons/app-32.png" alt="" width="28" height="28">Tab Scout Settings</h1></header>
+    <form id="settings-form">
+      <fieldset class="setting-group">
+        <legend>Search</legend>
+        <label class="setting-row" for="engine"><span>Default search engine</span><select id="engine" name="engine"><option value="google">Google</option><option value="bing">Bing</option><option value="duckduckgo">DuckDuckGo</option></select></label>
+        <label class="setting-row" for="google-suggestions"><span>Google Suggestions</span><input id="google-suggestions" type="checkbox" name="googleSuggestions"></label>
+        <p class="privacy-note">Eligible typed searches are sent to Google. Cookies and local history are not sent.</p>
+      </fieldset>
+      <fieldset class="setting-group">
+        <legend>Local History</legend>
+        <label class="setting-row" for="remember-choices"><span>Remember Tab Scout choices</span><input id="remember-choices" type="checkbox" name="rememberChoices"></label>
+        <div class="setting-row"><span>Saved searches and tab choices</span><button id="clear-choices" class="text-button" type="button"><img src="icons/trash-2.svg" alt="">Clear</button></div>
+        <p class="privacy-note">Choices stay on this device. Private browsing is not recorded.</p>
+      </fieldset>
+    </form>
+    <div id="settings-status" class="settings-status" role="status" aria-live="polite">Loading settings...</div>
+  </main>
+</body>
+</html>

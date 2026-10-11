@@ -22,6 +22,14 @@ jobs:
           echo "TAB_SCOUT_WORK_DIR=$RUNNER_TEMP/tab-scout-work" >> "$GITHUB_ENV"
       - name: Run Automated Tests
         run: bash test.sh
+      - name: Test Safari Extension
+        run: bash test-safari.sh
+      - name: Test Extension UI Fixtures
+        run: |
+          npm install --prefix "$RUNNER_TEMP/tab-scout-ui" --no-save --ignore-scripts playwright@1.62.1
+          "$RUNNER_TEMP/tab-scout-ui/node_modules/.bin/playwright" install chromium
+          TAB_SCOUT_PLAYWRIGHT_MODULE="$RUNNER_TEMP/tab-scout-ui/node_modules/playwright" \
+            TAB_SCOUT_UI_OUTPUT_DIR="$RUNNER_TEMP/tab-scout-ui/screenshots" node Tests/SafariUISmoke.cjs
       - name: Build App
         run: |
           mkdir -p "$TAB_SCOUT_OUTPUT_DIR/Tab Scout.app/Contents/MacOS"
@@ -30,3 +38,7 @@ jobs:
           test ! -e "$TAB_SCOUT_OUTPUT_DIR/Tab Scout.app/Contents/MacOS/TabScout.cstemp"
       - name: Verify App Signature
         run: /usr/bin/codesign --verify --strict "$TAB_SCOUT_OUTPUT_DIR/Tab Scout.app"
+      - name: Build And Verify Safari Extension
+        run: bash build-safari.sh
+      - name: Test Safari Packaging Regressions
+        run: bash Tests/SafariPackagingRegressionTests.sh "$TAB_SCOUT_OUTPUT_DIR/Tab Scout Safari.app"
