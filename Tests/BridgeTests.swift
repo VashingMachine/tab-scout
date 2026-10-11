@@ -9,6 +9,8 @@ struct BridgeTests {
     static func main() throws {
         try listDecoding()
         try actionArguments()
+        try defaultPageArguments()
+        try defaultPageFailures()
         try serialization()
         try failures()
         try processTransport()
@@ -17,11 +19,11 @@ struct BridgeTests {
 
     static func listDecoding() throws {
         let calls = CallRecorder()
-        let bridge = SafariBridge(scriptURL: scriptURL) { url, arguments in
+        let bridge = SafariBridge(scriptURL: scriptURL, executor: { url, arguments in
             expect(!Thread.isMainThread, "Execute Safari scripts off the main thread")
             calls.append(url: url, arguments: arguments)
             return sampleJSON
-        }
+        })
         let tabs = try awaitResult { bridge.list(completion: $0) }.get()
         expect(calls.values == [Call(url: scriptURL, arguments: ["list"])], "List uses the compiled script and list argv")
         expect(tabs.count == 3, "Decode multiple windows and blank tabs")
@@ -29,16 +31,16 @@ struct BridgeTests {
         expect(tabs[1] == SafariTab(windowID: 11, index: 2, title: "", url: ""), "Keep blank tabs addressable")
         expect(tabs[2].windowID == 27 && tabs[2].index == 1, "Preserve one-based indices independently per window")
 
-        let emptyBridge = SafariBridge(scriptURL: scriptURL) { _, _ in Data("[]".utf8) }
+        let emptyBridge = SafariBridge(scriptURL: scriptURL, executor: { _, _ in Data("[]".utf8) })
         try expect(awaitResult { emptyBridge.list(completion: $0) }.get().isEmpty, "An empty Safari session succeeds")
     }
 
     static func actionArguments() throws {
         let calls = CallRecorder()
-        let bridge = SafariBridge(scriptURL: scriptURL) { url, arguments in
+        let bridge = SafariBridge(scriptURL: scriptURL, executor: { url, arguments in
             calls.append(url: url, arguments: arguments)
             return Data("ok".utf8)
-        }
+        })
         let tab = SafariTab(windowID: 42, index: 6, title: "A \"title\"\nnext line", url: "https://example.org/?quote=\"&a=1")
         _ = try awaitResult { bridge.select(tab, completion: $0) }.get()
         let query = "query \"quoted\"\nsecond line; $(echo never)"
@@ -51,9 +53,84 @@ struct BridgeTests {
         ], "Selection and creation pass quotes, newlines and shell characters as literal argv")
     }
 
+    static func defaultPageArguments() throws {
+        let calls = CallRecorder()
+        let nativeOutput = Data("native-ok".utf8)
+        let bridge = SafariBridge(scriptURL: scriptURL, newTabExecutor: {
+            expect(!Thread.isMainThread, "The native Safari command runs off the main thread")
+            calls.append(url: scriptURL, arguments: ["native-new-tab"])
+            return nativeOutput
+        }) { url, arguments in
+            expect(!Thread.isMainThread, "Window preparation runs off the main thread")
+            calls.append(url: url, arguments: arguments)
+            return Data(" ok\n".utf8)
+        }
+        try expect(awaitResult { bridge.open(.defaultPage, windowID: 7, completion: $0) }.get() == nativeOutput,
+                   "A target-window action returns native command success, not preparation output")
+        try expect(awaitResult { bridge.open(.defaultPage, windowID: 0, completion: $0) }.get() == nativeOutput,
+                   "A front-window action returns native command success")
+        expect(calls.values == [
+            Call(url: scriptURL, arguments: ["prepare-new-tab", "7"]),
+            Call(url: scriptURL, arguments: ["native-new-tab"]),
+            Call(url: scriptURL, arguments: ["prepare-new-tab", "0"]),
+            Call(url: scriptURL, arguments: ["native-new-tab"])
+        ], "Each new-tab action prepares its requested window before exactly one native Safari command")
+        let preparation = calls.values.filter { $0.arguments.first == "prepare-new-tab" }
+        expect(preparation.allSatisfy { $0.arguments.count == 2 }, "Preparation cannot send about:blank or search text as a destination")
+    }
+
+    static func defaultPageFailures() throws {
+        let deniedCalls = CallRecorder()
+        let denied = SafariBridge(scriptURL: scriptURL, newTabExecutor: {
+            deniedCalls.append(url: scriptURL, arguments: ["native-new-tab"])
+            return Data("unexpected".utf8)
+        }) { url, arguments in
+            deniedCalls.append(url: url, arguments: arguments)
+            throw BridgeError.permission
+        }
+        expectError(awaitResult { denied.open(.defaultPage, windowID: 7, completion: $0) }, matching: .permission,
+                    "A preparation failure is preserved")
+        expect(deniedCalls.values == [Call(url: scriptURL, arguments: ["prepare-new-tab", "7"])],
+               "Failed window preparation suppresses the native Safari command")
+
+        let malformedCalls = CallRecorder()
+        let malformed = SafariBridge(scriptURL: scriptURL, newTabExecutor: {
+            malformedCalls.append(url: scriptURL, arguments: ["native-new-tab"])
+            return Data("unexpected".utf8)
+        }) { url, arguments in
+            malformedCalls.append(url: url, arguments: arguments)
+            return Data("not-ready".utf8)
+        }
+        expectError(awaitResult { malformed.open(.defaultPage, windowID: 7, completion: $0) }, matching: .invalidResponse,
+                    "Malformed preparation output is rejected before native creation")
+        expect(malformedCalls.values == [Call(url: scriptURL, arguments: ["prepare-new-tab", "7"])],
+               "An unconfirmed preparation response cannot trigger a native command")
+
+        let nativeCalls = CallRecorder()
+        let rejected = SafariBridge(scriptURL: scriptURL, newTabExecutor: {
+            nativeCalls.append(url: scriptURL, arguments: ["native-new-tab"])
+            throw NativeFixtureError.unavailable
+        }) { url, arguments in
+            nativeCalls.append(url: url, arguments: arguments)
+            return Data("ok".utf8)
+        }
+        switch awaitResult({ rejected.open(.defaultPage, windowID: 0, completion: $0) }) {
+        case .success: fatalError("A failed native command must not appear successful")
+        case .failure(let error):
+            expect((error as? NativeFixtureError) == .unavailable, "The native command's original error reaches the caller")
+        }
+        expect(nativeCalls.values == [
+            Call(url: scriptURL, arguments: ["prepare-new-tab", "0"]),
+            Call(url: scriptURL, arguments: ["native-new-tab"])
+        ], "A failed native command is not retried or replaced by URL creation")
+    }
+
     static func serialization() throws {
         let calls = CallRecorder()
-        let bridge = SafariBridge(scriptURL: scriptURL) { url, arguments in
+        let bridge = SafariBridge(scriptURL: scriptURL, newTabExecutor: {
+            calls.append(url: scriptURL, arguments: ["native-new-tab"])
+            return Data("ok".utf8)
+        }) { url, arguments in
             calls.append(url: url, arguments: arguments)
             Thread.sleep(forTimeInterval: 0.01)
             return arguments == ["list"] ? sampleJSON : Data("ok".utf8)
@@ -62,15 +139,17 @@ struct BridgeTests {
         var completions = [String]()
         bridge.list { _ in completions.append("list") }
         bridge.select(tab) { _ in completions.append("switch") }
+        bridge.open(.defaultPage, windowID: 1) { _ in completions.append("new-tab") }
         _ = try awaitResult { bridge.open(.search("last"), windowID: 1, completion: $0) }.get()
-        expect(calls.values.map { $0.arguments[0] } == ["list", "switch", "search"], "Safari actions execute in submission order")
-        expect(completions == ["list", "switch"], "Earlier main-thread callbacks precede the final callback")
+        expect(calls.values.map { $0.arguments[0] } == ["list", "switch", "prepare-new-tab", "native-new-tab", "search"],
+               "Window preparation and native creation cannot be interleaved with another submitted action")
+        expect(completions == ["list", "switch", "new-tab"], "Earlier main-thread callbacks precede the final callback")
     }
 
     static func failures() throws {
-        let malformed = SafariBridge(scriptURL: scriptURL) { _, _ in Data("[[1,2,3,4]]".utf8) }
+        let malformed = SafariBridge(scriptURL: scriptURL, executor: { _, _ in Data("[[1,2,3,4]]".utf8) })
         expectError(awaitResult { malformed.list(completion: $0) }, matching: .invalidResponse, "Reject malformed tab rows")
-        let permission = SafariBridge(scriptURL: scriptURL) { _, _ in throw BridgeError.permission }
+        let permission = SafariBridge(scriptURL: scriptURL, executor: { _, _ in throw BridgeError.permission })
         expectError(awaitResult { permission.list(completion: $0) }, matching: .permission, "Forward bridge permission failures")
 
         expectError(Result { try output(status: 1, errors: "Not authorized (-1743)").validatedData() }, matching: .permission, "Map Safari Automation denial")
@@ -128,6 +207,8 @@ struct BridgeTests {
         if try !condition() { fatalError(message) }
     }
 }
+
+private enum NativeFixtureError: Error, Equatable { case unavailable }
 
 private struct Call: Equatable {
     let url: URL

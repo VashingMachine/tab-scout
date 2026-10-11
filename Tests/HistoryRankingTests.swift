@@ -193,10 +193,17 @@ struct HistoryRankingTests {
         expect(duplicateTyped.first == .newTab(.search("coffee  beans")),
                "Omitting an exact Google prediction leaves the original raw-query action as default")
         let blank = rows(" \n\t ", searches: [search("recent search")], suggestions: provider)
-        expect(blank.first == .newTab(.url("about:blank")), "Empty input defaults to a blank new tab")
+        expect(blank.first == .newTab(.defaultPage), "Whitespace-only input defaults to Safari's configured new-tab page")
+        expect(rows("") == [.newTab(.defaultPage)], "Empty input without local results offers only the native new-tab action")
         expect(remoteQueries(blank).isEmpty && !blank.contains(.section(.google)),
                "Empty input never displays remote predictions")
         expect(blank.contains(.section(.recent)), "Recent searches remain available below empty-input default")
+        let emptyWithTabs = rows("", tabs: [tab("Open page", "https://example.com")],
+                                 searches: [search("recent search")])
+        expect(emptyWithTabs.first == .newTab(.defaultPage), "Open tabs and recent searches cannot displace the empty-input native new-tab default")
+        expect(ResultNavigation.first(in: emptyWithTabs) == 0, "Enter initially targets native new-tab creation for empty input")
+        expect(rows(" example.com/docs ").first == .newTab(.url("https://example.com/docs")),
+               "Nonempty URL creation is unchanged by the native new-tab default")
 
         let current = tab("New title", "https://EXAMPLE.com:443/", index: 7)
         let oldTitle = visit("Swift documentation", "https://example.com")

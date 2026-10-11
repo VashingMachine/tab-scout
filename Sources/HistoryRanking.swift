@@ -102,7 +102,7 @@ enum SearchResultBuilder {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         var rows: [SearchRow] = []
         let tabs = history.rankTabs(matches, now: now)
-        if query.isEmpty { rows.append(.newTab(.url("about:blank"))) }
+        if query.isEmpty { rows.append(.newTab(.defaultPage)) }
         if !tabs.isEmpty {
             rows.append(.section(.tabs))
             rows += tabs.map(SearchRow.tab)

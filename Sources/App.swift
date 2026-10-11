@@ -526,6 +526,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             }
         case .newTab(let destination):
             switch destination {
+            case .defaultPage:
+                cell.configure(title: "New tab", detail: "Safari's new-tab page", url: nil,
+                               image: symbol("plus.square"), tint: .systemBlue)
             case .url(let url):
                 cell.configure(title: url == "about:blank" ? "New tab" : "Open \(url)", detail: "New Safari tab", url: nil,
                                image: symbol("plus.square"), tint: .systemBlue)
@@ -606,6 +609,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 self.emptyLabel.stringValue = ""
                 self.footer.stringValue = error.localizedDescription
                 self.footer.toolTip = error.localizedDescription
+                NSApp.activate(ignoringOtherApps: true)
+                self.panel.makeKeyAndOrderFront(nil)
                 self.panel.makeFirstResponder(self.searchField)
                 if case BridgeError.staleTab = error { self.loadTabs(force: true) }
             }
@@ -624,6 +629,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         default:
             if let destination = row.destination {
                 switch destination {
+                case .defaultPage: break
                 case .search(let query): historyStore.recordSearch(query: query)
                 case .url(let url): historyStore.recordVisit(url: url, title: url)
                 }

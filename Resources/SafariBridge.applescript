@@ -64,6 +64,25 @@ on run argv
         return "ok"
     end if
 
+    if operation is "prepare-new-tab" then
+        set targetWindowID to (item 2 of argv) as integer
+        with timeout of 12 seconds
+            tell application "Safari"
+                if (count of windows) is not 0 then
+                    if targetWindowID is not 0 and (exists window id targetWindowID) then
+                        set browserWindow to window id targetWindowID
+                    else
+                        set browserWindow to front window
+                    end if
+                    set miniaturized of browserWindow to false
+                    set index of browserWindow to 1
+                end if
+                activate
+            end tell
+        end timeout
+        return "ok"
+    end if
+
     if operation is "url" or operation is "search" then
         set targetWindowID to (item 2 of argv) as integer
         set destination to item 3 of argv

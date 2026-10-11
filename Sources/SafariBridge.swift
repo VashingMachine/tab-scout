@@ -3,13 +3,17 @@ import Darwin
 
 final class SafariBridge {
     typealias ScriptExecutor = (URL, [String]) throws -> Data
+    typealias NewTabExecutor = () throws -> Data
 
     private let queue = DispatchQueue(label: "local.tabscout.safari")
     private let scriptURL: URL
+    private let newTabExecutor: NewTabExecutor
     private let executor: ScriptExecutor
 
-    init(scriptURL: URL, executor: @escaping ScriptExecutor = SafariScriptProcess.execute) {
+    init(scriptURL: URL, newTabExecutor: @escaping NewTabExecutor = SafariNativeNewTab.open,
+         executor: @escaping ScriptExecutor = SafariScriptProcess.execute) {
         self.scriptURL = scriptURL
+        self.newTabExecutor = newTabExecutor
         self.executor = executor
     }
 
@@ -23,14 +27,24 @@ final class SafariBridge {
 
     func open(_ destination: NewTabDestination, windowID: Int, completion: @escaping (Result<Data, Error>) -> Void) {
         switch destination {
+        case .defaultPage:
+            execute(["prepare-new-tab", String(windowID)], after: newTabExecutor, completion: completion)
         case .url(let url): execute(["url", String(windowID), url], completion: completion)
         case .search(let query): execute(["search", String(windowID), query], completion: completion)
         }
     }
 
-    private func execute(_ arguments: [String], completion: @escaping (Result<Data, Error>) -> Void) {
+    private func execute(_ arguments: [String], after action: NewTabExecutor? = nil,
+                         completion: @escaping (Result<Data, Error>) -> Void) {
         queue.async { [scriptURL, executor] in
-            let result = Result { try executor(scriptURL, arguments) }
+            let result = Result {
+                let data = try executor(scriptURL, arguments)
+                guard let action else { return data }
+                guard String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) == "ok" else {
+                    throw BridgeError.invalidResponse
+                }
+                return try action()
+            }
             DispatchQueue.main.async { completion(result) }
         }
     }

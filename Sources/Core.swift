@@ -100,12 +100,13 @@ struct TabSearchIndex {
 }
 
 enum NewTabDestination: Equatable {
+    case defaultPage
     case url(String)
     case search(String)
 
     static func from(_ input: String) -> NewTabDestination {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return .url("about:blank") }
+        guard !text.isEmpty else { return .defaultPage }
         guard !text.contains(where: \.isWhitespace) else { return .search(text) }
 
         if let url = URL(string: text), let scheme = url.scheme?.lowercased(),

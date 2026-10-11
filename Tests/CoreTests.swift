@@ -23,7 +23,11 @@ struct CoreTests {
         expect(NewTabDestination.from("Swift") == .search("Swift"), "Search a single word")
         expect(NewTabDestination.from("javascript:alert(1)") == .search("javascript:alert(1)"), "Do not execute arbitrary URL schemes")
         expect(NewTabDestination.from("file:///etc/passwd") == .search("file:///etc/passwd"), "Do not open local files from query input")
-        expect(NewTabDestination.from("") == .url("about:blank"), "Empty query opens a blank tab")
+        expect(NewTabDestination.from("") == .defaultPage, "Empty query opens Safari's configured new-tab page")
+        expect(NewTabDestination.from(" \n\t ") == .defaultPage, "Whitespace-only query opens Safari's configured new-tab page")
+        expect(NewTabDestination.from("favorites://") == .search("favorites://"), "Typed Safari internal schemes remain search text")
+        expect(NewTabDestination.from("about:blank") == .search("about:blank"), "Typed non-web schemes remain search text")
+        expect(NewTabDestination.from("  Swift programming  ") == .search("Swift programming"), "Nonempty search input still trims surrounding whitespace")
         expect(NewTabDestination.from("query \"quoted\"\nsecond line") == .search("query \"quoted\"\nsecond line"), "Preserve quotes and newlines as data")
 
         let data = Data("[[9,1,\"A \\\"quote\\\" \\n title\",\"https://example.com/a?x=1&y=2\"]]".utf8)

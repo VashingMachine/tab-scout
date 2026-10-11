@@ -56,7 +56,7 @@ The shortcut hook starts automatically after permission is granted. Permissions 
 - Type part of a tab title or URL. Matching ignores case and Latin diacritics and supports multiple words.
 - Enter activates the selected result. Open-tab matches switch tabs; history URLs open a tab; recent searches and predictions run a search. Up/Down skip section headings; clicking an actionable result activates it.
 - If there is no match, Enter opens a new tab. Addresses open directly; other queries use Safari's configured search provider.
-- Cmd+Enter always opens the query in a new tab. An empty query opens a blank tab.
+- Cmd+Enter always opens the query in a new tab. An empty or whitespace-only query uses Safari's native **New Tab** command and configured new-tab page. With **New tabs open with: Start Page** in Safari Settings > General, it shows the native Start Page with its configured sections and background instead of a forced `about:blank`. The native command also handles opening a tab when Safari has no windows.
 - Escape or Cmd+T closes the search panel without an action.
 - The refresh icon requests updated results. The menu-bar menu provides search, permissions, shortcut capture, **Google Suggestions**, **Use Safari History**, **Clear Tab Scout History**, **Start at Login**, and quit.
 - Cmd+T is captured only while Safari is active. Cmd+Shift+T and shortcuts in other apps retain their normal behavior.

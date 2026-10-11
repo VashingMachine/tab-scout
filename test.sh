@@ -35,7 +35,12 @@ done
     "$SOURCE_DIR/Tests/GoogleSuggestionsTests.swift" -o "$WORK_DIR/GoogleSuggestionsTests"
 "$WORK_DIR/GoogleSuggestionsTests"
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" \
-    "$SOURCE_DIR/Sources/SafariBridge.swift" "$SOURCE_DIR/Tests/BridgeTests.swift" -o "$WORK_DIR/BridgeTests"
+    "$SOURCE_DIR/Sources/SafariNativeNewTab.swift" "$SOURCE_DIR/Tests/SafariNativeNewTabTests.swift" \
+    -o "$WORK_DIR/SafariNativeNewTabTests"
+"$WORK_DIR/SafariNativeNewTabTests"
+/usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" \
+    "$SOURCE_DIR/Sources/SafariBridge.swift" "$SOURCE_DIR/Sources/SafariNativeNewTab.swift" \
+    "$SOURCE_DIR/Tests/BridgeTests.swift" -o "$WORK_DIR/BridgeTests"
 "$WORK_DIR/BridgeTests"
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Favicon.swift" \
     "$SOURCE_DIR/Tests/FaviconTests.swift" -o "$WORK_DIR/FaviconTests"

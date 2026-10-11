@@ -23,6 +23,7 @@ Use a throwaway Safari window and public fixture queries. Record the build revis
 5. Type a new query while a request for the old query is pending. Old suggestions must not appear under the new query. Close the panel during a request; a callback must not reopen it.
 6. Check light/dark appearance, Retina icons, long Unicode queries/titles, narrow window dimensions, and scrolling. Headers, clock/search icons, real timestamps, favicons, and truncated text must not overlap or shift row geometry.
 7. Clock rows must have real local use dates. A generic Google prediction must not acquire a fabricated visit date.
+8. With empty or whitespace-only input, the native new-tab action must stay selected above open tabs and recent searches, including after a refresh. Enter and Cmd+Enter must use Safari's native **New Tab** command and open exactly one tab with its configured page. With Start Page configured, its sections and background must render rather than a forced `about:blank`. Repeat with no windows in a throwaway session, comparing with File > New Tab. Nonempty addresses and queries must still open the URL or configured-provider search as before.
 
 ## Ranking And Deduplication
 
