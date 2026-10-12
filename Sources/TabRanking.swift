@@ -51,6 +51,9 @@ struct RankedTab: Equatable {
 }
 
 enum TabRanker {
+    /// The weakest match that can be the Enter default: every query word found as typed.
+    static let confidentMatch = 0.6
+
     /// A tab viewed `rank` switches ago; the previous tab has rank 0.
     static func recency(rank: Int) -> Double { exp(-Double(rank) / 4) }
 

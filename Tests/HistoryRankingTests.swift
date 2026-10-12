@@ -342,6 +342,13 @@ struct HistoryRankingTests {
                "Recency cannot lift a weaker match over a much better one")
         expect(TabRanker.recency(rank: 0) == 1 && TabRanker.recency(rank: 1) < 1 && TabRanker.recency(rank: 40) < 0.001,
                "Recency fades with every tab switch")
+        let github = tab("GitHub", "https://github.com/")
+        let typo = rows("githbu", tabs: [github])
+        expect(typo.first == .newTab(.search("githbu")) && displayedTabs(typo) == [github],
+               "A typo guess is offered below the typed search, which stays the Enter default")
+        expect(rows("gh", tabs: [github]).first == .tab(github), "Confident initials are the Enter default")
+        expect(rows("github", tabs: [github]).filter { $0 == .newTab(.search("github")) }.count == 1,
+               "The typed search action is listed once")
         var features = RankingFeatures()
         features[.usage] = 7
         features[.recency] = -.infinity

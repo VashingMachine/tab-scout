@@ -99,18 +99,12 @@ struct TabSearchIndex {
     }
     private struct Entry {
         let tab: SafariTab
-        let title: String
-        let host: String
-        let text: String
+        let fields: TextFields
     }
     private let entries: [Entry]
 
     init(_ tabs: [SafariTab]) {
-        entries = tabs.map { tab in
-            let title = TabSearch.normalized(tab.displayTitle)
-            return Entry(tab: tab, title: title, host: TabSearch.normalized(tab.host),
-                         text: title + " " + TabSearch.normalized(tab.url))
-        }
+        entries = tabs.map { Entry(tab: $0, fields: TextFields(title: $0.displayTitle, url: $0.url)) }
     }
 
     func results(query: String) -> [SafariTab] {
@@ -120,12 +114,174 @@ struct TabSearchIndex {
     func matches(query: String) -> [Match] {
         let query = TabSearch.normalized(query.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !query.isEmpty else { return entries.map { Match(tab: $0.tab, relevance: 0) } }
-        let tokens = query.split(whereSeparator: \.isWhitespace).map(String.init)
+        let prepared = TextQuery(normalized: query)
         return entries.enumerated().compactMap { offset, entry -> (Int, Int, SafariTab)? in
-            guard tokens.allSatisfy({ entry.text.contains($0) }) else { return nil }
-            let score = entry.host == query ? 100 : entry.title == query ? 95 : entry.host.hasPrefix(query) ? 90 : entry.title.hasPrefix(query) ? 85 : entry.title.contains(query) ? 80 : 60
+            guard let score = entry.fields.relevance(prepared, fuzzy: true) else { return nil }
             return (score, offset, entry.tab)
         }.sorted { $0.0 == $1.0 ? $0.1 < $1.1 : $0.0 > $1.0 }.map { Match(tab: $0.2, relevance: $0.0) }
+    }
+}
+
+/// A normalized query, prepared once per keystroke.
+struct TextQuery {
+    let text: String
+    let tokens: [String]
+    fileprivate let phrase: String
+
+    init(normalized text: String) {
+        self.text = text
+        tokens = text.split(whereSeparator: \.isWhitespace).map(String.init)
+        phrase = " " + tokens.joined(separator: " ")
+    }
+}
+
+/// The searchable forms of one page title and URL, prepared once per tab or history entry.
+struct TextFields {
+    let title: String
+    /// The host without a leading "www.".
+    let host: String
+    let text: String
+    /// Title words split at punctuation: "GitHub - Code" becomes github, code.
+    let words: [String]
+    /// Title words also split at camelCase, for initials: git, hub, code. Empty unless prepared for loose matching.
+    let parts: [String]
+    let siteWords: [String]
+    private let spacedTitle: String
+    private let spacedParts: String
+
+    init(title: String, url: String, loose: Bool = true) {
+        self.title = TabSearch.normalized(title)
+        let host = TabSearch.normalized(URL(string: url)?.host ?? url)
+        self.host = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+        let address = TabSearch.normalized(url)
+        text = self.title + " " + address
+        words = self.title.split { !($0.isLetter || $0.isNumber) }.map(String.init)
+        parts = loose ? TextMatch.words(title) : []
+        siteWords = address.split { !($0.isLetter || $0.isNumber) }.map(String.init)
+        spacedTitle = " " + words.joined(separator: " ") + " "
+        spacedParts = loose ? " " + parts.joined(separator: " ") + " " : ""
+    }
+
+    /// Match tiers, best first: the whole query as host or title (100-85), at a word start in the title (80),
+    /// as the initials of consecutive title words (75), inside a title word (70); then every word of the query
+    /// at a word start (65), anywhere (60), as initials (58, or 55 with words skipped), or with a typo (50).
+    /// Initials and typos count only when `fuzzy` is set.
+    func relevance(_ query: TextQuery, fuzzy: Bool) -> Int? {
+        // Most entries miss a typed word, so that cheap test comes first.
+        let firstMissing = query.tokens.firstIndex { !text.contains($0) }
+        if firstMissing != nil && !fuzzy { return nil }
+        if firstMissing == nil {
+            if host == query.text { return 100 }
+            if title == query.text { return 95 }
+            if host.hasPrefix(query.text) { return 90 }
+            if title.hasPrefix(query.text) { return 85 }
+            if spacedTitle.contains(query.phrase) || spacedParts.contains(query.phrase) { return 80 }
+            if title.contains(query.text) { return 70 }
+        }
+        var best = 0
+        var weakest = 65
+        for (index, token) in query.tokens.enumerated() {
+            if firstMissing.map({ index < $0 || (index > $0 && text.contains(token)) }) ?? true {
+                let wordStart = words.contains { $0.hasPrefix(token) } || parts.contains { $0.hasPrefix(token) }
+                    || siteWords.contains { $0.hasPrefix(token) }
+                weakest = min(weakest, wordStart ? 65 : 60)
+            } else if let skipped = TextMatch.initialsSkipping(token, in: parts) {
+                if query.tokens.count == 1 && skipped == 0 { best = 75 }
+                weakest = min(weakest, skipped == 0 ? 58 : 55)
+            } else if TextMatch.nearMiss(token, in: words) || TextMatch.nearMiss(token, in: siteWords) {
+                weakest = min(weakest, 50)
+            } else {
+                return nil
+            }
+        }
+        return max(best, weakest)
+    }
+}
+
+enum TextMatch {
+    static func words(_ text: String) -> [String] {
+        // Mark camelCase boundaries before folding case: "DynamoDB" is dynamo, db and "DBTable" is db, table.
+        let characters = Array(text)
+        var marked = ""
+        marked.reserveCapacity(characters.count + 8)
+        for (offset, character) in characters.enumerated() {
+            if offset > 0 {
+                let previous = characters[offset - 1]
+                let next = offset + 1 < characters.count ? characters[offset + 1] : nil
+                if (previous.isLowercase && character.isUppercase)
+                    || (previous.isUppercase && character.isUppercase && next?.isLowercase == true) { marked.append(" ") }
+            }
+            marked.append(character)
+        }
+        return TabSearch.normalized(marked).split { !($0.isLetter || $0.isNumber) }.map(String.init)
+    }
+
+    /// Spells `token` with the starts of two or more title words in order, as "gh" does with git, hub and
+    /// "ddb" with dynamo, db. Returns how few words between them had to be skipped, or nil when it cannot.
+    static func initialsSkipping(_ token: String, in words: [String]) -> Int? {
+        let token = Array(token)
+        guard (2...8).contains(token.count), token.allSatisfy(\.isLetter),
+              words.contains(where: { $0.first == token[0] }) else { return nil }
+        let words = words.prefix(24).map(Array.init)
+        var memo: [Int: Int?] = [:]
+        func skipped(_ position: Int, _ first: Int, _ pieces: Int) -> Int? {
+            if position == token.count { return pieces >= 2 ? 0 : nil }
+            let key = (position * 32 + first) * 3 + min(pieces, 2)
+            if let known = memo[key] { return known }
+            var best: Int?
+            for word in first..<words.count {
+                // Words before the first piece are free; words between pieces count as skipped.
+                let gap = pieces == 0 ? 0 : word - first
+                if let best, gap >= best { break }
+                var length = 0
+                while length < words[word].count, position + length < token.count,
+                      words[word][length] == token[position + length] {
+                    length += 1
+                    if let rest = skipped(position + length, word + 1, pieces + 1) { best = min(best ?? .max, gap + rest) }
+                }
+            }
+            memo[key] = best
+            return best
+        }
+        return skipped(0, 0, 0)
+    }
+
+    /// One typo (two from nine letters) against the start of a word: "githbu" finds github.
+    static func nearMiss(_ token: String, in words: [String]) -> Bool {
+        let token = Array(token)
+        guard token.count >= 5 else { return false }
+        let allowed = token.count >= 9 ? 2 : 1
+        return words.contains { word in
+            let word = Array(word)
+            guard word.count >= token.count - allowed else { return false }
+            return (token.count - allowed...min(word.count, token.count + allowed)).contains {
+                editDistance(token, word[..<$0], limit: allowed) <= allowed
+            }
+        }
+    }
+
+    /// Optimal string alignment distance, where swapping two neighbouring letters is one edit.
+    /// Stops early once every alignment exceeds `limit`.
+    static func editDistance(_ a: [Character], _ b: ArraySlice<Character>, limit: Int) -> Int {
+        let b = Array(b)
+        guard abs(a.count - b.count) <= limit else { return limit + 1 }
+        guard !a.isEmpty, !b.isEmpty else { return max(a.count, b.count) }
+        var before = [Int](repeating: 0, count: b.count + 1)
+        var previous = Array(0...b.count)
+        var current = previous
+        for i in 1...a.count {
+            current[0] = i
+            var smallest = i
+            for j in 1...b.count {
+                current[j] = min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1))
+                if i > 1, j > 1, a[i - 1] == b[j - 2], a[i - 2] == b[j - 1] { current[j] = min(current[j], before[j - 2] + 1) }
+                smallest = min(smallest, current[j])
+            }
+            if smallest > limit { return limit + 1 }
+            before = previous
+            previous = current
+        }
+        return previous[b.count]
     }
 }
 

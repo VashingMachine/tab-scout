@@ -14,6 +14,7 @@ struct CoreTests {
         expect(TabSearch.results(tabs, query: "acme/code") == [a], "Search URL paths")
         expect(TabSearch.results(tabs, query: "missing").isEmpty, "No unrelated fuzzy matches")
         expect(TabSearch.results(tabs, query: "") == tabs, "Stable order for an empty query")
+        smartMatching()
 
         expect(NewTabDestination.from(" example.com/docs ") == .url("https://example.com/docs"), "Bare address")
         expect(NewTabDestination.from("localhost:3000") == .url("http://localhost:3000"), "Local development address")
@@ -50,6 +51,58 @@ struct CoreTests {
         expect(!capture(enabled: false), "Pause restores normal Cmd+T")
         expect(!capture(code: 16), "Leave other keys alone")
         print("Passed \(checks) core checks")
+    }
+
+    static func tab(_ title: String, _ url: String) -> SafariTab {
+        SafariTab(windowID: 1, index: 1, title: title, url: url)
+    }
+
+    static func relevance(_ query: String, _ tab: SafariTab) -> Int? {
+        TabSearchIndex([tab]).matches(query: query).first?.relevance
+    }
+
+    static func smartMatching() {
+        let gmail = tab("Inbox - Gmail", "https://mail.google.com/mail/u/0/")
+        let openAI = tab("OpenAI blog", "https://openai.com/blog")
+        let news = tab("AI news today", "https://news.example.com/")
+        expect(TabSearch.results([gmail, openAI, news], query: "ai") == [news, openAI, gmail],
+               "A match at the start of a word, including a camelCase word, beats one inside a word")
+        let github = tab("GitHub - acme/api", "https://github.com/acme/api")
+        let ghost = tab("Ghost blog", "https://ghost.org/")
+        let hacker = tab("Hacker News", "https://news.ycombinator.com/")
+        let dynamo = tab("Amazon DynamoDB - Console", "https://console.aws.amazon.com/dynamodbv2/home")
+        let pull = tab("Fix login · Pull Request #4 · acme/api", "https://github.com/acme/api/pull/4")
+        expect(TabSearch.results([hacker, github], query: "gh") == [github], "Initials of camelCase words find GitHub")
+        expect(TabSearch.results([github, ghost], query: "gh") == [ghost, github],
+               "A title that starts with the typed letters still beats initials")
+        expect(relevance("hn", hacker) == 75, "Initials of consecutive title words are a strong match")
+        expect(TabSearch.results([github, hacker, dynamo], query: "ddb") == [dynamo], "Initials may start mid-title")
+        expect(relevance("pr", pull) == 75, "Initials find a pull request")
+        expect(relevance("an", tab("Apple Developer News", "https://developer.apple.com/news/")) == 55,
+               "Initials that skip a word are a weak match")
+        expect(relevance("gh", tab("GitHub", "https://github.com/")) == 75 && relevance("g", github) == 90,
+               "A single letter is a prefix, never initials")
+        expect(TabSearch.results([github, gmail], query: "githbu") == [github], "A swapped pair of letters is one typo")
+        expect(TabSearch.results([dynamo], query: "dynamdb") == [dynamo], "A missing letter is one typo")
+        expect(relevance("githbu", github) == 50, "Typo matches rank below every literal match")
+        expect(TabSearch.results([tab("Word list", "https://example.com/")], query: "wrod").isEmpty,
+               "Words shorter than five letters must be typed exactly")
+        expect(TabSearch.results([tab("Documentation", "https://example.com/")], query: "dcoumentatoin").count == 1,
+               "Long words tolerate two typos")
+        expect(TabSearch.results([github], query: "zzzzzz").isEmpty, "Typo tolerance does not match unrelated words")
+        expect(relevance("github", tab("Home", "https://www.github.com/")) == 90, "A leading www. does not hide the site")
+        expect(relevance("github acme", github) == 80, "Several typed words found together at word starts")
+        expect(relevance("api acme", github) == 65, "Typed words found apart at word starts")
+        expect(relevance("ithu", github) == 70, "Typed text inside a title word still matches, below word starts")
+        expect(relevance("ub.com", github) == 60, "Typed text inside the address is the weakest literal match")
+        expect(TextMatch.words("DBTable for DynamoDB, v2") == ["db", "table", "for", "dynamo", "db", "v2"],
+               "Words split at punctuation and camelCase while keeping letters and digits together")
+        expect(TextMatch.words("Zażółć gęślą") == ["zazolc", "gesla"], "Words fold diacritics")
+        expect(TextMatch.editDistance(Array("abcd"), Array("abdc")[...], limit: 2) == 1, "A transposition is one edit")
+        expect(TextMatch.editDistance(Array("abc"), Array("xyz")[...], limit: 1) == 2, "Distances beyond the limit stop early")
+        expect(TextMatch.initialsSkipping("gh", in: ["git"]) == nil, "Initials need at least two words")
+        let manyWords = (0..<40).map { _ in "aaaa" }
+        expect(TextMatch.initialsSkipping("aaaaaaab", in: manyWords) == nil, "Repetitive titles cannot make initials slow")
     }
 
     static func capture(code: Int64 = 17, shift: Bool = false, option: Bool = false, safari: Bool = true, enabled: Bool = true) -> Bool {

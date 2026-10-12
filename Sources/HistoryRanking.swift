@@ -12,9 +12,7 @@ enum HistoryRelevance {
 struct HistorySearchIndex {
     private struct VisitEntry {
         let visit: HistoryVisit
-        let title: String
-        let host: String
-        let text: String
+        let fields: TextFields
     }
     private struct QueryEntry {
         let search: PastSearch
@@ -26,9 +24,7 @@ struct HistorySearchIndex {
 
     init(_ snapshot: HistorySnapshot) {
         visits = snapshot.visits.filter { HistoryIdentity.url($0.url) != nil && HistorySearchQuery.from(url: $0.url) == nil }.map {
-            VisitEntry(visit: $0, title: TabSearch.normalized($0.title),
-                       host: TabSearch.normalized(URL(string: $0.url)?.host ?? ""),
-                       text: TabSearch.normalized($0.title + " " + $0.url))
+            VisitEntry(visit: $0, fields: TextFields(title: $0.title, url: $0.url, loose: false))
         }
         queries = snapshot.searches.map { QueryEntry(search: $0, normalized: HistoryIdentity.query($0.query)) }
         usage = Dictionary(snapshot.visits.compactMap { visit -> (String, HistoryVisit)? in
@@ -63,10 +59,10 @@ struct HistorySearchIndex {
     func browsingMatches(query: String, now: Date) -> [HistoryVisit] {
         let query = HistoryIdentity.query(query)
         guard !query.isEmpty else { return [] }
-        let tokens = query.split(whereSeparator: \.isWhitespace).map(String.init)
+        let prepared = TextQuery(normalized: query)
         return visits.enumerated().compactMap { offset, entry -> (Int, Double, Int, HistoryVisit)? in
-            guard tokens.allSatisfy({ entry.text.contains($0) }) else { return nil }
-            let match = entry.host == query ? 100 : entry.title == query ? 95 : entry.host.hasPrefix(query) ? 90 : entry.title.hasPrefix(query) ? 85 : entry.title.contains(query) ? 80 : 60
+            // Typos and initials stay limited to open tabs; history is too large for loose matches.
+            guard let match = entry.fields.relevance(prepared, fuzzy: false) else { return nil }
             return (match, HistoryRelevance.score(lastUsed: entry.visit.lastVisited, count: entry.visit.visitCount, now: now), offset, entry.visit)
         }.sorted { a, b in
             if a.0 != b.0 { return a.0 > b.0 }
@@ -105,9 +101,13 @@ enum SearchResultBuilder {
         let previous = query.isEmpty ? previousTab : nil
         var context = context
         context.activeTab = activeTab
-        let tabs = TabRanker.rank(typed: !query.isEmpty, matches: matches, history: history, context: context, now: now)
-            .map(\.tab).filter { $0 != previous && $0 != activeTab }
+        let ranked = TabRanker.rank(typed: !query.isEmpty, matches: matches, history: history, context: context, now: now)
+            .filter { $0.tab != previous && $0.tab != activeTab }
+        let tabs = ranked.map(\.tab)
         if let previous { rows.append(.previousTab(previous)) }
+        // A guess from a typo or initials is offered, but Enter keeps meaning the typed text.
+        let typedFirst = !query.isEmpty && ranked.first.map { $0.features[.lexical] < TabRanker.confidentMatch } == true
+        if typedFirst { rows.append(.newTab(NewTabDestination.from(query))) }
         rows += tabs.map(SearchRow.tab)
         if query.isEmpty { rows.append(.newTab(.defaultPage)) }
         let recent = history.recentSearches(query: query, now: now)
@@ -127,7 +127,7 @@ enum SearchResultBuilder {
             rows.append(.section(.history))
             rows += browsing
         }
-        if !query.isEmpty { rows.append(.newTab(NewTabDestination.from(query))) }
+        if !query.isEmpty && !typedFirst { rows.append(.newTab(NewTabDestination.from(query))) }
         var seenQueries = Set(recent.map { HistoryIdentity.query($0.query) })
         seenQueries.insert(HistoryIdentity.query(query))
         let remote = suggestions.compactMap { suggestion -> SearchRow? in
