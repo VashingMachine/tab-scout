@@ -3,6 +3,7 @@ import Foundation
 /// Everything Tab Scout learns from how it is used. It stays on this Mac, and Clear Tab Scout History removes it.
 struct LearningState: Codable, Equatable {
     var affinity = QueryAffinity()
+    var engagement = Engagement()
 
     init() {}
 
@@ -10,6 +11,7 @@ struct LearningState: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         affinity = try values.decodeIfPresent(QueryAffinity.self, forKey: .affinity) ?? QueryAffinity()
+        engagement = try values.decodeIfPresent(Engagement.self, forKey: .engagement) ?? Engagement()
     }
 }
 

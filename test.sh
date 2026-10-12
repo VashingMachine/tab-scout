@@ -6,7 +6,7 @@ mkdir -p "$WORK_DIR"
 # Everything that decides which results appear and in what order.
 RANKING=("$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/History.swift" "$SOURCE_DIR/Sources/SearchResults.swift"
     "$SOURCE_DIR/Sources/HistoryRanking.swift" "$SOURCE_DIR/Sources/TabRanking.swift"
-    "$SOURCE_DIR/Sources/QueryAffinity.swift")
+    "$SOURCE_DIR/Sources/QueryAffinity.swift" "$SOURCE_DIR/Sources/FocusTracking.swift")
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" \
     "$SOURCE_DIR/Tests/CoreTests.swift" -o "$WORK_DIR/CoreTests"
 "$WORK_DIR/CoreTests"
@@ -28,6 +28,10 @@ done
 /usr/bin/xcrun swiftc -swift-version 5 "${RANKING[@]}" "$SOURCE_DIR/Sources/LearningStore.swift" \
     "$SOURCE_DIR/Tests/LearningTests.swift" -lsqlite3 -o "$WORK_DIR/LearningTests"
 "$WORK_DIR/LearningTests"
+/usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/History.swift" \
+    "$SOURCE_DIR/Sources/FocusTracking.swift" "$SOURCE_DIR/Tests/FocusTrackingTests.swift" -lsqlite3 \
+    -o "$WORK_DIR/FocusTrackingTests"
+"$WORK_DIR/FocusTrackingTests"
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" \
     "$SOURCE_DIR/Sources/TabFocusHistory.swift" "$SOURCE_DIR/Tests/TabFocusHistoryTests.swift" -o "$WORK_DIR/TabFocusHistoryTests"
 "$WORK_DIR/TabFocusHistoryTests"

@@ -46,6 +46,15 @@ struct TabInventory: Equatable {
         }
         return TabInventory(tabs: tabs, active: active)
     }
+
+    /// The tab on screen from the bridge's `active` command, or nil when Safari has no window.
+    static func decodeActive(_ data: Data) throws -> SafariTab? {
+        let row = try JSONDecoder().decode([TabValue].self, from: data)
+        if row.isEmpty { return nil }
+        guard row.count == 4, case .number(let window) = row[0], case .number(let index) = row[1],
+              case .text(let title) = row[2], case .text(let url) = row[3] else { throw BridgeError.invalidResponse }
+        return SafariTab(windowID: window, index: index, title: title, url: url)
+    }
 }
 
 private enum TabValue: Decodable {

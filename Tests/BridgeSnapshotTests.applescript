@@ -24,7 +24,10 @@ on run argv
         set rejected to messageText contains "TAB_SCOUT_SNAPSHOT_CHANGED"
     end try
     my expect(rejected, "Never return partial rows from a mismatched snapshot")
-    return "Passed 14 AppleScript snapshot checks"
+    set active to bridge's activeRow(7, 3, missing value, "https://example.org/B")
+    my expect(active is {7, 3, "", "https://example.org/B"}, "The active tab row has no missing values")
+    my expect((bridge's jsonText(active)) is "[7,3,\"\",\"https:\\/\\/example.org\\/B\"]", "The active tab serializes as one JSON row")
+    return "Passed 16 AppleScript snapshot checks"
 end run
 
 on expect(condition, messageText)

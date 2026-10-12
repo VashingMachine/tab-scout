@@ -8,6 +8,7 @@ struct BridgeTests {
 
     static func main() throws {
         try listDecoding()
+        try activeDecoding()
         try actionArguments()
         try defaultPageArguments()
         try defaultPageFailures()
@@ -36,6 +37,25 @@ struct BridgeTests {
         let emptyBridge = SafariBridge(scriptURL: scriptURL, executor: { _, _ in Data("[]".utf8) })
         let empty = try awaitResult { emptyBridge.list(completion: $0) }.get()
         expect(empty.tabs.isEmpty && empty.active == nil, "An empty Safari session succeeds without an active tab")
+    }
+
+    static func activeDecoding() throws {
+        let calls = CallRecorder()
+        let bridge = SafariBridge(scriptURL: scriptURL, executor: { url, arguments in
+            calls.append(url: url, arguments: arguments)
+            return Data("[11,2,\"A \\\"quoted\\\" title\",\"https://example.org/a\"]".utf8)
+        })
+        let active = try awaitResult { bridge.active(completion: $0) }.get()
+        expect(calls.values == [Call(url: scriptURL, arguments: ["active"])], "The active tab read uses the active argv")
+        expect(active == SafariTab(windowID: 11, index: 2, title: "A \"quoted\" title", url: "https://example.org/a"),
+               "Decode the tab on screen")
+        let none = SafariBridge(scriptURL: scriptURL, executor: { _, _ in Data("[]".utf8) })
+        try expect(try awaitResult { none.active(completion: $0) }.get() == nil, "No window means no active tab")
+        for invalid in ["[1,2,\"A\"]", "[\"1\",2,\"A\",\"a\"]", "{}", "[1,2,3,\"a\"]"] {
+            let broken = SafariBridge(scriptURL: scriptURL, executor: { _, _ in Data(invalid.utf8) })
+            expect((try? awaitResult { broken.active(completion: $0) }.get()) == nil
+                   && (try? TabInventory.decodeActive(Data(invalid.utf8))) == nil, "Reject a malformed active row: \(invalid)")
+        }
     }
 
     static func actionArguments() throws {

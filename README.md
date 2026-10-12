@@ -15,7 +15,7 @@ Tab Scout is a **native macOS menu-bar app**. Press **Cmd+T in Safari** to open 
 - Include optional Google autocomplete predictions without delaying local results.
 - Rank results using locally remembered Tab Scout choices and optional Safari browsing history.
 - Learn which tab you choose for what you type, so the same letters lead there again, even when the page title does not contain them.
-- With empty input, list the other tabs in the order you last viewed them.
+- With empty input, list the other tabs in the order you last viewed them. Tab switches are followed as they happen through the keyboard permission's accessibility access, and how long you read each page breaks ties.
 - Center the native palette on the focused Safari window when its geometry is available, with a screen-based fallback.
 
 ## Build And Run

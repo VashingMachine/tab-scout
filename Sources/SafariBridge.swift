@@ -23,6 +23,10 @@ final class SafariBridge {
         execute(["list"], on: readQueue) { result in completion(result.flatMap { data in Result { try TabInventory.decode(data) } }) }
     }
 
+    func active(completion: @escaping (Result<SafariTab?, Error>) -> Void) {
+        execute(["active"], on: readQueue) { result in completion(result.flatMap { data in Result { try TabInventory.decodeActive(data) } }) }
+    }
+
     func select(_ tab: SafariTab, completion: @escaping (Result<Data, Error>) -> Void) {
         execute(["switch", String(tab.windowID), String(tab.index), tab.url, tab.title], on: actionQueue, completion: completion)
     }

@@ -60,6 +60,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var retryButton: NSButton!
     private var tabs: [SafariTab] = []
     private var focusHistory = TabFocusHistory()
+    private var focusTracker = FocusTracker()
+    private let focusObserver = SafariFocusObserver()
+    private var activeReadInFlight = false
+    private var activeReadAgain = false
+    private var launchObserver: NSObjectProtocol?
+    private var tabDwell: [SafariTab: Double] = [:]
     private var activeTab: SafariTab?
     private var previousTab: SafariTab?
     private var focusOrder: [SafariTab] = []
@@ -107,21 +113,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
         // Every read, including background prewarms, notes which tab is on screen.
         tabStore.onSnapshot = { [weak self] snapshot in
-            if let active = snapshot.active { self?.focusHistory.focus(active) }
+            if let active = snapshot.active { self?.observeFocus(active) }
         }
+        focusObserver.onChange = { [weak self] in self?.readActiveTab() }
         buildMenu()
         buildPanel()
         reloadHistory()
         safariActive = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.Safari"
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
             guard let self, let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            let wasActive = self.safariActive
             self.safariActive = app.bundleIdentifier == "com.apple.Safari"
-            if !self.preview && self.safariActive && self.safariAllowed { self.tabStore.prewarm() }
+            if !self.preview && self.safariActive && self.safariAllowed { self.tabStore.prewarm(); self.readActiveTab() }
+            if wasActive && !self.safariActive { self.pauseFocus() }
+        }
+        launchObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  app.bundleIdentifier == "com.apple.Safari" else { return }
+            self?.startFocusObserver()
         }
         terminationObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] note in
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                   app.bundleIdentifier == "com.apple.Safari", self?.preview == false else { return }
             self?.tabStore.invalidate()
+            self?.pauseFocus()
+            self?.focusObserver.stop()
             self?.focusHistory = TabFocusHistory()
             self?.clearResults()
             if self?.panel.isVisible == true { self?.loadTabs(force: true) }
@@ -136,8 +152,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             showSearch(nil)
         } else {
             installTapIfAllowed()
+            startFocusObserver()
             permissionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
                 self?.installTapIfAllowed()
+                self?.startFocusObserver()
                 self?.updatePermissionLabels()
             }
             cacheTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
@@ -161,6 +179,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         if let eventTap { CFMachPortInvalidate(eventTap) }
         if let workspaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver) }
         if let terminationObserver { NSWorkspace.shared.notificationCenter.removeObserver(terminationObserver) }
+        if let launchObserver { NSWorkspace.shared.notificationCenter.removeObserver(launchObserver) }
+        focusObserver.stop()
+        pauseFocus()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         permissionTimer?.invalidate()
         cacheTimer?.invalidate()
@@ -253,6 +274,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         tapSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), tapSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+    }
+
+    /// Follows tab switches as they happen, so recency and reading time stay exact between Cmd+T presses.
+    private func startFocusObserver() {
+        guard !preview, !focusObserver.isObserving, AXIsProcessTrusted(),
+              let safari = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Safari").first else { return }
+        if focusObserver.start(processID: safari.processIdentifier) && safariActive { readActiveTab() }
+    }
+
+    /// Reads the tab on screen, at most one read at a time with a pause after each, however busy the page title.
+    private func readActiveTab() {
+        guard !preview, safariActive, safariAllowed else { return }
+        if activeReadInFlight { activeReadAgain = true; return }
+        activeReadInFlight = true
+        bridge.active { [weak self] result in
+            guard let self else { return }
+            if case .success(let tab) = result, self.safariActive, let tab { self.observeFocus(tab) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                self.activeReadInFlight = false
+                if self.activeReadAgain { self.activeReadAgain = false; self.readActiveTab() }
+            }
+        }
+    }
+
+    /// Reading time counts only while Safari is in front.
+    private func observeFocus(_ tab: SafariTab) {
+        focusHistory.focus(tab)
+        if safariActive, let visit = focusTracker.observe(tab, at: Date()) { recordVisit(visit) }
+    }
+
+    private func pauseFocus() {
+        if let visit = focusTracker.pause(at: Date()) { recordVisit(visit) }
+    }
+
+    private func recordVisit(_ visit: FocusVisit) {
+        learning.update { $0.engagement.record(visit, now: Date()) }
     }
 
     private func buildPanel() {
@@ -444,6 +501,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             activeTab = snapshot.active
             previousTab = focusHistory.previous(active: snapshot.active, in: snapshot.tabs)
             focusOrder = focusHistory.order(in: snapshot.tabs)
+            let now = Date()
+            tabDwell = Dictionary(snapshot.tabs.compactMap { tab -> (SafariTab, Double)? in
+                guard let url = HistoryIdentity.url(tab.url) else { return nil }
+                let strength = learning.state.engagement.strength(url: url, now: now)
+                return strength > 0 ? (tab, strength) : nil
+            }, uniquingKeysWith: max)
             windowNumbers = [:]
             for tab in tabs where windowNumbers[tab.windowID] == nil { windowNumbers[tab.windowID] = windowNumbers.count + 1 }
             ready = true
@@ -534,7 +597,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let matches = searchIndex.matches(query: query)
         let now = Date()
-        let context = RankingContext(focusOrder: focusOrder, affinity: learning.state.affinity.strengths(for: query, now: now))
+        let context = RankingContext(focusOrder: focusOrder, affinity: learning.state.affinity.strengths(for: query, now: now),
+                                     dwell: tabDwell)
         rows = SearchResultBuilder.rows(query: query, matches: matches, allTabs: tabs, history: historyIndex,
                                         suggestions: remoteSuggestions, now: now, openTabs: openTabs,
                                         previousTab: previousTab, activeTab: activeTab, context: context)
@@ -682,7 +746,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 // Keep the tab list warm so an immediate Cmd+T needs no Safari read.
                 switch row {
                 case .previousTab(let tab), .tab(let tab):
-                    self.focusHistory.focus(tab)
+                    self.observeFocus(tab)
                     self.tabStore.noteActivation(tab)
                 default: self.tabStore.noteActivation(nil)
                 }
@@ -746,6 +810,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         activeTab = nil
         previousTab = nil
         focusOrder = []
+        tabDwell = [:]
         rows = []
         searchIndex = TabSearchIndex([])
         openTabs = OpenTabLookup([])

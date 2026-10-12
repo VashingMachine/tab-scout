@@ -23,6 +23,28 @@ on run argv
         return my jsonText(tabRows)
     end if
 
+    -- Only the tab on screen, cheap enough to read after every tab switch.
+    if operation is "active" then
+        if application "Safari" is not running then return "[]"
+        try
+            with timeout of 5 seconds
+                tell application "Safari"
+                    if (count of windows) is 0 then return "[]"
+                    set browserWindow to front window
+                    set windowID to id of browserWindow
+                    set activeTab to current tab of browserWindow
+                    set tabIndex to index of activeTab
+                    set tabTitle to name of activeTab
+                    set tabURL to URL of activeTab
+                end tell
+            end timeout
+        on error errorMessage number errorNumber
+            if errorNumber is -1743 then error errorMessage number errorNumber
+            return "[]"
+        end try
+        return my jsonText(my activeRow(windowID, tabIndex, tabTitle, tabURL))
+    end if
+
     if operation is "switch" then
         set targetWindowID to (item 2 of argv) as integer
         set targetIndex to (item 3 of argv) as integer
@@ -167,6 +189,12 @@ on rowsFromSnapshot(windowID, tabTitles, tabURLs, currentIndex)
     end repeat
     return windowRows
 end rowsFromSnapshot
+
+on activeRow(windowID, tabIndex, tabTitle, tabURL)
+    if tabTitle is missing value then set tabTitle to ""
+    if tabURL is missing value then set tabURL to ""
+    return {windowID, tabIndex, tabTitle, tabURL}
+end activeRow
 
 on jsonText(value)
     set jsonData to current application's NSJSONSerialization's dataWithJSONObject:value options:0 |error|:(missing value)

@@ -344,6 +344,12 @@ struct HistoryRankingTests {
                "Recency cannot lift a weaker match over a much better one")
         expect(TabRanker.recency(rank: 0) == 1 && TabRanker.recency(rank: 1) < 1 && TabRanker.recency(rank: 40) < 0.001,
                "Recency fades with every tab switch")
+        let read = RankingContext(focusOrder: [current, c], dwell: [b: 0.9, d: 0.3])
+        expect(displayedTabs(rows("", tabs: inventory, previous: c, active: current, context: read)) == [b, d, a],
+               "Without recent views, the tabs read longest come first")
+        expect(displayedTabs(rows("", tabs: inventory, previous: a, active: current, context: RankingContext(focusOrder: [current, a, c], dwell: [b: 1])))
+               .first == c, "A recent view still outweighs long reading")
+
         let github = tab("GitHub", "https://github.com/")
         let typo = rows("githbu", tabs: [github])
         expect(typo.first == .newTab(.search("githbu")) && displayedTabs(typo) == [github],
