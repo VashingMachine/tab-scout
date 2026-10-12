@@ -1,8 +1,10 @@
-# Tab Scout Native Companion
+# Tab Scout Native App
 
 Search your open Safari tabs with Cmd+T. Switch to a match, or open a new tab when there is no match.
 
 Tab Scout is a native macOS menu-bar companion, **not a Safari extension**. It uses Safari's local scripting interface and a keyboard hook. Optional Google predictions and local history ranking make the palette more useful without waiting for a network request. There is no subscription or Apple developer account requirement for a local build.
+
+This is the primary Tab Scout workflow. The separate Safari extension experiment is not required. See the [README](../README.md) for the quick start and [restore verification](NATIVE_RESTORE_QA.md) for the latest live Cmd+T check.
 
 ## Requirements
 
