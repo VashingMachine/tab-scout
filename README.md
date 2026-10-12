@@ -20,6 +20,7 @@ Tab Scout is a **native macOS menu-bar app**. Press **Cmd+T in Safari** to open 
 - Find tabs by meaning when few match the typed text: each typed English word is widened to similar words with the system's on-device word embedding, so "email" finds an inbox and "cooking" a recipe. These guesses are labeled with the connecting word and listed below text matches; Enter keeps searching the typed text.
 - Optionally search page text (off by default): pages you have viewed for a few seconds are read through Safari's scripting interface, so typing finds tabs that mention your words, with a snippet. Pages you have not viewed are not read, so sleeping tabs stay asleep.
 - Ask in plain language by starting with `?`, such as `?the pull request I was reviewing before lunch`. On Macs with Apple Intelligence, the on-device model picks tabs from their titles, sites and when you last viewed them; picks come first and are labeled. Requests are never sent to Google or anywhere else.
+- Learn how you pick: Tab Scout logs the signals behind each picked tab, as numbers only, and relearns its ranking weights every ten picks. Learned weights are used only when they rank your recent picks better than the standard ones. The menu shows how often your pick was ranked first.
 - Learn habits: which site usually follows the one on screen, and which sites belong to this hour of a weekday or weekend. Habits nudge empty-input order and break ties between equally good matches; glances while flicking through tabs do not count.
 - Center the native palette on the focused Safari window when its geometry is available, with a screen-based fallback.
 
@@ -80,7 +81,7 @@ The app must remain running for Cmd+T search. The shortcut is captured only whil
 - Escape or Cmd+T dismisses the palette without changing tabs.
 - The refresh button updates results. Preferences and permission checks are available from the menu bar.
 
-Open tabs come first without a heading; Recent Searches, History, and Google Suggestions have their own sections. Match quality comes first; recent and repeated local use, and how recently you viewed a tab, improve comparable matches. A tab you chose repeatedly for the same text comes first. Open tabs stay prominent to reduce duplicates, and arriving predictions do not move a selection you have already navigated.
+Open tabs come first without a heading; Recent Searches, History, and Google Suggestions have their own sections. Match quality comes first; recent and repeated local use, and how recently you viewed a tab, improve comparable matches. A tab you chose repeatedly for the same text comes first. See [Ranking Policy](docs/SAFARI_SEARCH.md#ranking-policy) for every signal and weight. Open tabs stay prominent to reduce duplicates, and arriving predictions do not move a selection you have already navigated.
 
 ## Privacy And Limits
 

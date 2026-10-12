@@ -32,6 +32,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var assistantStatus: String?
     private var assistantWork: DispatchWorkItem?
     private var lastSeen: [PageTextIndex.Key: Date] = [:]
+    private var shownFeatures: [SafariTab: RankingFeatures] = [:]
+    private var rankingItem: NSMenuItem?
+    private var training = false
     private lazy var googleSuggestions = GoogleSuggestionsService()
     private let historyQueue = DispatchQueue(label: "local.tabscout.history-index", qos: .userInitiated)
     private var historyIndex = HistorySearchIndex(.empty)
@@ -243,6 +246,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         loginItem.target = self
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(.separator())
+        rankingItem = menu.addItem(withTitle: "", action: nil, keyEquivalent: "")
+        updateRankingItem()
         menu.addItem(withTitle: versionText, action: nil, keyEquivalent: "")
         menu.addItem(withTitle: "Quit Tab Scout", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         statusItem.menu = menu
@@ -725,16 +730,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         similarWords = Dictionary(similar.map { ($0.tab, $0.word) }, uniquingKeysWith: { first, _ in first })
         let mentioned = pageTextEnabled ? pageText.matches(query, in: tabs) : [:]
         mentions = mentioned.mapValues(\.snippet)
-        let context = RankingContext(focusOrder: focusOrder, affinity: learning.state.affinity.strengths(for: query, now: now),
+        var context = RankingContext(focusOrder: focusOrder, affinity: learning.state.affinity.strengths(for: query, now: now),
                                      dwell: tabDwell, related: relatedTabs.mapValues(\.strength),
                                      transition: tabTransition, timeOfDay: tabTimeOfDay,
                                      semantic: Dictionary(similar.map { ($0.tab, $0.strength) }, uniquingKeysWith: max),
                                      content: mentioned.mapValues(\.strength),
                                      assistant: question != nil && question == assistantQuestion
                                         ? Dictionary(assistantPicks.enumerated().map { ($1, 1 - 0.1 * Double($0)) }, uniquingKeysWith: max) : [:])
-        rows = SearchResultBuilder.rows(query: query, matches: matches, allTabs: tabs, history: historyIndex,
-                                        suggestions: remoteSuggestions, now: now, openTabs: openTabs,
-                                        previousTab: previousTab, activeTab: activeTab, context: context)
+        context.weights = learning.state.ranking.weights
+        let results = SearchResultBuilder.build(query: query, matches: matches, allTabs: tabs, history: historyIndex,
+                                                suggestions: remoteSuggestions, now: now, openTabs: openTabs,
+                                                previousTab: previousTab, activeTab: activeTab, context: context)
+        rows = results.rows
+        shownFeatures = results.features
         table.reloadData()
         if let row = selected.flatMap({ SearchRow.retainedSelection(of: $0, in: rows) }) ?? ResultNavigation.first(in: rows) {
             table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
@@ -862,6 +870,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         guard ready else { if loading { pendingActivation = forceNew }; return }
         let typed = searchField.stringValue
         let offeredTabs = rows.contains { if case .tab = $0 { return true }; return false }
+        let shownTabs = rows.compactMap { row -> SafariTab? in
+            switch row { case .previousTab(let tab), .tab(let tab): return tab; default: return nil }
+        }
+        let shown = shownTabs.map { shownFeatures[$0] ?? RankingFeatures() }
         let row: SearchRow
         if forceNew { row = .newTab(NewTabDestination.from(AssistantPrompt.question(in: typed) ?? typed)) }
         else {
@@ -886,6 +898,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             switch result {
             case .success:
                 self.rememberChoice(row, typed: typed, offeredTabs: offeredTabs)
+                switch row {
+                case .previousTab(let tab), .tab(let tab):
+                    if let chosen = shownTabs.firstIndex(of: tab) { self.learnRanking(typed: typed, shown: shown, chosen: chosen) }
+                default: break
+                }
                 // Keep the tab list warm so an immediate Cmd+T needs no Safari read.
                 switch row {
                 case .previousTab(let tab), .tab(let tab):
@@ -909,6 +926,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         default:
             if let destination = row.destination { bridge.open(destination, windowID: tabs.first?.windowID ?? 0, completion: completion) }
         }
+    }
+
+    /// Logs which of the listed tabs was picked and, every few picks, relearns the ranking weights in the
+    /// background. Learned weights are adopted only when they rank recent picks at least as well as the standard ones.
+    private func learnRanking(typed: String, shown: [RankingFeatures], chosen: Int) {
+        let query = AssistantPrompt.question(in: typed) ?? typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let impression = RankingImpression(typed: !query.isEmpty, shown: shown, chosen: chosen) else { return }
+        learning.update { $0.ranking.record(impression) }
+        updateRankingItem()
+        guard learning.state.ranking.needsTraining, !training else { return }
+        training = true
+        let log = learning.state.ranking
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let started = DispatchTime.now()
+            let weights = RankTrainer.improve(log)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                Timing.log("ranking training", since: started)
+                self.training = false
+                self.learning.update { $0.ranking.adopt(weights) }
+                self.updateRankingItem()
+            }
+        }
+    }
+
+    private func updateRankingItem() {
+        let log = learning.state.ranking
+        let quality = RankTrainer.evaluate(log.impressions, weights: log.weights)
+        guard quality.picks > 0 else { rankingItem?.title = "Ranking learns from your picks"; return }
+        rankingItem?.title = String(format: "Ranking: your pick was first in %.0f%% of %d", quality.firstChoice * 100, quality.picks)
+            + (log.isPersonalized ? ", personalized" : "")
     }
 
     private func rememberChoice(_ row: SearchRow, typed: String, offeredTabs: Bool) {
@@ -958,6 +1006,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         relatedTabs = [:]
         tabTransition = [:]
         tabTimeOfDay = [:]
+        shownFeatures = [:]
         similarWords = [:]
         mentions = [:]
         rows = []
@@ -1049,6 +1098,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         historyStore.clearLocal()
         learning.clear()
         pageText.removeAll()
+        updateRankingItem()
         googleSuggestions.clearCache()
         remoteSuggestions = []
         reloadHistory()

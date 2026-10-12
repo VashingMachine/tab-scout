@@ -89,11 +89,25 @@ struct OpenTabLookup {
     func tab(for key: String) -> SafariTab? { tabs[key] }
 }
 
+struct SearchResults {
+    let rows: [SearchRow]
+    /// The signals behind each listed open tab, for learning from the pick.
+    let features: [SafariTab: RankingFeatures]
+}
+
 enum SearchResultBuilder {
     static func rows(query: String, matches: [TabSearchIndex.Match], allTabs: [SafariTab],
                      history: HistorySearchIndex, suggestions: [String], now: Date,
                      openTabs: OpenTabLookup? = nil, previousTab: SafariTab? = nil,
                      activeTab: SafariTab? = nil, context: RankingContext = RankingContext()) -> [SearchRow] {
+        build(query: query, matches: matches, allTabs: allTabs, history: history, suggestions: suggestions, now: now,
+              openTabs: openTabs, previousTab: previousTab, activeTab: activeTab, context: context).rows
+    }
+
+    static func build(query: String, matches: [TabSearchIndex.Match], allTabs: [SafariTab],
+                      history: HistorySearchIndex, suggestions: [String], now: Date,
+                      openTabs: OpenTabLookup? = nil, previousTab: SafariTab? = nil,
+                      activeTab: SafariTab? = nil, context: RankingContext = RankingContext()) -> SearchResults {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         var rows: [SearchRow] = []
         // The tab on screen is never a destination. With empty input, Enter returns to the previously
@@ -101,9 +115,9 @@ enum SearchResultBuilder {
         let previous = query.isEmpty ? previousTab : nil
         var context = context
         context.activeTab = activeTab
-        let ranked = TabRanker.rank(typed: !query.isEmpty, matches: matches, allTabs: allTabs, history: history,
-                                    context: context, now: now)
-            .filter { $0.tab != previous && $0.tab != activeTab }
+        let everything = TabRanker.rank(typed: !query.isEmpty, matches: matches, allTabs: allTabs, history: history,
+                                        context: context, now: now)
+        let ranked = everything.filter { $0.tab != previous && $0.tab != activeTab }
         let tabs = ranked.map(\.tab)
         if let previous { rows.append(.previousTab(previous)) }
         // A guess from a typo or initials, or a weak match for a question, is offered while Enter keeps
@@ -140,6 +154,7 @@ enum SearchResultBuilder {
             rows.append(.section(.google))
             rows += remote.prefix(8)
         }
-        return rows
+        return SearchResults(rows: rows, features: Dictionary(everything.map { ($0.tab, $0.features) },
+                                                              uniquingKeysWith: { first, _ in first }))
     }
 }

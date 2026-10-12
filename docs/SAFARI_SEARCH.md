@@ -60,6 +60,34 @@ This is Tab Scout's implemented policy, not Apple's proprietary ranking:
 
 Within a local match tier, the history boost is `40 * exp(-ageInDays / 30) + min(20, 4 * log2(useCount + 1))`. Match quality remains the primary ordering key. Stable source order breaks any remaining ties.
 
+### Open-Tab Signals
+
+`TabRanker` scores each open tab as a weighted sum of signals, each between 0 and 1 (`Sources/TabRanking.swift`). Weights are points; typed text and empty input have separate weights.
+
+| Signal | Source | Typed | Empty |
+| --- | --- | --- | --- |
+| Match quality | Text tier from `TextFields` divided by 100 | 100 | — |
+| Usage | Safari history and Tab Scout choices (the boost above, divided by 60) | 4 | 4 |
+| Recency | How many tab switches ago the tab was on screen: `exp(-switches / 4)` | 4 | 20 |
+| Affinity | Pages chosen before for similar typed text (`QueryAffinity`) | 100 | — |
+| Reading time | Seconds on screen while Safari was in front, fading over 14 days (`Engagement`) | 3 | 6 |
+| Related | Shared ticket key, pull request, repository, Google document or site with the tab on screen (`RelatedTabs`) | 5 | 18 |
+| Next site | How often the tab's site followed the site on screen (`Habits`) | 3 | 10 |
+| Hour of week | How much more the tab's site is used around this hour than usual (`Habits`) | 2 | 6 |
+| Meaning | A typed word's nearest words in the system word embedding found in the title (`SemanticSearch`) | 40 | — |
+| Page text | Typed words found in the page text of viewed tabs, when enabled (`PageTextIndex`) | 45 | — |
+| Apple Intelligence | The on-device model's picks for a `?` request (`TabAssistant`) | 200 | — |
+
+Match tiers, best first: host or title equal to the query (100, 95), host or title starting with it (90, 85), the query at a word start in the title, including camelCase words (80), the initials of consecutive title words (75), the query inside a title word (70); then every query word at a word start (65), anywhere (60), as initials (58, or 55 with words skipped), or with one typo, two from nine letters (50). Initials and typos apply to open tabs only.
+
+Usage and recency together can reorder neighbouring tiers but not lift a weak match over a strong one. Affinity can: a page chosen repeatedly for the same text comes first even when the text is not in its title. Meaning and page text stay below every text match. The Enter default stays the typed search or address when the best tab is only a typo or initials guess, a guess by meaning or page text, a weak match for a question or phrase of four or more words, or text that was opened in a new tab before.
+
+### Learned Weights
+
+Each pick of a listed tab logs the signals of the tabs shown with it, as numbers only (`RankingImpression`, at most 500). After every ten picks, `RankTrainer` fits each mode with 30 or more picks by pairwise logistic regression, pulled towards the standard weights, never changing match quality or Apple Intelligence, and keeping each weight between zero and three times its standard size. The learned weights are adopted only when they rank the most recent fifth of picks, held out from training, better than the standard weights; otherwise the standard weights stay. The menu shows how often the picked tab was ranked first.
+
+Everything learned stays in `learning-v1.json` beside the saved choices, private to the user, and Clear Tab Scout History removes it.
+
 For imported Google searches, Google's standard results URL uses `/search` and a `q` query parameter. Chromium's own tests use `https://www.google.com/search?q={searchTerms}`. Extra parameters such as `client=...` are not the query text. Parse with structured URL APIs, require a recognized Google host and search path, decode form-encoded spaces and Unicode correctly, and reject spoofed hosts, empty queries, and unrelated pages. [Chromium: Search template tests](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/components/search_engines/template_url_unittest.cc)
 
 Recognizing a query in a visited Google results URL is a local history extraction technique. It neither establishes which engine is currently selected in Safari nor accesses the user's Google Account history.

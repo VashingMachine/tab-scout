@@ -5,6 +5,7 @@ struct LearningState: Codable, Equatable {
     var affinity = QueryAffinity()
     var engagement = Engagement()
     var habits = Habits()
+    var ranking = RankingLog()
 
     init() {}
 
@@ -14,6 +15,7 @@ struct LearningState: Codable, Equatable {
         affinity = try values.decodeIfPresent(QueryAffinity.self, forKey: .affinity) ?? QueryAffinity()
         engagement = try values.decodeIfPresent(Engagement.self, forKey: .engagement) ?? Engagement()
         habits = try values.decodeIfPresent(Habits.self, forKey: .habits) ?? Habits()
+        ranking = try values.decodeIfPresent(RankingLog.self, forKey: .ranking) ?? RankingLog()
     }
 }
 

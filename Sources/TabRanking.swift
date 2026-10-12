@@ -34,8 +34,14 @@ struct RankingWeights: Equatable {
         RankingSignal.allCases.map { points[$0] ?? 0 }
     }
 
+    func points(typed: Bool) -> [Double] { typed ? self.typed : empty }
+
+    mutating func setPoints(_ points: [Double], typed: Bool) {
+        if typed { self.typed = points } else { empty = points }
+    }
+
     func score(_ features: RankingFeatures, typed: Bool) -> Double {
-        zip(typed ? self.typed : empty, features.values).reduce(0) { $0 + $1.0 * $1.1 }
+        zip(points(typed: typed), features.values).reduce(0) { $0 + $1.0 * $1.1 }
     }
 }
 
