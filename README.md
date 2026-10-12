@@ -16,6 +16,7 @@ Tab Scout is a **native macOS menu-bar app**. Press **Cmd+T in Safari** to open 
 - Rank results using locally remembered Tab Scout choices and optional Safari browsing history.
 - Learn which tab you choose for what you type, so the same letters lead there again, even when the page title does not contain them.
 - With empty input, list the other tabs in the order you last viewed them. Tab switches are followed as they happen through the keyboard permission's accessibility access, and how long you read each page breaks ties.
+- Bring tabs about the same work as the current page forward and label them, such as the Jira ticket named by the pull request on screen. Ticket keys, pull and merge requests, repositories and Google document IDs in titles and addresses connect tabs.
 - Center the native palette on the focused Safari window when its geometry is available, with a screen-based fallback.
 
 ## Build And Run

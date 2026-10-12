@@ -3,7 +3,7 @@ import Foundation
 /// The signals that place an open tab in the results. Every value lies between 0 and 1;
 /// `lexical` is the text-match tier divided by 100 and is 0 for empty input.
 enum RankingSignal: Int, CaseIterable {
-    case lexical, usage, recency, affinity, dwell
+    case lexical, usage, recency, affinity, dwell, related
 
     var name: String { String(describing: self) }
 }
@@ -26,8 +26,8 @@ struct RankingWeights: Equatable {
     var empty: [Double]
 
     static let standard = RankingWeights(
-        typed: weights([.lexical: 100, .usage: 4, .recency: 4, .affinity: 100, .dwell: 3]),
-        empty: weights([.usage: 4, .recency: 20, .dwell: 6]))
+        typed: weights([.lexical: 100, .usage: 4, .recency: 4, .affinity: 100, .dwell: 3, .related: 5]),
+        empty: weights([.usage: 4, .recency: 20, .dwell: 6, .related: 18]))
 
     static func weights(_ points: [RankingSignal: Double]) -> [Double] {
         RankingSignal.allCases.map { points[$0] ?? 0 }
@@ -46,6 +46,8 @@ struct RankingContext {
     var affinity: [String: Double] = [:]
     /// How long each open tab was read, from `Engagement`.
     var dwell: [SafariTab: Double] = [:]
+    /// How closely each open tab relates to the one on screen, from `RelatedTabs`.
+    var related: [SafariTab: Double] = [:]
     var weights = RankingWeights.standard
 }
 
@@ -115,6 +117,7 @@ enum TabRanker {
             features[.usage] = history.usageScore(url: match.tab.url, now: now) / 60
             features[.recency] = recencyRank[match.tab].map { recency(rank: $0) } ?? 0
             features[.dwell] = context.dwell[match.tab] ?? 0
+            features[.related] = context.related[match.tab] ?? 0
             if !context.affinity.isEmpty {
                 features[.affinity] = HistoryIdentity.url(match.tab.url).flatMap { context.affinity[$0] } ?? 0
             }

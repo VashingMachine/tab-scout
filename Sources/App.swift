@@ -66,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var activeReadAgain = false
     private var launchObserver: NSObjectProtocol?
     private var tabDwell: [SafariTab: Double] = [:]
+    private var relatedTabs: [SafariTab: (strength: Double, shared: TabEntity)] = [:]
     private var activeTab: SafariTab?
     private var previousTab: SafariTab?
     private var focusOrder: [SafariTab] = []
@@ -507,6 +508,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 let strength = learning.state.engagement.strength(url: url, now: now)
                 return strength > 0 ? (tab, strength) : nil
             }, uniquingKeysWith: max)
+            relatedTabs = RelatedTabs.relations(to: snapshot.active, in: snapshot.tabs)
             windowNumbers = [:]
             for tab in tabs where windowNumbers[tab.windowID] == nil { windowNumbers[tab.windowID] = windowNumbers.count + 1 }
             ready = true
@@ -598,7 +600,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let matches = searchIndex.matches(query: query)
         let now = Date()
         let context = RankingContext(focusOrder: focusOrder, affinity: learning.state.affinity.strengths(for: query, now: now),
-                                     dwell: tabDwell)
+                                     dwell: tabDwell, related: relatedTabs.mapValues(\.strength))
         rows = SearchResultBuilder.rows(query: query, matches: matches, allTabs: tabs, history: historyIndex,
                                         suggestions: remoteSuggestions, now: now, openTabs: openTabs,
                                         previousTab: previousTab, activeTab: activeTab, context: context)
@@ -648,7 +650,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         switch rows[row] {
         case .previousTab(let tab), .tab(let tab):
             let image = preview ? nil : favicons.imageFor(url: tab.url)
-            let location = (tab.url.isEmpty ? "Start Page" : tab.url) + " | Window \(windowNumbers[tab.windowID] ?? 1)"
+            var location = (tab.url.isEmpty ? "Start Page" : tab.url) + " | Window \(windowNumbers[tab.windowID] ?? 1)"
+            if let related = relatedTabs[tab], related.strength >= RelatedTabs.named {
+                location = "Related: \(related.shared.label) | " + location
+            }
             cell.configure(title: tab.displayTitle,
                            detail: rows[row] == .previousTab(tab) ? "Previous tab | " + location : location,
                            url: tab.url, image: image ?? symbol("globe"), tint: image == nil ? .systemTeal : nil)
@@ -811,6 +816,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         previousTab = nil
         focusOrder = []
         tabDwell = [:]
+        relatedTabs = [:]
         rows = []
         searchIndex = TabSearchIndex([])
         openTabs = OpenTabLookup([])

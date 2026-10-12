@@ -13,7 +13,8 @@ struct FocusTrackingTests {
 
     static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
         checks += 1
-        precondition(condition(), message)
+        // fatalError prints the message in optimized builds too.
+        if !condition() { fatalError(message) }
     }
 
     static func at(_ seconds: TimeInterval) -> Date { now.addingTimeInterval(seconds) }

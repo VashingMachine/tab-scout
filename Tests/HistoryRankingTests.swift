@@ -24,7 +24,8 @@ struct HistoryRankingTests {
 
     static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
         checks += 1
-        precondition(condition(), message)
+        // fatalError prints the message in optimized builds too.
+        if !condition() { fatalError(message) }
     }
 
     static func date(daysAgo: Double) -> Date { now.addingTimeInterval(-daysAgo * 86_400) }
@@ -349,6 +350,16 @@ struct HistoryRankingTests {
                "Without recent views, the tabs read longest come first")
         expect(displayedTabs(rows("", tabs: inventory, previous: a, active: current, context: RankingContext(focusOrder: [current, a, c], dwell: [b: 1])))
                .first == c, "A recent view still outweighs long reading")
+
+        let ticket = tab("[ACME-1] Login - Jira", "https://acme.atlassian.net/browse/ACME-1", index: 7)
+        let pull = tab("ACME-1: fix login · Pull Request #4", "https://github.com/acme/api/pull/4", index: 8)
+        let working = [pull, a, b, c, d, ticket]
+        let related = RankingContext(focusOrder: [pull, c, a, d],
+                                     related: RelatedTabs.relations(to: pull, in: working).mapValues(\.strength))
+        expect(displayedTabs(rows("", tabs: working, previous: c, active: pull, context: related)).prefix(2) == [ticket, a],
+               "A tab about the same work as the page on screen follows the previous tab")
+        expect(displayedTabs(rows("notes", tabs: working, active: pull, context: related)) == [c, a, d, b],
+               "Relations never add tabs that do not match the typed text")
 
         let github = tab("GitHub", "https://github.com/")
         let typo = rows("githbu", tabs: [github])
