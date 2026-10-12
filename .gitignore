@@ -3,13 +3,10 @@
 build/
 work/
 .build/
-node_modules/
 ModuleCache/
 *.dSYM/
 
 # macOS and editor state.
 .DS_Store
-*.xcuserstate
-xcuserdata/
 .idea/
 .vscode/

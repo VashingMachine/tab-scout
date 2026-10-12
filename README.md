@@ -2,9 +2,7 @@
 
 Find an open Safari tab before opening another one.
 
-Tab Scout is a **native macOS menu-bar app**. Press **Cmd+T in Safari** to open a focused search palette over the current page. Switch to an existing tab, or open a new tab when there is no match. **No Safari extension is required.**
-
-The native app is the primary workflow again. It keeps the original compact interface, keyboard shortcut, fast local results, favicons, optional Google suggestions, and Safari-history ranking. The Safari extension experiment remains in the repository but is not needed for everyday use.
+Tab Scout is a **native macOS menu-bar app**. Press **Cmd+T in Safari** to open a focused search palette over the current page. Switch to an existing tab, or open a new tab when there is no match. No Safari extension is required.
 
 ## Features
 
@@ -85,8 +83,6 @@ The native installation was restored on 2026-10-12 without rebuilding or changin
 ## Repository Layout
 
 - `Sources/` and `Resources/`: native app and Safari scripting bridge.
-- `Tests/`: native automated suites and separate extension fixtures.
-- `build.sh` and `test.sh`: native build and test entry points.
-- `SafariApp/` and `SafariExtension/`: separate Safari extension experiment, not required by the native app.
-
-Keep the experimental Safari extension disabled when using this native workflow. Its containing app is named `Tab Scout Safari.app`; the native app is `Tab Scout.app`. Extension-specific preparation and privacy notes remain in [App Store Preparation](docs/APP_STORE.md) and [Extension Privacy](docs/EXTENSION_PRIVACY.md).
+- `Tests/`: automated suites and manual test notes.
+- `build.sh` and `test.sh`: build and test entry points.
+- `docs/`: native app details, manual QA checklists, and Safari search research.

@@ -2,9 +2,9 @@
 
 Search your open Safari tabs with Cmd+T. Switch to a match, or open a new tab when there is no match.
 
-Tab Scout is a native macOS menu-bar companion, **not a Safari extension**. It uses Safari's local scripting interface and a keyboard hook. Optional Google predictions and local history ranking make the palette more useful without waiting for a network request. There is no subscription or Apple developer account requirement for a local build.
+Tab Scout is a native macOS menu-bar app, **not a Safari extension**. It uses Safari's local scripting interface and a keyboard hook. Optional Google predictions and local history ranking make the palette more useful without waiting for a network request. There is no subscription or Apple developer account requirement for a local build.
 
-This is the primary Tab Scout workflow. The separate Safari extension experiment is not required. See the [README](../README.md) for the quick start and [restore verification](NATIVE_RESTORE_QA.md) for the latest live Cmd+T check.
+See the [README](../README.md) for the quick start and [restore verification](NATIVE_RESTORE_QA.md) for the latest live Cmd+T check.
 
 ## Requirements
 
@@ -138,7 +138,7 @@ Quit preview before launching the normal app. Core live behavior, permissions, r
 - Authenticated-only, cross-origin, unsupported, or unavailable icons fall back to the system icon.
 - Google suggestions may be unavailable or change format without notice. They are not Apple's separate Safari Suggestions and do not reproduce signed-in Google predictions.
 - Safari history access uses a private database schema and supports only the main database. Separate profile history and private-browsing isolation are not guaranteed.
-- Local ad-hoc builds are intended for the machine that built them. Distribution, notarization, App Store packaging, and a Safari Web Extension are not provided.
+- Local ad-hoc builds are intended for the machine that built them. Distribution, notarization, and App Store packaging are not provided.
 
 ## Remove
 

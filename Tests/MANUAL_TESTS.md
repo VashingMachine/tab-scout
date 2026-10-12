@@ -36,8 +36,6 @@ Use a throwaway Safari window and public fixture pages. Record the macOS/Safari 
 4. Place Safari near display edges or partly offscreen. The panel should stay within the usable display area, avoiding the menu bar and Dock. A spanning window uses the display containing the greatest part of Safari.
 5. Test fullscreen Safari and unavailable window geometry. Fullscreen uses the actual window center; unavailable or wholly offscreen bounds fall back to a usable screen center. The Safari window itself must never move or resize.
 
-These checks apply to the older native app. The Safari Web Extension's new-tab page stays inside Safari's content viewport; its toolbar popup position is controlled by Safari.
-
 ## Tab Cache And Refresh Races
 
 1. Quit and reopen Tab Scout to start with a cold in-memory tab cache. Open the panel. While Safari responds, typing and canceling must stay responsive.
