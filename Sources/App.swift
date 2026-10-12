@@ -967,7 +967,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         case .newTab(.search), .newTab(.url): offeredTabs ? QueryAffinity.newTab : nil
         default: nil
         }
-        if let target { learning.update { $0.affinity.record(input: typed, target: target, at: Date()) } }
+        // A "?" request is remembered without the "?", so the same words typed later lead to the same page.
+        let input = AssistantPrompt.question(in: typed) ?? typed
+        if let target { learning.update { $0.affinity.record(input: input, target: target, at: Date()) } }
         switch row {
         case .previousTab(let tab), .tab(let tab): historyStore.recordVisit(url: tab.url, title: tab.displayTitle)
         case .history(let visit): historyStore.recordVisit(url: visit.url, title: visit.title)
