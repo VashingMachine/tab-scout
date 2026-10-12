@@ -67,6 +67,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var launchObserver: NSObjectProtocol?
     private var tabDwell: [SafariTab: Double] = [:]
     private var relatedTabs: [SafariTab: (strength: Double, shared: TabEntity)] = [:]
+    private var tabTransition: [SafariTab: Double] = [:]
+    private var tabTimeOfDay: [SafariTab: Double] = [:]
     private var activeTab: SafariTab?
     private var previousTab: SafariTab?
     private var focusOrder: [SafariTab] = []
@@ -310,7 +312,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     private func recordVisit(_ visit: FocusVisit) {
-        learning.update { $0.engagement.record(visit, now: Date()) }
+        learning.update {
+            $0.engagement.record(visit, now: Date())
+            $0.habits.record(visit, calendar: .current)
+        }
     }
 
     private func buildPanel() {
@@ -509,6 +514,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 return strength > 0 ? (tab, strength) : nil
             }, uniquingKeysWith: max)
             relatedTabs = RelatedTabs.relations(to: snapshot.active, in: snapshot.tabs)
+            let habits = learning.state.habits
+            let from = snapshot.active.flatMap { Habits.site($0.url) }
+            tabTransition = [:]
+            tabTimeOfDay = [:]
+            for tab in snapshot.tabs {
+                guard let site = Habits.site(tab.url) else { continue }
+                if let from { tabTransition[tab] = habits.transition(from: from, to: site, now: now) }
+                tabTimeOfDay[tab] = habits.timeOfDay(site: site, at: now, calendar: .current, now: now)
+            }
             windowNumbers = [:]
             for tab in tabs where windowNumbers[tab.windowID] == nil { windowNumbers[tab.windowID] = windowNumbers.count + 1 }
             ready = true
@@ -600,7 +614,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let matches = searchIndex.matches(query: query)
         let now = Date()
         let context = RankingContext(focusOrder: focusOrder, affinity: learning.state.affinity.strengths(for: query, now: now),
-                                     dwell: tabDwell, related: relatedTabs.mapValues(\.strength))
+                                     dwell: tabDwell, related: relatedTabs.mapValues(\.strength),
+                                     transition: tabTransition, timeOfDay: tabTimeOfDay)
         rows = SearchResultBuilder.rows(query: query, matches: matches, allTabs: tabs, history: historyIndex,
                                         suggestions: remoteSuggestions, now: now, openTabs: openTabs,
                                         previousTab: previousTab, activeTab: activeTab, context: context)
@@ -817,6 +832,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         focusOrder = []
         tabDwell = [:]
         relatedTabs = [:]
+        tabTransition = [:]
+        tabTimeOfDay = [:]
         rows = []
         searchIndex = TabSearchIndex([])
         openTabs = OpenTabLookup([])

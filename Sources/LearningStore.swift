@@ -4,6 +4,7 @@ import Foundation
 struct LearningState: Codable, Equatable {
     var affinity = QueryAffinity()
     var engagement = Engagement()
+    var habits = Habits()
 
     init() {}
 
@@ -12,6 +13,7 @@ struct LearningState: Codable, Equatable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         affinity = try values.decodeIfPresent(QueryAffinity.self, forKey: .affinity) ?? QueryAffinity()
         engagement = try values.decodeIfPresent(Engagement.self, forKey: .engagement) ?? Engagement()
+        habits = try values.decodeIfPresent(Habits.self, forKey: .habits) ?? Habits()
     }
 }
 

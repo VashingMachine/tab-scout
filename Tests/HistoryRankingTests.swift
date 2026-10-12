@@ -361,6 +361,14 @@ struct HistoryRankingTests {
         expect(displayedTabs(rows("notes", tabs: working, active: pull, context: related)) == [c, a, d, b],
                "Relations never add tabs that do not match the typed text")
 
+        let habitual = RankingContext(focusOrder: [current, c], transition: [d: 0.9], timeOfDay: [b: 0.3])
+        expect(displayedTabs(rows("", tabs: inventory, previous: c, active: current, context: habitual)) == [d, b, a],
+               "Without recent views, the site that usually comes next leads, then the site of this hour")
+        expect(displayedTabs(rows("notes", tabs: inventory, active: current, context: RankingContext(transition: [d: 0.9]))).first == d,
+               "Habits break ties between equally good matches")
+        expect(displayedTabs(rows("notes", tabs: inventory, active: current, context: habitual)).first == c,
+               "Having just viewed a tab outweighs a habit for typed text")
+
         let github = tab("GitHub", "https://github.com/")
         let typo = rows("githbu", tabs: [github])
         expect(typo.first == .newTab(.search("githbu")) && displayedTabs(typo) == [github],
