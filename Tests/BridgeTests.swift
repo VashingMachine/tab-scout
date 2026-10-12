@@ -4,7 +4,7 @@ import Foundation
 struct BridgeTests {
     static var checks = 0
     static let scriptURL = URL(fileURLWithPath: "/test resources/SafariBridge.scpt")
-    static let sampleJSON = Data("[[11,1,\"A \\\"quoted\\\" title\",\"https://example.org/a?x=1&y=2\"],[11,2,\"\",\"\"],[27,1,\"Other window\",\"https://example.net\"]]".utf8)
+    static let sampleJSON = Data("[[11,1,\"A \\\"quoted\\\" title\",\"https://example.org/a?x=1&y=2\",false],[11,2,\"\",\"\",true],[27,1,\"Other window\",\"https://example.net\",true]]".utf8)
 
     static func main() throws {
         try listDecoding()
@@ -24,15 +24,18 @@ struct BridgeTests {
             calls.append(url: url, arguments: arguments)
             return sampleJSON
         })
-        let tabs = try awaitResult { bridge.list(completion: $0) }.get()
+        let inventory = try awaitResult { bridge.list(completion: $0) }.get()
+        let tabs = inventory.tabs
         expect(calls.values == [Call(url: scriptURL, arguments: ["list"])], "List uses the compiled script and list argv")
         expect(tabs.count == 3, "Decode multiple windows and blank tabs")
         expect(tabs[0].title == "A \"quoted\" title", "Decode escaped titles without altering them")
         expect(tabs[1] == SafariTab(windowID: 11, index: 2, title: "", url: ""), "Keep blank tabs addressable")
         expect(tabs[2].windowID == 27 && tabs[2].index == 1, "Preserve one-based indices independently per window")
+        expect(inventory.active == tabs[1], "The front window's current tab is the active tab, not a background window's")
 
         let emptyBridge = SafariBridge(scriptURL: scriptURL, executor: { _, _ in Data("[]".utf8) })
-        try expect(awaitResult { emptyBridge.list(completion: $0) }.get().isEmpty, "An empty Safari session succeeds")
+        let empty = try awaitResult { emptyBridge.list(completion: $0) }.get()
+        expect(empty.tabs.isEmpty && empty.active == nil, "An empty Safari session succeeds without an active tab")
     }
 
     static func actionArguments() throws {
@@ -137,18 +140,35 @@ struct BridgeTests {
         }
         let tab = SafariTab(windowID: 1, index: 1, title: "A", url: "https://example.org")
         var completions = [String]()
-        bridge.list { _ in completions.append("list") }
         bridge.select(tab) { _ in completions.append("switch") }
         bridge.open(.defaultPage, windowID: 1) { _ in completions.append("new-tab") }
         _ = try awaitResult { bridge.open(.search("last"), windowID: 1, completion: $0) }.get()
-        expect(calls.values.map { $0.arguments[0] } == ["list", "switch", "prepare-new-tab", "native-new-tab", "search"],
+        expect(calls.values.map { $0.arguments[0] } == ["switch", "prepare-new-tab", "native-new-tab", "search"],
                "Window preparation and native creation cannot be interleaved with another submitted action")
-        expect(completions == ["list", "switch", "new-tab"], "Earlier main-thread callbacks precede the final callback")
+        expect(completions == ["switch", "new-tab"], "Earlier main-thread callbacks precede the final callback")
+
+        // A slow tab-list read must not hold up an action submitted after it.
+        let release = DispatchSemaphore(value: 0)
+        let reads = CallRecorder()
+        let parallel = SafariBridge(scriptURL: scriptURL, executor: { url, arguments in
+            if arguments == ["list"] { release.wait(); reads.append(url: url, arguments: arguments); return sampleJSON }
+            return Data("ok".utf8)
+        })
+        var listed = false
+        parallel.list { _ in listed = true }
+        _ = try awaitResult { parallel.select(tab, completion: $0) }.get()
+        expect(!listed && reads.values.isEmpty, "A tab switch completes while an earlier tab-list read is still running")
+        release.signal()
+        let deadline = Date().addingTimeInterval(3)
+        while !listed && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+        expect(listed, "The delayed tab-list read still completes")
     }
 
     static func failures() throws {
-        let malformed = SafariBridge(scriptURL: scriptURL, executor: { _, _ in Data("[[1,2,3,4]]".utf8) })
+        let malformed = SafariBridge(scriptURL: scriptURL, executor: { _, _ in Data("[[1,2,3,4,true]]".utf8) })
         expectError(awaitResult { malformed.list(completion: $0) }, matching: .invalidResponse, "Reject malformed tab rows")
+        let unmarked = SafariBridge(scriptURL: scriptURL, executor: { _, _ in Data("[[1,2,\"A\",\"https://example.org\"]]".utf8) })
+        expectError(awaitResult { unmarked.list(completion: $0) }, matching: .invalidResponse, "Reject rows without a current-tab marker")
         let permission = SafariBridge(scriptURL: scriptURL, executor: { _, _ in throw BridgeError.permission })
         expectError(awaitResult { permission.list(completion: $0) }, matching: .permission, "Forward bridge permission failures")
 

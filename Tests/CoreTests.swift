@@ -30,12 +30,18 @@ struct CoreTests {
         expect(NewTabDestination.from("  Swift programming  ") == .search("Swift programming"), "Nonempty search input still trims surrounding whitespace")
         expect(NewTabDestination.from("query \"quoted\"\nsecond line") == .search("query \"quoted\"\nsecond line"), "Preserve quotes and newlines as data")
 
-        let data = Data("[[9,1,\"A \\\"quote\\\" \\n title\",\"https://example.com/a?x=1&y=2\"]]".utf8)
-        let decoded = try SafariTab.decode(data)
-        expect(decoded[0].title == "A \"quote\" \n title", "Decode escaped tab titles")
-        expect(decoded[0].windowID == 9, "Preserve Safari window IDs")
-        do { _ = try SafariTab.decode(Data("[[1,2,3,4]]".utf8)); fatalError("Invalid rows must fail") } catch { }
-        try expect(SafariTab.decode(Data("[]".utf8)).isEmpty, "Empty Safari session")
+        let data = Data("[[9,1,\"A \\\"quote\\\" \\n title\",\"https://example.com/a?x=1&y=2\",true]]".utf8)
+        let decoded = try TabInventory.decode(data)
+        expect(decoded.tabs[0].title == "A \"quote\" \n title", "Decode escaped tab titles")
+        expect(decoded.tabs[0].windowID == 9, "Preserve Safari window IDs")
+        expect(decoded.active == decoded.tabs[0], "Decode the current tab marker")
+        let windows = try TabInventory.decode(Data("[[1,1,\"A\",\"a\",false],[1,2,\"B\",\"b\",true],[2,1,\"C\",\"c\",true]]".utf8))
+        expect(windows.active == SafariTab(windowID: 1, index: 2, title: "B", url: "b"), "The first window's current tab is active")
+        try expect(TabInventory.decode(Data("[[1,1,\"A\",\"a\",false]]".utf8)).active == nil, "No marked tab means no active tab")
+        for invalid in ["[[1,2,3,4,true]]", "[[1,2,\"A\",\"a\"]]", "[[1,2,\"A\",\"a\",1]]", "[[1,2,\"A\",\"a\",\"true\"]]", "[[true,2,\"A\",\"a\",true]]"] {
+            do { _ = try TabInventory.decode(Data(invalid.utf8)); fatalError("Invalid rows must fail: \(invalid)") } catch { }
+        }
+        try expect(TabInventory.decode(Data("[]".utf8)) == TabInventory(tabs: []), "Empty Safari session")
 
         expect(capture(), "Capture Safari Cmd+T")
         expect(!capture(safari: false), "Leave other apps' Cmd+T alone")

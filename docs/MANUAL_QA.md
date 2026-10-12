@@ -16,14 +16,17 @@ Use a throwaway Safari window and public fixture queries. Record the build revis
 
 ## Rows And Selection
 
-1. Populate public fixture data with an open tab, a remembered search, a visited URL, and a Google prediction. Confirm **Open Tabs**, **Recent Searches**, **History**, and **Google Suggestions** are distinguishable.
+1. Populate public fixture data with an open tab, a remembered search, a visited URL, and a Google prediction. Confirm open tabs appear first without a heading and that **Recent Searches**, **History**, and **Google Suggestions** are distinguishable.
 2. Press Up/Down across each boundary. Headers must not become selected or perform an action on Enter or mouse click. At the list ends, selection must remain on an actionable row.
 3. Before manual navigation, matching open tabs should remain the default action where present. Without a local tab/history/search match, verify the explicit new-search action stays selected rather than silently changing to an arriving prediction. Recent searches and history may be the initial default when they match.
 4. Move to a particular result before Google returns or history refreshes. The same logical result must remain selected after rows change. Press Enter and confirm the originally chosen target is activated.
 5. Type a new query while a request for the old query is pending. Old suggestions must not appear under the new query. Close the panel during a request; a callback must not reopen it.
 6. Check light/dark appearance, Retina icons, long Unicode queries/titles, narrow window dimensions, and scrolling. Headers, clock/search icons, real timestamps, favicons, and truncated text must not overlap or shift row geometry.
 7. Clock rows must have real local use dates. A generic Google prediction must not acquire a fabricated visit date.
-8. With empty or whitespace-only input, the native new-tab action must stay selected above open tabs and recent searches, including after a refresh. Enter and Cmd+Enter must use Safari's native **New Tab** command and open exactly one tab with its configured page. With Start Page configured, its sections and background must render rather than a forced `about:blank`. Repeat with no windows in a throwaway session, comparing with File > New Tab. Nonempty addresses and queries must still open the URL or configured-provider search as before.
+8. With empty or whitespace-only input, the previous tab is the selected first row, the other open tabs follow it without a heading, and the native new-tab action comes after them, above recent searches. The tab on screen is not listed; with no other tab open, the new-tab action is selected, including after a refresh. Choosing that action and Cmd+Enter must use Safari's native **New Tab** command and open exactly one tab with its configured page. With Start Page configured, its sections and background must render rather than a forced `about:blank`. Repeat with no windows in a throwaway session, comparing with File > New Tab. Nonempty addresses and queries must still open the URL or configured-provider search as before.
+9. Switch from fixture tab A to tab B through Tab Scout. Cmd+T must show A first, labelled **Previous tab**, and not repeat it below; Enter returns to A. Cmd+T, Enter again returns to B. Repeat with A and B in different windows. Press Cmd+T, Enter in quick succession right after a switch; the Enter must not be lost.
+10. Click from tab B to tab C in Safari itself, then press Cmd+T: B must be first after the in-place refresh. Close B; the row must fall back to the tab viewed before it. Navigate the previous tab to another page; it must no longer be offered as the previous tab. Typing replaces the row with ordinary results.
+11. Type a query that matches only the page on screen. That tab must not be listed, and Enter must search the query in a new tab.
 
 ## Ranking And Deduplication
 

@@ -1,4 +1,16 @@
 import Foundation
+import os
+
+/// Durations of user-visible steps. Read them with:
+/// log show --last 5m --predicate 'subsystem == "local.tabscout.app" AND category == "timing"'
+enum Timing {
+    private static let logger = Logger(subsystem: "local.tabscout.app", category: "timing")
+
+    static func log(_ step: String, since start: DispatchTime) {
+        let milliseconds = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+        logger.notice("\(step, privacy: .public): \(milliseconds, format: .fixed(precision: 1), privacy: .public) ms")
+    }
+}
 
 struct SafariTab: Equatable {
     let windowID: Int
@@ -8,25 +20,43 @@ struct SafariTab: Equatable {
 
     var displayTitle: String { title.isEmpty ? (url.isEmpty ? "Untitled tab" : url) : title }
     var host: String { URL(string: url)?.host ?? url }
+}
 
-    static func decode(_ data: Data) throws -> [SafariTab] {
+struct TabInventory: Equatable {
+    let tabs: [SafariTab]
+    /// The current tab of the frontmost Safari window.
+    let active: SafariTab?
+
+    init(tabs: [SafariTab], active: SafariTab? = nil) {
+        self.tabs = tabs
+        self.active = active
+    }
+
+    static func decode(_ data: Data) throws -> TabInventory {
         let rows = try JSONDecoder().decode([[TabValue]].self, from: data)
-        return try rows.map { row in
-            guard row.count == 4, case .number(let window) = row[0],
+        var active: SafariTab?
+        let tabs = try rows.map { row -> SafariTab in
+            guard row.count == 5, case .number(let window) = row[0],
                   case .number(let index) = row[1], case .text(let title) = row[2],
-                  case .text(let url) = row[3] else { throw BridgeError.invalidResponse }
-            return SafariTab(windowID: window, index: index, title: title, url: url)
+                  case .text(let url) = row[3], case .flag(let current) = row[4] else { throw BridgeError.invalidResponse }
+            let tab = SafariTab(windowID: window, index: index, title: title, url: url)
+            // Windows arrive front to back, so the first current tab is the one on screen.
+            if current && active == nil { active = tab }
+            return tab
         }
+        return TabInventory(tabs: tabs, active: active)
     }
 }
 
 private enum TabValue: Decodable {
     case number(Int)
+    case flag(Bool)
     case text(String)
 
     init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer()
         if let number = try? value.decode(Int.self) { self = .number(number) }
+        else if let flag = try? value.decode(Bool.self) { self = .flag(flag) }
         else { self = .text(try value.decode(String.self)) }
     }
 }

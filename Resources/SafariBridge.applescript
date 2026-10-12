@@ -20,8 +20,7 @@ on run argv
                 end repeat
             end repeat
         end timeout
-        set jsonData to current application's NSJSONSerialization's dataWithJSONObject:tabRows options:0 |error|:(missing value)
-        return (current application's NSString's alloc()'s initWithData:jsonData encoding:(current application's NSUTF8StringEncoding)) as text
+        return my jsonText(tabRows)
     end if
 
     if operation is "switch" then
@@ -132,6 +131,7 @@ on rowsForWindow(windowID)
                 set tabURLs to URL of every tab of browserWindow
                 set tabTitles to name of every tab of browserWindow
                 set verifiedURLs to URL of every tab of browserWindow
+                set currentIndex to index of current tab of browserWindow
             end tell
         on error errorMessage number errorNumber
             -- A window closed during the snapshot is no longer part of the session.
@@ -144,7 +144,7 @@ on rowsForWindow(windowID)
         end if
     end repeat
     if not stableSnapshot then error "TAB_SCOUT_SNAPSHOT_CHANGED"
-    return my rowsFromSnapshot(windowID, tabTitles, tabURLs)
+    return my rowsFromSnapshot(windowID, tabTitles, tabURLs, currentIndex)
 end rowsForWindow
 
 on snapshotIsStable(tabTitles, tabURLs, verifiedURLs)
@@ -153,7 +153,9 @@ on snapshotIsStable(tabTitles, tabURLs, verifiedURLs)
     end considering
 end snapshotIsStable
 
-on rowsFromSnapshot(windowID, tabTitles, tabURLs)
+-- The last field marks the window's current tab. Windows are listed front to back,
+-- so the first marked row is the tab on screen.
+on rowsFromSnapshot(windowID, tabTitles, tabURLs, currentIndex)
     if (count of tabTitles) is not (count of tabURLs) then error "TAB_SCOUT_SNAPSHOT_CHANGED"
     set windowRows to {}
     repeat with tabIndex from 1 to count of tabURLs
@@ -161,7 +163,12 @@ on rowsFromSnapshot(windowID, tabTitles, tabURLs)
         set tabURL to item tabIndex of tabURLs
         if tabTitle is missing value then set tabTitle to ""
         if tabURL is missing value then set tabURL to ""
-        set end of windowRows to {windowID, tabIndex, tabTitle, tabURL}
+        set end of windowRows to {windowID, tabIndex, tabTitle, tabURL, tabIndex is currentIndex}
     end repeat
     return windowRows
 end rowsFromSnapshot
+
+on jsonText(value)
+    set jsonData to current application's NSJSONSerialization's dataWithJSONObject:value options:0 |error|:(missing value)
+    return (current application's NSString's alloc()'s initWithData:jsonData encoding:(current application's NSUTF8StringEncoding)) as text
+end jsonText

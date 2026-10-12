@@ -8,8 +8,9 @@ Tab Scout is a **native macOS menu-bar app**. Press **Cmd+T in Safari** to open 
 
 - Search tab titles and URLs with case-insensitive, diacritic-insensitive multiword matching.
 - Switch to an existing tab instead of creating a duplicate.
+- Offer the previously viewed tab first, so Cmd+T, Enter flips between your two most recent tabs.
 - Open an address or search using Safari's configured search engine.
-- Show cached tab results immediately while refreshing older snapshots in the background.
+- Show cached tab results immediately while refreshing them in the background.
 - Load favicons asynchronously and cache them across app restarts.
 - Include optional Google autocomplete predictions without delaying local results.
 - Rank results using locally remembered Tab Scout choices and optional Safari browsing history.
@@ -39,6 +40,14 @@ TAB_SCOUT_OUTPUT_DIR="$PWD/.build/native-output" \
 
 `TAB_SCOUT_SIGN_IDENTITY` selects an existing signing identity. The default build is ad-hoc signed; the script does not provision certificates or notarize the app. This is not an App Store release.
 
+### Deploy Locally
+
+With [Task](https://taskfile.dev) installed (`brew install go-task`), `task deploy` runs the tests, builds, quits the running Tab Scout, replaces the installed copy and relaunches it. `task deploy:quick` skips the tests, and `task deploy:plan` only prints what a deploy would do. Run `task` to list every task.
+
+The deploy installs to `/Applications/Tab Scout.app`, or to `TAB_SCOUT_INSTALL_APP` when set; later deploys reuse the last location. A running copy elsewhere is moved to the Trash, so only one installation remains. The build is signed with the installed copy's certificate when the keychain has it; an ad-hoc signed deploy needs permissions granted again every time. Even with the same certificate, macOS can stop honoring the keyboard permission after a rebuild while its switch still looks on. If Cmd+T does nothing after a deploy, remove Tab Scout from Device Control and Data Access (Accessibility before macOS 27), add the installed copy again and relaunch it.
+
+The menu-bar menu and the Permissions window show the installed version, commit and build time.
+
 ## Setup
 
 Tab Scout runs in the menu bar rather than the Dock. Its Permissions window provides these checks:
@@ -55,12 +64,14 @@ The app must remain running for Cmd+T search. The shortcut is captured only whil
 
 - Type a tab title, URL, or search phrase. The search field is focused when the palette opens.
 - Use Up/Down to select a result, then Enter to activate it. Clicking an actionable result works too.
+- With empty input, the first result is the tab you viewed before the current one. Cmd+T, Enter switches to it; Cmd+T, Enter again returns to where you started.
 - Cmd+Enter opens the query in a new tab even when an existing tab matches.
-- With empty input, the New tab action uses Safari's native new-tab command and configured page, not a forced `about:blank` URL.
+- With empty input, the other open tabs follow the previous tab and the New tab action comes after them; Cmd+Enter also opens a new tab. It uses Safari's native new-tab command and configured page, not a forced `about:blank` URL.
+- The tab you are on is never listed. When it is the only match, Enter opens a new tab with your query.
 - Escape or Cmd+T dismisses the palette without changing tabs.
 - The refresh button updates results. Preferences and permission checks are available from the menu bar.
 
-Results distinguish Open Tabs, Recent Searches, History, and Google Suggestions. Match quality comes first; recent and repeated local use improve comparable matches. Open tabs stay prominent to reduce duplicates, and arriving predictions do not move a selection you have already navigated.
+Open tabs come first without a heading; Recent Searches, History, and Google Suggestions have their own sections. Match quality comes first; recent and repeated local use improve comparable matches. Open tabs stay prominent to reduce duplicates, and arriving predictions do not move a selection you have already navigated.
 
 ## Privacy And Limits
 
@@ -76,7 +87,7 @@ See [Native App Details](docs/NATIVE_COMPANION.md) for permissions, cache bounds
 
 ## Verification
 
-`bash test.sh` covers search, ranking, history fixtures, keyboard decisions, palette placement, cache races, Google response handling, favicons, and Safari bridge fixtures. Tests do not request permissions or read the user's real Safari history. Physical shortcut behavior needs a live check in Safari.
+`bash test.sh` covers search, ranking, previous-tab tracking, history fixtures, keyboard decisions, palette placement, cache races, Google response handling, favicons, and Safari bridge fixtures. Tests do not request permissions or read the user's real Safari history. Physical shortcut behavior needs a live check in Safari.
 
 The native installation was restored on 2026-10-12 without rebuilding or changing permissions. Google predictions appeared in the native palette, and the user confirmed that physical Cmd+T opens Tab Scout over the page. See [Native Restore Verification](docs/NATIVE_RESTORE_QA.md).
 

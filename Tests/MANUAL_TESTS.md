@@ -21,12 +21,14 @@ Use a throwaway Safari window and public fixture pages. Record the macOS/Safari 
 4. Type a distinctive part of an existing title. Check case-insensitive, diacritic-insensitive, multiword, hostname, and URL-path queries. Use Up/Down and Enter to select the intended tab; check mouse selection too.
 5. Confirm that selecting an existing tab changes Safari's active tab/window without increasing the tab count.
 6. Enter a unique no-match query. Confirm a single new tab opens with Safari's configured search provider, not a hard-coded engine.
-7. Enter `https://example.com/`, a bare hostname, and an empty query. Confirm respectively a URL tab, an HTTPS URL tab, and one native tab using Safari's **New tabs open with** setting. With Start Page configured, its sections and background should render instead of a forced `about:blank`. Repeat with whitespace-only input and Cmd+Enter. In a throwaway setup, test another new-tab preference and restore it afterward.
+7. Enter `https://example.com/`, a bare hostname, and an empty query's **New tab** row. Confirm respectively a URL tab, an HTTPS URL tab, and one native tab using Safari's **New tabs open with** setting. With Start Page configured, its sections and background should render instead of a forced `about:blank`. Repeat with whitespace-only input and Cmd+Enter. In a throwaway setup, test another new-tab preference and restore it afterward.
 8. Use Cmd+Enter while matching tabs exist. Confirm one additional tab opens rather than switching to a match.
 9. Confirm Cmd+Shift+T still reopens Safari's last closed tab. In another app, confirm Cmd+T retains that app's normal behavior.
 10. Disable **Capture Cmd+T in Safari**. Confirm Safari's normal new-tab command returns; re-enable it and repeat the physical-key test.
 11. Test a minimized Safari window and a fullscreen Safari window. The selected tab's window should become usable and the panel should not remain stranded behind it.
 12. In a throwaway session with no Safari windows, choose the empty-query action. Confirm Safari's native **New Tab** command opens one window with one tab, without an extra empty tab. Compare its page with Safari's own File > New Tab command. With two windows, verify the action opens in the palette's target window. Do not close or replace the user's existing windows to create these fixtures.
+13. Switch from tab A to tab B with Tab Scout, then press Cmd+T, Enter. Confirm Safari returns to A; repeat and confirm it returns to B. Confirm the empty-input first row is labelled **Previous tab** and that Down, Enter still opens a native new tab.
+14. Restart Tab Scout from a script (for example `task deploy`) while Safari is frontmost, without clicking Tab Scout's menu-bar icon. The first physical Cmd+T must open the palette with the search field focused, and Safari must remain the active app.
 
 ## Native Panel Placement
 

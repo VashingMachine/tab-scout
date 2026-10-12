@@ -9,20 +9,22 @@ on run argv
     my expect(not (bridge's snapshotIsStable({"A"}, {"https://example.org/A"}, {"https://example.org/a"})), "URL verification is case sensitive")
     my expect(bridge's snapshotIsStable({}, {}, {}), "An empty window is a consistent snapshot")
 
-    set rows to bridge's rowsFromSnapshot(42, titles, urls)
+    set rows to bridge's rowsFromSnapshot(42, titles, urls, 2)
     my expect((count of rows) is 3, "Duplicate URLs remain separate tabs")
-    my expect((item 1 of rows) is {42, 1, "A quoted title", "https://example.org/A"}, "Rows retain the window ID and one-based index")
-    my expect((item 2 of rows) is {42, 2, "Second title", "https://example.org/A"}, "Enumerate indices locally without Apple events")
-    my expect((item 3 of rows) is {42, 3, "", ""}, "Missing title and URL become JSON-compatible strings")
-    my expect((bridge's rowsFromSnapshot(99, {}, {})) is {}, "An empty window produces no rows")
+    my expect((item 1 of rows) is {42, 1, "A quoted title", "https://example.org/A", false}, "Rows retain the window ID and one-based index")
+    my expect((item 2 of rows) is {42, 2, "Second title", "https://example.org/A", true}, "Enumerate indices locally without Apple events")
+    my expect((item 3 of rows) is {42, 3, "", "", false}, "Missing title and URL become JSON-compatible strings")
+    my expect((count of (bridge's rowsFromSnapshot(42, titles, urls, 7))) is 3, "An out-of-range current index still lists every tab")
+    my expect((bridge's jsonText(rows)) contains "\"Second title\",\"https:\\/\\/example.org\\/A\",true]", "The current-tab marker serializes as a JSON boolean")
+    my expect((bridge's rowsFromSnapshot(99, {}, {}, 1)) is {}, "An empty window produces no rows")
     set rejected to false
     try
-        bridge's rowsFromSnapshot(42, {"A"}, urls)
+        bridge's rowsFromSnapshot(42, {"A"}, urls, 1)
     on error messageText
         set rejected to messageText contains "TAB_SCOUT_SNAPSHOT_CHANGED"
     end try
     my expect(rejected, "Never return partial rows from a mismatched snapshot")
-    return "Passed 12 AppleScript snapshot checks"
+    return "Passed 14 AppleScript snapshot checks"
 end run
 
 on expect(condition, messageText)

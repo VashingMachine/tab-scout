@@ -5,8 +5,8 @@ struct ResultCellTests {
     static var checks = 0
     static func main() {
         _ = NSApplication.shared
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 58), styleMask: .borderless, backing: .buffered, defer: false)
-        let cell = ResultCell(frame: NSRect(x: 0, y: 0, width: 640, height: 58))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 44), styleMask: .borderless, backing: .buffered, defer: false)
+        let cell = ResultCell(frame: NSRect(x: 0, y: 0, width: 640, height: 44))
         window.contentView = cell
         let fallback = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)!
         let favicon = NSImage(size: NSSize(width: 32, height: 16), flipped: false) { _ in
@@ -19,23 +19,23 @@ struct ResultCellTests {
         cell.configure(title: String(repeating: "Long title ", count: 30), detail: "https://example.com/a?b=c | Window 1",
                        url: "https://example.com/a", image: fallback, tint: .systemTeal)
         cell.layoutSubtreeIfNeeded()
-        expect(cell.faviconView.frame.size == NSSize(width: 23, height: 23), "Icon has fixed dimensions independent of image aspect")
+        expect(cell.faviconView.frame.size == NSSize(width: 20, height: 20), "Icon has fixed dimensions independent of image aspect")
         expect(cell.faviconView.imageScaling == .scaleProportionallyUpOrDown, "Favicon preserves its aspect ratio")
         expect(cell.titleTextField.lineBreakMode == .byTruncatingTail, "Long titles truncate within the row")
-        expect(cell.titleTextField.alignmentRect(forFrame: cell.titleTextField.frame).maxX <= 628, "Title text fits within row bounds")
+        expect(cell.titleTextField.alignmentRect(forFrame: cell.titleTextField.frame).maxX <= 630, "Title text fits within row bounds")
         expect(!cell.applyFavicon(favicon, for: "https://other.example"), "Late icon for another row is rejected")
         expect(cell.faviconView.image === fallback, "Rejected icon does not alter fallback")
         expect(cell.applyFavicon(favicon, for: "https://example.com/a"), "Matching icon applies")
         expect(cell.faviconView.image === favicon && cell.faviconView.contentTintColor == nil, "Website icon is not tinted")
         cell.layoutSubtreeIfNeeded()
-        expect(cell.faviconView.frame.size == NSSize(width: 23, height: 23), "Loading a favicon cannot resize the icon container")
+        expect(cell.faviconView.frame.size == NSSize(width: 20, height: 20), "Loading a favicon cannot resize the icon container")
         expect(favicon.isTemplate == false, "Colored favicon remains a non-template image")
         checkFaviconPixels(cell.faviconView)
         checkLabelLayout(cell, width: 640)
-        window.setContentSize(NSSize(width: 320, height: 58))
+        window.setContentSize(NSSize(width: 320, height: 44))
         cell.layoutSubtreeIfNeeded()
         checkLabelLayout(cell, width: 320)
-        expect(cell.faviconView.frame.size == NSSize(width: 23, height: 23), "A narrow result row retains fixed icon dimensions")
+        expect(cell.faviconView.frame.size == NSSize(width: 20, height: 20), "A narrow result row retains fixed icon dimensions")
         cell.configure(title: "New tab", detail: "New Safari tab", url: nil, image: fallback, tint: .systemBlue)
         expect(cell.representedURL == nil && cell.faviconView.contentTintColor == .systemBlue, "Reuse resets identity and tint")
         expect(!cell.applyFavicon(favicon, for: "https://example.com/a"), "A new-tab command cannot inherit an old favicon")
@@ -47,11 +47,11 @@ struct ResultCellTests {
         expect(cell.bounds.width == width, "Long labels cannot expand the result row")
         let title = cell.titleTextField.alignmentRect(forFrame: cell.titleTextField.frame)
         let detail = cell.detailTextField.alignmentRect(forFrame: cell.detailTextField.frame)
-        expect(title.minX >= cell.faviconView.frame.maxX + 13, "Title stays clear of the favicon")
-        expect(title.maxX <= width - 12 && detail.maxX <= width - 12, "Both labels retain the row's trailing inset")
+        expect(title.minX >= cell.faviconView.frame.maxX + 10, "Title stays clear of the favicon")
+        expect(title.maxX <= width - 10 && detail.maxX <= width - 10, "Both labels retain the row's trailing inset")
         expect(title.minX == detail.minX && title.width == detail.width, "Title and detail align in a stable text column")
         expect(!title.intersects(detail), "The two text lines do not overlap")
-        expect(title.minY >= 0 && detail.minY >= 0 && title.maxY <= 58 && detail.maxY <= 58, "Both text lines fit vertically")
+        expect(title.minY >= 0 && detail.minY >= 0 && title.maxY <= 44 && detail.maxY <= 44, "Both text lines fit vertically")
         expect(cell.detailTextField.lineBreakMode == .byTruncatingMiddle, "Long URLs truncate within their allocated width")
     }
 

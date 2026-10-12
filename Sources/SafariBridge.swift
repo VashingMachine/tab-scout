@@ -5,7 +5,9 @@ final class SafariBridge {
     typealias ScriptExecutor = (URL, [String]) throws -> Data
     typealias NewTabExecutor = () throws -> Data
 
-    private let queue = DispatchQueue(label: "local.tabscout.safari")
+    // Tab-list reads run beside actions, so Enter never waits for a background refresh to finish.
+    private let readQueue = DispatchQueue(label: "local.tabscout.safari.read")
+    private let actionQueue = DispatchQueue(label: "local.tabscout.safari.action")
     private let scriptURL: URL
     private let newTabExecutor: NewTabExecutor
     private let executor: ScriptExecutor
@@ -17,26 +19,30 @@ final class SafariBridge {
         self.executor = executor
     }
 
-    func list(completion: @escaping (Result<[SafariTab], Error>) -> Void) {
-        execute(["list"]) { result in completion(result.flatMap { data in Result { try SafariTab.decode(data) } }) }
+    func list(completion: @escaping (Result<TabInventory, Error>) -> Void) {
+        execute(["list"], on: readQueue) { result in completion(result.flatMap { data in Result { try TabInventory.decode(data) } }) }
     }
 
     func select(_ tab: SafariTab, completion: @escaping (Result<Data, Error>) -> Void) {
-        execute(["switch", String(tab.windowID), String(tab.index), tab.url, tab.title], completion: completion)
+        execute(["switch", String(tab.windowID), String(tab.index), tab.url, tab.title], on: actionQueue, completion: completion)
     }
 
     func open(_ destination: NewTabDestination, windowID: Int, completion: @escaping (Result<Data, Error>) -> Void) {
         switch destination {
         case .defaultPage:
-            execute(["prepare-new-tab", String(windowID)], after: newTabExecutor, completion: completion)
-        case .url(let url): execute(["url", String(windowID), url], completion: completion)
-        case .search(let query): execute(["search", String(windowID), query], completion: completion)
+            execute(["prepare-new-tab", String(windowID)], on: actionQueue, after: newTabExecutor, completion: completion)
+        case .url(let url): execute(["url", String(windowID), url], on: actionQueue, completion: completion)
+        case .search(let query): execute(["search", String(windowID), query], on: actionQueue, completion: completion)
         }
     }
 
-    private func execute(_ arguments: [String], after action: NewTabExecutor? = nil,
+    private func execute(_ arguments: [String], on queue: DispatchQueue, after action: NewTabExecutor? = nil,
                          completion: @escaping (Result<Data, Error>) -> Void) {
+        let submitted = DispatchTime.now()
         queue.async { [scriptURL, executor] in
+            Timing.log("safari \(arguments[0]) queued", since: submitted)
+            let started = DispatchTime.now()
+            defer { Timing.log("safari \(arguments[0])", since: started) }
             let result = Result {
                 let data = try executor(scriptURL, arguments)
                 guard let action else { return data }

@@ -10,6 +10,8 @@ struct HistoryRankingTests {
         tabRanking()
         historyRanking()
         resultComposition()
+        previousTab()
+        currentTab()
         queryIdentity()
         navigation()
         clickActivation()
@@ -37,11 +39,12 @@ struct HistoryRankingTests {
     }
 
     static func rows(_ query: String, tabs: [SafariTab] = [], visits: [HistoryVisit] = [],
-                     searches: [PastSearch] = [], suggestions: [String] = []) -> [SearchRow] {
+                     searches: [PastSearch] = [], suggestions: [String] = [], previous: SafariTab? = nil,
+                     active: SafariTab? = nil) -> [SearchRow] {
         SearchResultBuilder.rows(query: query, matches: TabSearchIndex(tabs).matches(query: query),
                                  allTabs: tabs,
                                  history: HistorySearchIndex(HistorySnapshot(visits: visits, searches: searches)),
-                                 suggestions: suggestions, now: now)
+                                 suggestions: suggestions, now: now, previousTab: previous, activeTab: active)
     }
 
     static func displayedTabs(_ rows: [SearchRow]) -> [SafariTab] {
@@ -200,8 +203,10 @@ struct HistoryRankingTests {
         expect(blank.contains(.section(.recent)), "Recent searches remain available below empty-input default")
         let emptyWithTabs = rows("", tabs: [tab("Open page", "https://example.com")],
                                  searches: [search("recent search")])
-        expect(emptyWithTabs.first == .newTab(.defaultPage), "Open tabs and recent searches cannot displace the empty-input native new-tab default")
-        expect(ResultNavigation.first(in: emptyWithTabs) == 0, "Enter initially targets native new-tab creation for empty input")
+        expect(emptyWithTabs == [.tab(tab("Open page", "https://example.com")), .newTab(.defaultPage),
+                                 .section(.recent), .recentSearch(search("recent search"))],
+               "Empty input lists open tabs, then the new-tab action, then recent searches")
+        expect(ResultNavigation.first(in: emptyWithTabs) == 0, "Enter initially targets the first open tab for empty input")
         expect(rows(" example.com/docs ").first == .newTab(.url("https://example.com/docs")),
                "Nonempty URL creation is unchanged by the native new-tab default")
 
@@ -292,14 +297,52 @@ struct HistoryRankingTests {
         }
     }
 
+    static func previousTab() {
+        let current = tab("Current", "https://example.com/current")
+        let previous = tab("Previous", "https://example.com/previous", index: 2)
+        let other = tab("Other", "https://example.com/other", window: 2)
+        let inventory = [current, previous, other]
+        let empty = rows("", tabs: inventory, searches: [search("recent search")], previous: previous, active: current)
+        expect(empty == [.previousTab(previous), .tab(other), .newTab(.defaultPage), .section(.recent), .recentSearch(search("recent search"))],
+               "Empty input lists the previous tab, the other open tabs, then the new-tab action, without a tab header")
+        expect(ResultNavigation.first(in: empty) == 0, "Enter initially returns to the previous tab")
+        expect(SearchRow.previousTab(previous).isSelectable && SearchRow.previousTab(previous).destination == nil,
+               "The previous tab switches tabs rather than opening a URL")
+        expect(rows(" \n ", tabs: inventory, previous: previous, active: current).first == .previousTab(previous),
+               "Whitespace-only input still offers the previous tab")
+        let typed = rows("example", tabs: inventory, previous: previous, active: current)
+        expect(!typed.contains(.previousTab(previous)) && displayedTabs(typed) == [previous, other],
+               "Typing replaces the previous-tab shortcut with ordinary ranked results")
+        expect(rows("", tabs: inventory).first == .tab(current) && rows("", tabs: inventory).last == .newTab(.defaultPage),
+               "Without a previous tab the open tabs still come first and the new-tab action last")
+        expect(rows("", tabs: [current], searches: [search("recent search")], active: current).first == .newTab(.defaultPage),
+               "With only the current tab open, Enter opens a new tab")
+    }
+
+    static func currentTab() {
+        let current = tab("Swift reference", "https://example.com/swift")
+        let other = tab("Swift forums", "https://example.com/forums", index: 2)
+        let onlyCurrent = rows("swift reference", tabs: [current, other], active: current)
+        expect(!onlyCurrent.contains(.tab(current)), "The tab on screen is never offered as a destination")
+        expect(onlyCurrent.first == .newTab(.search("swift reference")),
+               "When only the current page matches, Enter searches in a new tab")
+        expect(displayedTabs(rows("swift", tabs: [current, other], active: current)) == [other],
+               "Other matching tabs are still offered")
+        let visited = rows("swift", tabs: [current], visits: [visit("Swift reference", current.url)], active: current)
+        expect(!visited.contains(where: { if case .history = $0 { return true }; return $0 == .tab(current) }),
+               "History cannot bring back the page already on screen")
+        expect(!rows("swift", tabs: [current, other]).contains(where: { !$0.isSelectable }),
+               "Matching open tabs have no section header")
+    }
+
     static func navigation() {
         let list: [SearchRow] = [
-            .section(.tabs), .tab(tab("A", "https://example.com/a")),
+            .section(.recent), .tab(tab("A", "https://example.com/a")),
             .section(.recent), .recentSearch(search("a query")),
             .section(.history), .history(visit("B", "https://example.com/b")),
             .section(.google), .suggestion("a suggestion")
         ]
-        expect(SearchSection.tabs.rawValue == "Open Tabs", "Open tabs have a distinct section label")
+        expect(SearchSection.recent.rawValue == "Recent Searches", "Recent searches have a distinct section label")
         expect(list.enumerated().allSatisfy { $0.offset.isMultiple(of: 2) ? !$0.element.isSelectable : $0.element.isSelectable },
                "Only content rows, never section headers, are selectable")
         expect(ResultNavigation.first(in: list) == 1, "Initial selection skips the leading header")
@@ -317,16 +360,16 @@ struct HistoryRankingTests {
         expect(ResultNavigation.next(in: list, from: 1, step: 2) == nil, "Unsupported multi-row navigation step is rejected")
         expect(ResultNavigation.first(in: []) == nil, "Empty lists have no initial selection")
         expect(ResultNavigation.next(in: [], from: 0, step: 1) == nil, "Empty lists have no next selection")
-        expect(ResultNavigation.first(in: [.section(.tabs), .section(.google)]) == nil,
+        expect(ResultNavigation.first(in: [.section(.recent), .section(.google)]) == nil,
                "Headers alone cannot become the initial selection")
-        expect(ResultNavigation.next(in: [.section(.tabs)], from: 0, step: 1) == nil,
+        expect(ResultNavigation.next(in: [.section(.history)], from: 0, step: 1) == nil,
                "Headers alone cannot become a navigated selection")
         expect(SearchRow.section(.google).destination == nil, "Headers never execute a search")
     }
 
     static func clickActivation() {
         let list: [SearchRow] = [
-            .section(.tabs), .tab(tab("A", "https://example.com/a")),
+            .section(.recent), .tab(tab("A", "https://example.com/a")),
             .section(.recent), .recentSearch(search("a query")),
             .section(.history), .history(visit("B", "https://example.com/b")),
             .newTab(.search("raw query")), .section(.google), .suggestion("a suggestion")
@@ -416,7 +459,7 @@ struct HistoryRankingTests {
         let moved = tab(selected.title, selected.url, window: 8, index: 4)
         let duplicate = tab(selected.title, selected.url, window: 8, index: 6)
         let otherWindow = tab(selected.title, selected.url, window: 9, index: 4)
-        expect(SearchRow.retainedSelection(of: .tab(selected), in: [.section(.tabs), .tab(moved)]) == 1,
+        expect(SearchRow.retainedSelection(of: .tab(selected), in: [.section(.history), .tab(moved)]) == 1,
                "A moved tab retains selection when uniquely identifiable")
         expect(SearchRow.retainedSelection(of: .tab(selected), in: [.tab(otherWindow), .tab(moved)]) == 1,
                "Matching tabs in other windows do not steal a moved-tab selection")

@@ -12,7 +12,7 @@ struct PerformanceTests {
         precondition(count > 0, "Benchmark must produce real results")
         precondition(elapsed < 5, "Indexed search regression: 100 queries of 1,000 tabs exceeded five seconds")
         var calls = 0
-        let store = TabStore { completion in calls += 1; completion(.success(tabs)) }
+        let store = TabStore { completion in calls += 1; completion(.success(TabInventory(tabs: tabs))) }
         store.load { _ in }
         let warmStart = ProcessInfo.processInfo.systemUptime
         for _ in 0..<100 { store.load { result in precondition((try? result.get().tabs.count) == 1_000) } }

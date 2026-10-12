@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private lazy var googleSuggestions = GoogleSuggestionsService()
     private let historyQueue = DispatchQueue(label: "local.tabscout.history-index", qos: .userInitiated)
     private var historyIndex = HistorySearchIndex(.empty)
+    private var indexedHistory: HistorySnapshot?
     private var openTabs = OpenTabLookup([])
     private var remoteSuggestions: [String] = []
     private var historyRequestID = 0
@@ -57,17 +58,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var emptyLabel: NSTextField!
     private var retryButton: NSButton!
     private var tabs: [SafariTab] = []
+    private var focusHistory = TabFocusHistory()
+    private var activeTab: SafariTab?
+    private var previousTab: SafariTab?
     private var rows: [SearchRow] = []
     private var requestID = 0
     private var loading = false
     private var acting = false
     private var ready = false
+    private var pendingActivation: Bool?
     private var returnApp: NSRunningApplication?
     private var setupWindow: NSWindow?
     private var accessibilityState: NSTextField?
     private var safariState: NSTextField?
     private var setupStatus: NSTextField?
     private var safariAllowed = false
+    private var versionText: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let version = "Version \(info["CFBundleShortVersionString"] as? String ?? "unknown")"
+        return (info["TabScoutBuild"] as? String).map { "\(version) (\($0))" } ?? version
+    }
     private var controlPermissionName: String {
         ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 ? "Device Control and Data Access" : "Accessibility"
     }
@@ -93,6 +103,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             self?.safariAllowed = false
             self?.updatePermissionLabels()
         }
+        // Every read, including background prewarms, notes which tab is on screen.
+        tabStore.onSnapshot = { [weak self] snapshot in
+            if let active = snapshot.active { self?.focusHistory.focus(active) }
+        }
         buildMenu()
         buildPanel()
         reloadHistory()
@@ -106,6 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                   app.bundleIdentifier == "com.apple.Safari", self?.preview == false else { return }
             self?.tabStore.invalidate()
+            self?.focusHistory = TabFocusHistory()
             self?.clearResults()
             if self?.panel.isVisible == true { self?.loadTabs(force: true) }
         }
@@ -113,7 +128,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             guard let self else { return event }
             return self.handleKey(event)
         }
-        if preview {
+        if preview, let index = CommandLine.arguments.firstIndex(of: "--snapshot"), index + 1 < CommandLine.arguments.count {
+            renderSnapshot(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+        } else if preview {
             showSearch(nil)
         } else {
             installTapIfAllowed()
@@ -185,6 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         loginItem.target = self
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(.separator())
+        menu.addItem(withTitle: versionText, action: nil, keyEquivalent: "")
         menu.addItem(withTitle: "Quit Tab Scout", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         statusItem.menu = menu
     }
@@ -235,7 +253,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     private func buildPanel() {
-        panel = SearchPanel(contentRect: NSRect(x: 0, y: 0, width: 660, height: 440), styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+        // A non-activating panel takes keyboard focus while Safari stays the active app. macOS refuses
+        // activation requests from a menu-bar app launched in the background until the user has clicked it,
+        // which left Cmd+T doing nothing after every launch.
+        panel = SearchPanel(contentRect: NSRect(x: 0, y: 0, width: 640, height: 420),
+                            styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Tab Scout"
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
@@ -255,7 +277,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
         searchField = NSSearchField()
         searchField.placeholderString = "Search tabs or enter an address"
-        searchField.font = .systemFont(ofSize: 21)
+        searchField.font = .systemFont(ofSize: 18)
         searchField.focusRingType = .none
         searchField.sendsSearchStringImmediately = true
         searchField.delegate = self
@@ -270,8 +292,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("result"))
         table.addTableColumn(column)
         table.headerView = nil
-        table.rowHeight = 58
-        table.intercellSpacing = NSSize(width: 0, height: 2)
+        table.rowHeight = 44
+        table.intercellSpacing = NSSize(width: 0, height: 1)
         table.backgroundColor = .clear
         table.selectionHighlightStyle = .regular
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
@@ -294,7 +316,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
         background.addSubview(emptyLabel)
         footer = NSTextField(labelWithString: "")
-        footer.font = .systemFont(ofSize: 12)
+        footer.font = .systemFont(ofSize: 11)
         footer.textColor = .secondaryLabelColor
         footer.lineBreakMode = .byTruncatingTail
         footer.translatesAutoresizingMaskIntoConstraints = false
@@ -304,26 +326,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         background.addSubview(retryButton)
         background.addSubview(settings)
         NSLayoutConstraint.activate([
-            searchField.topAnchor.constraint(equalTo: background.topAnchor, constant: 20),
-            searchField.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 20),
-            searchField.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -20),
-            searchField.heightAnchor.constraint(equalToConstant: 38),
-            line.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 15),
+            searchField.topAnchor.constraint(equalTo: background.topAnchor, constant: 12),
+            searchField.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 12),
+            searchField.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -12),
+            searchField.heightAnchor.constraint(equalToConstant: 32),
+            line.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 10),
             line.leadingAnchor.constraint(equalTo: background.leadingAnchor),
             line.trailingAnchor.constraint(equalTo: background.trailingAnchor),
-            scroll.topAnchor.constraint(equalTo: line.bottomAnchor, constant: 8),
-            scroll.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 10),
-            scroll.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -10),
-            scroll.bottomAnchor.constraint(equalTo: background.bottomAnchor, constant: -43),
+            scroll.topAnchor.constraint(equalTo: line.bottomAnchor, constant: 4),
+            scroll.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 2),
+            scroll.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -2),
+            scroll.bottomAnchor.constraint(equalTo: background.bottomAnchor, constant: -32),
             emptyLabel.centerXAnchor.constraint(equalTo: scroll.centerXAnchor),
             emptyLabel.centerYAnchor.constraint(equalTo: scroll.centerYAnchor),
             emptyLabel.widthAnchor.constraint(lessThanOrEqualTo: scroll.widthAnchor, constant: -60),
-            footer.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 22),
+            footer.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 16),
             footer.centerYAnchor.constraint(equalTo: retryButton.centerYAnchor),
             footer.trailingAnchor.constraint(lessThanOrEqualTo: retryButton.leadingAnchor, constant: -12),
-            settings.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -16),
-            settings.bottomAnchor.constraint(equalTo: background.bottomAnchor, constant: -9),
-            retryButton.trailingAnchor.constraint(equalTo: settings.leadingAnchor, constant: -5),
+            settings.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -10),
+            settings.bottomAnchor.constraint(equalTo: background.bottomAnchor, constant: -5),
+            retryButton.trailingAnchor.constraint(equalTo: settings.leadingAnchor, constant: -2),
             retryButton.bottomAnchor.constraint(equalTo: settings.bottomAnchor)
         ])
     }
@@ -334,13 +356,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         button.toolTip = tip
         button.setAccessibilityLabel(tip)
         button.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([button.widthAnchor.constraint(equalToConstant: 28), button.heightAnchor.constraint(equalToConstant: 28)])
+        NSLayoutConstraint.activate([button.widthAnchor.constraint(equalToConstant: 24), button.heightAnchor.constraint(equalToConstant: 24)])
         return button
     }
 
     @objc func showSearch(_ sender: Any?) {
-        guard !acting else { return }
+        // The palette hides as soon as Enter is pressed; reopening during that action shows its progress.
+        if acting { panel.makeKeyAndOrderFront(nil); return }
         if panel.isVisible { dismiss(restoreFocus: true); return }
+        let opened = DispatchTime.now()
         returnApp = NSWorkspace.shared.frontmostApplication
         setupWindow?.orderOut(nil)
         searchField.stringValue = ""
@@ -354,14 +378,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                                               fallbackScreen: fallback.map { .init(frame: $0.frame, visibleFrame: $0.visibleFrame) }) {
             panel.setFrameOrigin(origin)
         }
-        NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(searchField)
-        loadTabs()
+        // Cached tabs appear at once; the forced read catches tab switches made in Safari since the last one.
+        loadTabs(force: true)
         reloadHistory()
+        DispatchQueue.main.async { Timing.log("open", since: opened) }
     }
 
     @objc private func refresh(_ sender: Any?) { if !acting { loadTabs(force: true) } }
+
+    /// Draws the preview palette into a PNG from an invisible window, so the layout can be checked
+    /// without taking keyboard focus from the person at the Mac.
+    private func renderSnapshot(to url: URL) {
+        panel.alphaValue = 0
+        panel.orderFrontRegardless()
+        loadTabs()
+        guard let view = panel.contentView else { return NSApp.terminate(nil) }
+        view.layoutSubtreeIfNeeded()
+        table.layoutSubtreeIfNeeded()
+        if let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            try? bitmap.representation(using: .png, properties: [:])?.write(to: url)
+        }
+        NSApp.terminate(nil)
+    }
 
     private func loadTabs(force: Bool = false) {
         requestID += 1
@@ -379,7 +420,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 SafariTab(windowID: 1, index: 2, title: "Apple Developer Documentation", url: "https://developer.apple.com/documentation/"),
                 SafariTab(windowID: 2, index: 1, title: "Wikipedia", url: "https://en.wikipedia.org/")
             ]
-            didLoad(.success(TabSnapshot(tabs: samples, index: TabSearchIndex(samples), fetchedAt: Date(), revision: 0)), token: token)
+            focusHistory.focus(samples[1])
+            focusHistory.focus(samples[0])
+            didLoad(.success(TabSnapshot(tabs: samples, active: samples[0], index: TabSearchIndex(samples), fetchedAt: Date(), revision: 0)), token: token)
         } else {
             tabStore.load(force: force) { [weak self] result in self?.didLoad(result, token: token) }
         }
@@ -395,13 +438,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             self.tabs = snapshot.tabs
             searchIndex = snapshot.index
             openTabs = OpenTabLookup(snapshot.tabs)
+            activeTab = snapshot.active
+            previousTab = focusHistory.previous(active: snapshot.active, in: snapshot.tabs)
             windowNumbers = [:]
             for tab in tabs where windowNumbers[tab.windowID] == nil { windowNumbers[tab.windowID] = windowNumbers.count + 1 }
             ready = true
             if !tabs.isEmpty || NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Safari").count > 0 { safariAllowed = true }
             updateRows(preserveSelection: hadResults)
             updatePermissionLabels()
+            if let forceNew = pendingActivation {
+                pendingActivation = nil
+                activate(forceNew: forceNew)
+            }
         case .failure(let error):
+            pendingActivation = nil
             if !preview && tabStore.snapshot == nil {
                 clearResults()
             }
@@ -417,6 +467,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     func controlTextDidChange(_ obj: Notification) {
+        pendingActivation = nil
         remoteSuggestions = []
         if ready { updateRows() }
         requestSuggestions()
@@ -455,11 +506,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             self.historyLoaded = true
             if case .failure(let error) = result { self.historyError = error } else { self.historyError = nil }
             let snapshot = (try? result.get()) ?? self.historyStore.snapshot
+            // Indexing a large Safari history takes about 0.1 s, so an unchanged history keeps its index.
+            guard snapshot != self.indexedHistory else { self.updatePermissionLabels(); return }
+            let started = DispatchTime.now()
             self.historyQueue.async {
                 let index = HistorySearchIndex(snapshot)
                 DispatchQueue.main.async {
                     guard token == self.historyRequestID else { return }
+                    Timing.log("history index", since: started)
                     self.historyIndex = index
+                    self.indexedHistory = snapshot
                     self.updatePermissionLabels()
                     if self.ready && self.panel.isVisible { self.updateRows(preserveSelection: true) }
                 }
@@ -468,11 +524,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     private func updateRows(preserveSelection: Bool = false) {
-        let selected = preserveSelection && rows.indices.contains(table.selectedRow) ? rows[table.selectedRow] : nil
+        // A selection still on the top row follows the top row, so Enter keeps meaning the default result.
+        let navigated = rows.indices.contains(table.selectedRow) && table.selectedRow != ResultNavigation.first(in: rows)
+        let selected = preserveSelection && navigated ? rows[table.selectedRow] : nil
         let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let matches = searchIndex.matches(query: query)
         rows = SearchResultBuilder.rows(query: query, matches: matches, allTabs: tabs, history: historyIndex,
-                                        suggestions: remoteSuggestions, now: Date(), openTabs: openTabs)
+                                        suggestions: remoteSuggestions, now: Date(), openTabs: openTabs,
+                                        previousTab: previousTab, activeTab: activeTab)
         table.reloadData()
         if let row = selected.flatMap({ SearchRow.retainedSelection(of: $0, in: rows) }) ?? ResultNavigation.first(in: rows) {
             table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
@@ -483,7 +542,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let tabCount = "\(tabs.count) \(tabs.count == 1 ? "tab" : "tabs")"
         let windowCount = "\(windows) \(windows == 1 ? "window" : "windows")"
         let localCount = rows.filter { row in
-            switch row { case .tab, .history, .recentSearch: return true; default: return false }
+            switch row { case .previousTab, .tab, .history, .recentSearch: return true; default: return false }
         }.count
         let suggestionCount = rows.filter { if case .suggestion = $0 { return true }; return false }.count
         footer.stringValue = query.isEmpty ? "\(tabCount) in \(windowCount)" : "\(localCount) local \(localCount == 1 ? "result" : "results")" + (suggestionCount > 0 ? " | \(suggestionCount) Google suggestions" : "")
@@ -501,7 +560,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        rows.indices.contains(row) && !rows[row].isSelectable ? 25 : 58
+        rows.indices.contains(row) && !rows[row].isSelectable ? 22 : 44
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -517,10 +576,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
         let cell = tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("resultCell"), owner: self) as? ResultCell ?? ResultCell()
         switch rows[row] {
-        case .tab(let tab):
+        case .previousTab(let tab), .tab(let tab):
             let image = preview ? nil : favicons.imageFor(url: tab.url)
+            let location = (tab.url.isEmpty ? "Start Page" : tab.url) + " | Window \(windowNumbers[tab.windowID] ?? 1)"
             cell.configure(title: tab.displayTitle,
-                           detail: (tab.url.isEmpty ? "Start Page" : tab.url) + " | Window \(windowNumbers[tab.windowID] ?? 1)",
+                           detail: rows[row] == .previousTab(tab) ? "Previous tab | " + location : location,
                            url: tab.url, image: image ?? symbol("globe"), tint: image == nil ? .systemTeal : nil)
             if !preview && image == nil {
                 favicons.request(url: tab.url) { [weak cell] image in
@@ -584,7 +644,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     private func activate(forceNew: Bool) {
-        guard ready, !acting else { return }
+        guard !acting else { return }
+        // Enter pressed while the tab list is still loading runs once it arrives.
+        guard ready else { if loading { pendingActivation = forceNew }; return }
         let row: SearchRow
         if forceNew { row = .newTab(NewTabDestination.from(searchField.stringValue)) }
         else {
@@ -597,29 +659,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         searchField.isEnabled = false
         retryButton.isEnabled = false
         footer.stringValue = "Opening..."
+        // Hide at once and let Safari finish in the background; a failure brings the palette back.
+        panel.orderOut(nil)
+        let started = DispatchTime.now()
         let completion: (Result<Data, Error>) -> Void = { [weak self] result in
             guard let self else { return }
+            Timing.log("activate", since: started)
             self.acting = false
             self.searchField.isEnabled = true
             self.retryButton.isEnabled = true
             switch result {
             case .success:
                 self.rememberChoice(row)
-                self.tabStore.invalidate()
+                // Keep the tab list warm so an immediate Cmd+T needs no Safari read.
+                switch row {
+                case .previousTab(let tab), .tab(let tab):
+                    self.focusHistory.focus(tab)
+                    self.tabStore.noteActivation(tab)
+                default: self.tabStore.noteActivation(nil)
+                }
                 self.dismiss(restoreFocus: false)
                 self.tabStore.prewarm()
             case .failure(let error):
                 self.emptyLabel.stringValue = ""
                 self.footer.stringValue = error.localizedDescription
                 self.footer.toolTip = error.localizedDescription
-                NSApp.activate(ignoringOtherApps: true)
                 self.panel.makeKeyAndOrderFront(nil)
                 self.panel.makeFirstResponder(self.searchField)
                 if case BridgeError.staleTab = error { self.loadTabs(force: true) }
             }
         }
         switch row {
-        case .tab(let tab): bridge.select(tab, completion: completion)
+        case .previousTab(let tab), .tab(let tab): bridge.select(tab, completion: completion)
         default:
             if let destination = row.destination { bridge.open(destination, windowID: tabs.first?.windowID ?? 0, completion: completion) }
         }
@@ -627,7 +698,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     private func rememberChoice(_ row: SearchRow) {
         switch row {
-        case .tab(let tab): historyStore.recordVisit(url: tab.url, title: tab.displayTitle)
+        case .previousTab(let tab), .tab(let tab): historyStore.recordVisit(url: tab.url, title: tab.displayTitle)
         case .history(let visit): historyStore.recordVisit(url: visit.url, title: visit.title)
         default:
             if let destination = row.destination {
@@ -643,6 +714,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     private func dismiss(restoreFocus: Bool) {
         requestID += 1
+        pendingActivation = nil
         if !preview { googleSuggestions.cancel() }
         remoteSuggestions = []
         panel.orderOut(nil)
@@ -655,6 +727,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     private func clearResults() {
         tabs = []
+        activeTab = nil
+        previousTab = nil
         rows = []
         searchIndex = TabSearchIndex([])
         openTabs = OpenTabLookup([])
@@ -702,6 +776,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         historyItems.forEach { $0.state = enable ? .on : .off }
         // Remove imported results immediately; a denied or superseded read cannot leave them visible.
         historyIndex = HistorySearchIndex(.empty)
+        indexedHistory = nil
         historyLoaded = false
         historyError = nil
         if ready && panel.isVisible { updateRows(preserveSelection: true) }
@@ -757,8 +832,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         guard let content = window.contentView else { return }
         let heading = NSTextField(labelWithString: "Permissions")
         heading.font = .systemFont(ofSize: 22, weight: .semibold)
-        heading.frame = NSRect(x: 28, y: 327, width: 420, height: 28)
+        heading.frame = NSRect(x: 28, y: 327, width: 200, height: 28)
         content.addSubview(heading)
+        let version = NSTextField(labelWithString: versionText)
+        version.font = .systemFont(ofSize: 11)
+        version.textColor = .secondaryLabelColor
+        version.alignment = .right
+        version.lineBreakMode = .byTruncatingMiddle
+        version.isSelectable = true
+        version.frame = NSRect(x: 232, y: 333, width: 220, height: 16)
+        content.addSubview(version)
         let axTitle = NSTextField(labelWithString: controlPermissionName)
         axTitle.font = .systemFont(ofSize: 15, weight: .medium)
         axTitle.frame = NSRect(x: 28, y: 281, width: 260, height: 22)

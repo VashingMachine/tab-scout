@@ -5,7 +5,7 @@ struct CacheTests {
     static var checks = 0
     static func main() {
         var date = Date(timeIntervalSince1970: 1_000)
-        var pending: [(Result<[SafariTab], Error>) -> Void] = []
+        var pending: [(Result<TabInventory, Error>) -> Void] = []
         let store = TabStore(now: { date }) { pending.append($0) }
         let tab = SafariTab(windowID: 1, index: 1, title: "Original", url: "https://example.com/original")
         let changed = SafariTab(windowID: 1, index: 1, title: "Changed", url: "https://example.com/changed")
@@ -16,7 +16,7 @@ struct CacheTests {
         store.load { second.append($0) }
         store.prewarm()
         expect(pending.count == 1, "Concurrent cold loads and prewarm share one read")
-        pending.removeFirst()(.success([tab]))
+        pending.removeFirst()(.success(TabInventory(tabs: [tab])))
         expect(first.count == 1 && second.count == 1, "Every cold subscriber receives the snapshot")
         expect(!store.isRefreshing && store.snapshot?.tabs == [tab], "Snapshot remains cached after load")
         expect(store.snapshot?.index.results(query: "original") == [tab], "Snapshot contains its prebuilt search index")
@@ -31,7 +31,7 @@ struct CacheTests {
         var coalesced: [Result<TabSnapshot, Error>] = []
         store.load { coalesced.append($0) }
         expect(coalesced.count == 1 && pending.count == 1, "Stale subscribers share the refresh")
-        pending.removeFirst()(.success([changed]))
+        pending.removeFirst()(.success(TabInventory(tabs: [changed])))
         expect(stale.count == 2 && coalesced.count == 2, "Subscribers receive both cached and fresh results")
         expect(store.snapshot?.tabs == [changed] && store.snapshot?.revision == 2, "Refresh replaces snapshot atomically")
         expect(store.snapshot?.index.results(query: "original").isEmpty == true, "Search index does not retain old titles")
@@ -48,7 +48,7 @@ struct CacheTests {
         expect(permissionRevoked, "Background permission failure notifies owner to stop prewarming")
 
         store.prewarm()
-        pending.removeFirst()(.success([]))
+        pending.removeFirst()(.success(TabInventory(tabs: [])))
         var emptyDelivered = false
         store.load { result in emptyDelivered = (try? result.get().tabs.isEmpty) == true }
         expect(emptyDelivered && pending.isEmpty, "Empty Safari inventory is a valid fresh cache hit")
@@ -62,12 +62,53 @@ struct CacheTests {
         store.invalidate()
         var latest: [Result<TabSnapshot, Error>] = []
         store.load { latest.append($0) }
-        obsolete(.success([tab]))
+        obsolete(.success(TabInventory(tabs: [tab])))
         expect(store.snapshot == nil && store.isRefreshing, "Late invalidated request cannot repopulate cache or end newer read")
-        pending.removeFirst()(.success([changed]))
+        pending.removeFirst()(.success(TabInventory(tabs: [changed])))
         expect(latest.count == 1 && store.snapshot?.tabs == [changed], "New generation wins after invalidation")
         date.addTimeInterval(-1)
         expect(store.snapshot == nil, "Clock rollback does not create indefinitely fresh data")
+
+        var observed: [SafariTab?] = []
+        let observedStore = TabStore(now: { date }) { pending.append($0) }
+        observedStore.onSnapshot = { observed.append($0.active) }
+        observedStore.prewarm()
+        pending.removeFirst()(.success(TabInventory(tabs: [tab, changed], active: changed)))
+        expect(observed == [changed] && observedStore.snapshot?.active == changed, "Background reads report the on-screen tab")
+        var replayed = 0
+        observedStore.load { _ in replayed += 1 }
+        expect(replayed == 1 && observed.count == 1, "Replaying a cached snapshot does not report the tab again")
+        observedStore.load(force: true) { _ in }
+        let superseded = pending.removeFirst()
+        observedStore.invalidate()
+        superseded(.success(TabInventory(tabs: [tab, changed], active: tab)))
+        expect(observed == [changed], "A read started before a tab switch cannot report the old tab")
+        observedStore.prewarm()
+        pending.removeFirst()(.failure(BridgeError.timeout))
+        expect(observed == [changed] && pending.isEmpty, "Failed reads report nothing")
+
+        let warmStore = TabStore(now: { date }) { pending.append($0) }
+        warmStore.prewarm()
+        pending.removeFirst()(.success(TabInventory(tabs: [tab, changed], active: tab)))
+        warmStore.load(force: true) { _ in }
+        let beforeSwitch = pending.removeFirst()
+        warmStore.noteActivation(changed)
+        expect(warmStore.snapshot?.tabs == [tab, changed] && warmStore.snapshot?.active == changed,
+               "A switch made by Tab Scout keeps the tabs and records the new on-screen tab")
+        var reopened: [Result<TabSnapshot, Error>] = []
+        warmStore.load { reopened.append($0) }
+        expect(reopened.count == 1 && (try? reopened[0].get().active) == changed, "Reopening right after a switch is served from memory")
+        beforeSwitch(.success(TabInventory(tabs: [tab, changed], active: tab)))
+        expect(warmStore.snapshot?.active == changed, "A read started before the switch cannot restore the old on-screen tab")
+        expect(pending.count == 1 && warmStore.isRefreshing, "Reopening after a switch still refreshes the kept tabs in the background")
+        warmStore.prewarm()
+        expect(pending.count == 1, "That refresh is shared with the next prewarm")
+        pending.removeFirst()(.success(TabInventory(tabs: [tab, changed], active: changed)))
+        warmStore.noteActivation(nil)
+        expect(warmStore.snapshot?.active == nil && warmStore.snapshot?.tabs.count == 2, "Opening a new tab keeps the list without guessing the new tab")
+        let coldStore = TabStore(now: { date }) { pending.append($0) }
+        coldStore.noteActivation(tab)
+        expect(coldStore.snapshot == nil && pending.isEmpty, "Without cached tabs there is nothing to keep")
 
         let fixtures = (0..<200).map { SafariTab(windowID: $0 / 20, index: $0 % 20 + 1, title: "Zażółć project \($0)", url: "https://example\($0 % 7).com/docs/\($0)") }
         let index = TabSearchIndex(fixtures)

@@ -1,6 +1,7 @@
 import Foundation
 
 enum SearchRow: Equatable {
+    case previousTab(SafariTab)
     case tab(SafariTab)
     case newTab(NewTabDestination)
     case recentSearch(PastSearch)
@@ -15,7 +16,7 @@ enum SearchRow: Equatable {
 
     var destination: NewTabDestination? {
         switch self {
-        case .tab, .section: return nil
+        case .previousTab, .tab, .section: return nil
         case .newTab(let destination): return destination
         case .recentSearch(let item): return .search(item.query)
         case .history(let item): return .url(item.url)
@@ -54,7 +55,6 @@ enum SearchRow: Equatable {
 }
 
 enum SearchSection: String {
-    case tabs = "Open Tabs"
     case recent = "Recent Searches"
     case history = "History"
     case google = "Google Suggestions"

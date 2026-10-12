@@ -57,6 +57,7 @@ The shortcut hook starts automatically after permission is granted. Permissions 
 
 - Type part of a tab title or URL. Matching ignores case and Latin diacritics and supports multiple words.
 - Enter activates the selected result. Open-tab matches switch tabs; history URLs open a tab; recent searches and predictions run a search. Up/Down skip section headings; clicking an actionable result activates it.
+- With empty input, the top result is the tab you viewed before the current one, so Cmd+T, Enter flips between two tabs. Tab Scout learns which tab is on screen whenever it reads Safari's tabs: each time the panel opens, after each switch it makes, and periodically while Safari is active. A tab you only passed through between reads may be skipped.
 - If there is no match, Enter opens a new tab. Addresses open directly; other queries use Safari's configured search provider.
 - Cmd+Enter always opens the query in a new tab. An empty or whitespace-only query uses Safari's native **New Tab** command and configured new-tab page. With **New tabs open with: Start Page** in Safari Settings > General, it shows the native Start Page with its configured sections and background instead of a forced `about:blank`. The native command also handles opening a tab when Safari has no windows.
 - Escape or Cmd+T closes the search panel without an action.
@@ -65,7 +66,7 @@ The shortcut hook starts automatically after permission is granted. Permissions 
 
 ## Suggestions And History
 
-Results distinguish **Open Tabs**, **Recent Searches**, **History**, and **Google Suggestions**. Match quality comes first; recent and repeated use improves ordering within comparable local matches. Matching open tabs remain prominent to avoid duplicate tabs. Equivalent history URLs are deduplicated against open tabs, and a locally remembered search is preferred over an identical Google prediction. Clock rows show actual local use dates; generic predictions do not receive invented timestamps.
+Open tabs come first without a heading; **Recent Searches**, **History**, and **Google Suggestions** have their own sections. The tab you are on is never listed, so when it is the only match Enter opens a new tab with your query. Match quality comes first; recent and repeated use improves ordering within comparable local matches. Matching open tabs remain prominent to avoid duplicate tabs. Equivalent history URLs are deduplicated against open tabs, and a locally remembered search is preferred over an identical Google prediction. Clock rows show actual local use dates; generic predictions do not receive invented timestamps.
 
 Turn on **Google Suggestions** for Google's public autocomplete predictions. Requests start after a 180 ms typing debounce and are cancelled when the query changes or the panel closes. Successful responses are kept only in memory for up to 5 minutes, with at most 64 query entries. Predictions arrive after local results and never block tab switching. Late responses cannot replace the query, reopen a closed panel, or silently move a selection the user has already navigated.
 
@@ -81,7 +82,7 @@ See [Safari search research](SAFARI_SEARCH.md) for the documented Safari behavio
 
 Tab Scout keeps an indexed tab snapshot in memory. Typing filters that local index; it does not ask Safari for a new inventory on every keystroke.
 
-A snapshot is fresh for 5 seconds. A usable snapshot appears immediately when the panel opens, while an older snapshot refreshes in the background. Multiple refresh requests share one inventory read. Tab Scout also warms the snapshot when Safari becomes active and refreshes periodically while Safari remains active after Safari access has been established.
+A usable snapshot appears immediately when the panel opens, and each opening refreshes it in the background so the previous-tab row reflects tab switches made directly in Safari. Background warming treats a snapshot as fresh for 5 seconds. Enter pressed before the first tab list arrives runs once it does. Multiple refresh requests share one inventory read. Tab Scout also warms the snapshot when Safari becomes active and refreshes periodically while Safari remains active after Safari access has been established.
 
 Snapshots older than 2 minutes are not reused when reopening the panel. The tab cache is cleared when Safari quits and does not survive a Tab Scout restart. Cached results can briefly reflect a tab that was renamed, moved, or closed; selecting a tab checks its identity again rather than blindly selecting a stale index. A failed refresh does not silently invent results.
 
@@ -127,6 +128,12 @@ For visual testing without Safari access or permission requests:
 
 ```sh
 open -n "../Tab Scout.app" --args --preview
+```
+
+Preview takes keyboard focus. To check the layout without that, render the preview palette to an image from an invisible window:
+
+```sh
+"$PWD/.build/native-output/Tab Scout.app/Contents/MacOS/TabScout" --preview --snapshot /tmp/tab-scout.png
 ```
 
 Quit preview before launching the normal app. Core live behavior, permissions, rendering, and cold/warm performance checks are documented in [Tests/MANUAL_TESTS.md](../Tests/MANUAL_TESTS.md). The suggestions/history acceptance checklist is in [docs/MANUAL_QA.md](MANUAL_QA.md).

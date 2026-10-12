@@ -2,6 +2,7 @@ import Foundation
 
 struct TabSnapshot {
     let tabs: [SafariTab]
+    let active: SafariTab?
     let index: TabSearchIndex
     let fetchedAt: Date
     let revision: Int
@@ -9,7 +10,7 @@ struct TabSnapshot {
 
 // Main-thread owned. A stale snapshot can be displayed while one shared refresh runs.
 final class TabStore {
-    typealias Loader = (@escaping (Result<[SafariTab], Error>) -> Void) -> Void
+    typealias Loader = (@escaping (Result<TabInventory, Error>) -> Void) -> Void
     private let loader: Loader
     private let now: () -> Date
     private let freshFor: TimeInterval
@@ -20,6 +21,8 @@ final class TabStore {
     private var waiters: [(Result<TabSnapshot, Error>) -> Void] = []
     private(set) var isRefreshing = false
     var onPermissionDenied: (() -> Void)?
+    /// Called once per accepted Safari read, including background prewarms.
+    var onSnapshot: ((TabSnapshot) -> Void)?
 
     init(freshFor: TimeInterval = 5, retainFor: TimeInterval = 120,
          now: @escaping () -> Date = Date.init, loader: @escaping Loader) {
@@ -50,6 +53,19 @@ final class TabStore {
         refresh()
     }
 
+    /// Records a change Tab Scout made itself. Reads already in flight may predate it and are discarded,
+    /// but the cached tabs stay usable with the new on-screen tab (nil when unknown, such as a new tab),
+    /// so reopening right away needs no Safari read. The next prewarm still refreshes them.
+    func noteActivation(_ active: SafariTab?) {
+        guard let snapshot else { return invalidate() }
+        generation += 1
+        waiters.removeAll()
+        isRefreshing = false
+        revision += 1
+        cached = TabSnapshot(tabs: snapshot.tabs, active: active, index: snapshot.index,
+                             fetchedAt: min(snapshot.fetchedAt, now().addingTimeInterval(-freshFor)), revision: revision)
+    }
+
     func invalidate() {
         generation += 1
         cached = nil
@@ -64,12 +80,14 @@ final class TabStore {
         loader { [weak self] result in
             guard let self, ticket == self.generation else { return }
             self.isRefreshing = false
-            let response = result.map { tabs in
+            let response = result.map { inventory in
                 self.revision += 1
-                let snapshot = TabSnapshot(tabs: tabs, index: TabSearchIndex(tabs), fetchedAt: self.now(), revision: self.revision)
+                let snapshot = TabSnapshot(tabs: inventory.tabs, active: inventory.active, index: TabSearchIndex(inventory.tabs),
+                                           fetchedAt: self.now(), revision: self.revision)
                 self.cached = snapshot
                 return snapshot
             }
+            if case .success(let snapshot) = response { self.onSnapshot?(snapshot) }
             if case .failure(BridgeError.permission) = response {
                 self.cached = nil
                 self.onPermissionDenied?()

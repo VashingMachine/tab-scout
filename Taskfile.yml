@@ -1,0 +1,35 @@
+version: '3'
+
+tasks:
+  default:
+    cmds:
+      - '{{.TASK_EXE}} --list'
+    silent: true
+
+  test:
+    desc: Run the automated test suite
+    cmds:
+      - bash test.sh
+
+  build:
+    desc: Build Tab Scout.app into .build/native-output without touching the installed copy
+    env:
+      TAB_SCOUT_OUTPUT_DIR: '{{.ROOT_DIR}}/.build/native-output'
+    cmds:
+      - bash build.sh
+
+  deploy:
+    desc: Test, build, replace the installed Tab Scout and relaunch it
+    cmds:
+      - task: test
+      - bash deploy.sh
+
+  deploy:quick:
+    desc: Build, replace the installed Tab Scout and relaunch it, skipping tests
+    cmds:
+      - bash deploy.sh
+
+  deploy:plan:
+    desc: Show where deploy would install and how it would sign, without changing anything
+    cmds:
+      - bash deploy.sh --dry-run

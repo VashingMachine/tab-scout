@@ -20,7 +20,7 @@ struct SearchResultsTests {
         let defaultPage = SearchRow.newTab(.defaultPage)
         precondition(defaultPage.destination == .defaultPage, "The empty-query row exposes a distinct native new-tab destination")
         precondition(defaultPage.isSelectable, "The native new-tab action remains actionable")
-        precondition(SearchRow.retainedSelection(of: defaultPage, in: [defaultPage, .section(.tabs), .tab(moved)]) == 0, "A refreshed tab inventory retains the selected native new-tab action")
+        precondition(SearchRow.retainedSelection(of: defaultPage, in: [defaultPage, .section(.recent), .tab(moved)]) == 0, "A refreshed tab inventory retains the selected native new-tab action")
         precondition(SearchRow.retainedSelection(of: defaultPage, in: [.newTab(.search("changed"))]) == nil, "Typing a search does not retain the native new-tab action")
         precondition(SearchRow.retainedSelection(of: command, in: [defaultPage]) == nil, "Clearing a query does not retain the old search action")
         print("Passed 13 selection-retention checks")

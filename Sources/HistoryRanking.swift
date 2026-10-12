@@ -98,15 +98,17 @@ struct OpenTabLookup {
 enum SearchResultBuilder {
     static func rows(query: String, matches: [TabSearchIndex.Match], allTabs: [SafariTab],
                      history: HistorySearchIndex, suggestions: [String], now: Date,
-                     openTabs: OpenTabLookup? = nil) -> [SearchRow] {
+                     openTabs: OpenTabLookup? = nil, previousTab: SafariTab? = nil,
+                     activeTab: SafariTab? = nil) -> [SearchRow] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         var rows: [SearchRow] = []
-        let tabs = history.rankTabs(matches, now: now)
+        // The tab on screen is never a destination. With empty input, Enter returns to the previously
+        // viewed tab, the other open tabs follow it, and the new-tab action comes after all of them.
+        let previous = query.isEmpty ? previousTab : nil
+        let tabs = history.rankTabs(matches, now: now).filter { $0 != previous && $0 != activeTab }
+        if let previous { rows.append(.previousTab(previous)) }
+        rows += tabs.map(SearchRow.tab)
         if query.isEmpty { rows.append(.newTab(.defaultPage)) }
-        if !tabs.isEmpty {
-            rows.append(.section(.tabs))
-            rows += tabs.map(SearchRow.tab)
-        }
         let recent = history.recentSearches(query: query, now: now)
         if !recent.isEmpty {
             rows.append(.section(.recent))
@@ -117,7 +119,7 @@ enum SearchResultBuilder {
         let browsing = history.browsingMatches(query: query, now: now).compactMap { visit -> SearchRow? in
             guard let key = HistoryIdentity.url(visit.url) else { return nil }
             guard seenURLs.insert(key).inserted else { return nil }
-            if let open = openByURL.tab(for: key) { return .tab(open) }
+            if let open = openByURL.tab(for: key) { return open == activeTab ? nil : .tab(open) }
             return .history(visit)
         }
         if !browsing.isEmpty {
