@@ -18,6 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private lazy var favicons = FaviconStore()
     private lazy var historyStore = HistoryStore()
     private lazy var learning = LearningStore(directory: preview ? nil : LearningStore.defaultDirectory)
+    private lazy var wordNeighbors = WordNeighbors()
+    private var similarWords: [SafariTab: String] = [:]
     private lazy var googleSuggestions = GoogleSuggestionsService()
     private let historyQueue = DispatchQueue(label: "local.tabscout.history-index", qos: .userInitiated)
     private var historyIndex = HistorySearchIndex(.empty)
@@ -613,9 +615,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let matches = searchIndex.matches(query: query)
         let now = Date()
+        let similar = SemanticSearch.matches(query, in: searchIndex, textMatches: matches.count) { self.wordNeighbors($0) }
+        similarWords = Dictionary(similar.map { ($0.tab, $0.word) }, uniquingKeysWith: { first, _ in first })
         let context = RankingContext(focusOrder: focusOrder, affinity: learning.state.affinity.strengths(for: query, now: now),
                                      dwell: tabDwell, related: relatedTabs.mapValues(\.strength),
-                                     transition: tabTransition, timeOfDay: tabTimeOfDay)
+                                     transition: tabTransition, timeOfDay: tabTimeOfDay,
+                                     semantic: Dictionary(similar.map { ($0.tab, $0.strength) }, uniquingKeysWith: max))
         rows = SearchResultBuilder.rows(query: query, matches: matches, allTabs: tabs, history: historyIndex,
                                         suggestions: remoteSuggestions, now: now, openTabs: openTabs,
                                         previousTab: previousTab, activeTab: activeTab, context: context)
@@ -668,6 +673,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             var location = (tab.url.isEmpty ? "Start Page" : tab.url) + " | Window \(windowNumbers[tab.windowID] ?? 1)"
             if let related = relatedTabs[tab], related.strength >= RelatedTabs.named {
                 location = "Related: \(related.shared.label) | " + location
+            } else if let word = similarWords[tab] {
+                location = "Similar: \(word) | " + location
             }
             cell.configure(title: tab.displayTitle,
                            detail: rows[row] == .previousTab(tab) ? "Previous tab | " + location : location,
@@ -834,6 +841,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         relatedTabs = [:]
         tabTransition = [:]
         tabTimeOfDay = [:]
+        similarWords = [:]
         rows = []
         searchIndex = TabSearchIndex([])
         openTabs = OpenTabLookup([])

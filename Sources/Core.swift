@@ -116,8 +116,39 @@ struct TabSearchIndex {
         entries = tabs.map { Entry(tab: $0, fields: TextFields(title: $0.displayTitle, url: $0.url)) }
     }
 
+    struct SemanticMatch: Equatable {
+        let tab: SafariTab
+        let strength: Double
+        /// The title word that made the connection.
+        let word: String
+    }
+
     func results(query: String) -> [SafariTab] {
         matches(query: query).map(\.tab)
+    }
+
+    /// Tabs whose title contains, for at least one typed word, a word of similar meaning from `expansions`,
+    /// while every other typed word is found as typed or widened too. Strongest first.
+    func semanticMatches(_ query: TextQuery, expansions: [String: [Neighbor]]) -> [SemanticMatch] {
+        entries.enumerated().compactMap { offset, entry -> (Int, SemanticMatch)? in
+            var weakest = 1.0
+            var bridge: String?
+            for token in query.tokens {
+                if entry.fields.text.contains(token) { continue }
+                // A similar word counts as a whole title word or the start of one: "recipe" finds "recipes".
+                let found = expansions[token]?.compactMap { neighbor -> (Double, String)? in
+                    guard let word = entry.fields.words.first(where: {
+                        $0 == neighbor.word || (neighbor.word.count >= 4 && $0.hasPrefix(neighbor.word))
+                    }) else { return nil }
+                    return (neighbor.strength, word)
+                }.max { $0.0 < $1.0 }
+                guard let found else { return nil }
+                weakest = min(weakest, found.0)
+                bridge = bridge ?? found.1
+            }
+            guard let bridge else { return nil }
+            return (offset, SemanticMatch(tab: entry.tab, strength: weakest, word: bridge))
+        }.sorted { $0.1.strength == $1.1.strength ? $0.0 < $1.0 : $0.1.strength > $1.1.strength }.map(\.1)
     }
 
     func matches(query: String) -> [Match] {
@@ -129,6 +160,13 @@ struct TabSearchIndex {
             return (score, offset, entry.tab)
         }.sorted { $0.0 == $1.0 ? $0.1 < $1.1 : $0.0 > $1.0 }.map { Match(tab: $0.2, relevance: $0.0) }
     }
+}
+
+/// A word with a similar meaning to a typed word, such as one from the system's word embedding.
+struct Neighbor: Equatable {
+    let word: String
+    /// Between 0 and 1.
+    let strength: Double
 }
 
 /// A normalized query, prepared once per keystroke.
