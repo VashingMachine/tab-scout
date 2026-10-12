@@ -3,7 +3,7 @@ import Foundation
 /// The signals that place an open tab in the results. Every value lies between 0 and 1;
 /// `lexical` is the text-match tier divided by 100 and is 0 for empty input.
 enum RankingSignal: Int, CaseIterable {
-    case lexical, usage, recency, affinity, dwell, related, transition, timeOfDay, semantic, content
+    case lexical, usage, recency, affinity, dwell, related, transition, timeOfDay, semantic, content, assistant
 
     var name: String { String(describing: self) }
 }
@@ -27,7 +27,7 @@ struct RankingWeights: Equatable {
 
     static let standard = RankingWeights(
         typed: weights([.lexical: 100, .usage: 4, .recency: 4, .affinity: 100, .dwell: 3, .related: 5,
-                        .transition: 3, .timeOfDay: 2, .semantic: 40, .content: 45]),
+                        .transition: 3, .timeOfDay: 2, .semantic: 40, .content: 45, .assistant: 200]),
         empty: weights([.usage: 4, .recency: 20, .dwell: 6, .related: 18, .transition: 10, .timeOfDay: 6]))
 
     static func weights(_ points: [RankingSignal: Double]) -> [Double] {
@@ -57,6 +57,8 @@ struct RankingContext {
     var semantic: [SafariTab: Double] = [:]
     /// Tabs whose page text contains the typed words, from `PageTextIndex`. They also rank below text matches.
     var content: [SafariTab: Double] = [:]
+    /// Tabs the on-device model picked for a "?" request, from `TabAssistant`: 1 for its first pick, less after.
+    var assistant: [SafariTab: Double] = [:]
     var weights = RankingWeights.standard
 }
 
@@ -89,7 +91,7 @@ enum TabRanker {
     static let listedAffinity = 0.2
 
     static func isConfident(_ features: RankingFeatures) -> Bool {
-        features[.lexical] >= confidentMatch || features[.affinity] >= confidentAffinity
+        features[.lexical] >= confidentMatch || features[.affinity] >= confidentAffinity || features[.assistant] > 0
     }
 
     /// Whether Enter should search or open the typed text instead of switching to the best tab.
@@ -97,6 +99,7 @@ enum TabRanker {
         guard let best, !query.isEmpty else { return false }
         if !isConfident(best.features) { return true }
         let learned = best.features[.affinity]
+        if best.features[.assistant] > 0 { return false }
         // Having chosen a new tab for this text before outweighs a weaker memory of any tab.
         if (context.affinity[QueryAffinity.newTab] ?? 0) >= max(confidentAffinity, learned + 0.01) { return true }
         // A question is only a tab when the page title holds the whole phrase or it was chosen for it before.
@@ -121,9 +124,10 @@ enum TabRanker {
             }.map { TabSearchIndex.Match(tab: $0, relevance: 0) }
             listed.formUnion(candidates.map(\.tab))
         }
-        if typed && !(context.semantic.isEmpty && context.content.isEmpty) {
-            candidates += allTabs.filter { !listed.contains($0) && (context.semantic[$0] != nil || context.content[$0] != nil) }
-                .map { TabSearchIndex.Match(tab: $0, relevance: 0) }
+        if typed && !(context.semantic.isEmpty && context.content.isEmpty && context.assistant.isEmpty) {
+            candidates += allTabs.filter {
+                !listed.contains($0) && (context.semantic[$0] != nil || context.content[$0] != nil || context.assistant[$0] != nil)
+            }.map { TabSearchIndex.Match(tab: $0, relevance: 0) }
         }
         let ranked = candidates.map { match -> RankedTab in
             var features = RankingFeatures()
@@ -136,6 +140,7 @@ enum TabRanker {
             features[.timeOfDay] = context.timeOfDay[match.tab] ?? 0
             features[.semantic] = context.semantic[match.tab] ?? 0
             features[.content] = context.content[match.tab] ?? 0
+            features[.assistant] = context.assistant[match.tab] ?? 0
             if !context.affinity.isEmpty {
                 features[.affinity] = HistoryIdentity.url(match.tab.url).flatMap { context.affinity[$0] } ?? 0
             }

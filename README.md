@@ -19,6 +19,7 @@ Tab Scout is a **native macOS menu-bar app**. Press **Cmd+T in Safari** to open 
 - Bring tabs about the same work as the current page forward and label them, such as the Jira ticket named by the pull request on screen. Ticket keys, pull and merge requests, repositories and Google document IDs in titles and addresses connect tabs.
 - Find tabs by meaning when few match the typed text: each typed English word is widened to similar words with the system's on-device word embedding, so "email" finds an inbox and "cooking" a recipe. These guesses are labeled with the connecting word and listed below text matches; Enter keeps searching the typed text.
 - Optionally search page text (off by default): pages you have viewed for a few seconds are read through Safari's scripting interface, so typing finds tabs that mention your words, with a snippet. Pages you have not viewed are not read, so sleeping tabs stay asleep.
+- Ask in plain language by starting with `?`, such as `?the pull request I was reviewing before lunch`. On Macs with Apple Intelligence, the on-device model picks tabs from their titles, sites and when you last viewed them; picks come first and are labeled. Requests are never sent to Google or anywhere else.
 - Learn habits: which site usually follows the one on screen, and which sites belong to this hour of a weekday or weekend. Habits nudge empty-input order and break ties between equally good matches; glances while flicking through tabs do not count.
 - Center the native palette on the focused Safari window when its geometry is available, with a screen-based fallback.
 
@@ -75,6 +76,7 @@ The app must remain running for Cmd+T search. The shortcut is captured only whil
 - Questions and phrases of four or more words search by default unless a tab title holds the whole phrase. Guesses from typos or initials are listed below the typed search, which stays the default.
 - With empty input, the other open tabs follow the previous tab and the New tab action comes after them; Cmd+Enter also opens a new tab. It uses Safari's native new-tab command and configured page, not a forced `about:blank` URL.
 - The tab you are on is never listed. When it is the only match, Enter opens a new tab with your query.
+- Start with `?` to ask Apple Intelligence for a tab in your own words. While it answers, the request is also matched as ordinary text, and Enter on the search row searches it without the `?`.
 - Escape or Cmd+T dismisses the palette without changing tabs.
 - The refresh button updates results. Preferences and permission checks are available from the menu bar.
 

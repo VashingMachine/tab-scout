@@ -15,7 +15,8 @@ BUILD_INFO="$(git -C "$SOURCE_DIR" describe --always --dirty 2>/dev/null || echo
 /usr/bin/iconutil -c icns "$WORK_DIR/TabScout.iconset" -o "$APP_DIR/Contents/Resources/TabScout.icns"
 /usr/bin/xcrun swiftc -swift-version 5 -O -target "$(uname -m)-apple-macosx13.0" \
     -module-cache-path "$WORK_DIR/ModuleCache" \
-    "$SOURCE_DIR"/Sources/*.swift -lsqlite3 -o "$APP_DIR/Contents/MacOS/TabScout"
+    "$SOURCE_DIR"/Sources/*.swift -lsqlite3 -Xlinker -weak_framework -Xlinker FoundationModels \
+    -o "$APP_DIR/Contents/MacOS/TabScout"
 # Interrupted codesign runs can leave a temporary executable that must not be sealed as a resource.
 if [[ -f "$APP_DIR/Contents/MacOS/TabScout.cstemp" ]]; then
     mv "$APP_DIR/Contents/MacOS/TabScout.cstemp" "$WORK_DIR/TabScout-interrupted.cstemp"

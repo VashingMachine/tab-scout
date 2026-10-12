@@ -26,6 +26,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var pageTextItems: [NSMenuItem] = []
     private var mentions: [SafariTab: String] = [:]
     private var pageTextEnabled: Bool { UserDefaults.standard.bool(forKey: "PageTextEnabled") }
+    private let assistant = TabAssistant()
+    private var assistantQuestion: String?
+    private var assistantPicks: [SafariTab] = []
+    private var assistantStatus: String?
+    private var assistantWork: DispatchWorkItem?
+    private var lastSeen: [PageTextIndex.Key: Date] = [:]
     private lazy var googleSuggestions = GoogleSuggestionsService()
     private let historyQueue = DispatchQueue(label: "local.tabscout.history-index", qos: .userInitiated)
     private var historyIndex = HistorySearchIndex(.empty)
@@ -316,6 +322,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     /// Reading time counts only while Safari is in front.
     private func observeFocus(_ tab: SafariTab) {
         focusHistory.focus(tab)
+        lastSeen[PageTextIndex.Key(tab)] = Date()
+        if lastSeen.count > 500 { lastSeen = lastSeen.filter { $0.value > Date().addingTimeInterval(-7 * 86_400) } }
         if safariActive, let visit = focusTracker.observe(tab, at: Date()) { recordVisit(visit) }
         // A page looked at for a few seconds has loaded; reading only viewed pages never wakes sleeping tabs.
         guard pageTextEnabled, !preview else { return }
@@ -499,6 +507,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         panel.alphaValue = 0
         panel.orderFrontRegardless()
         loadTabs()
+        // --query shows typed results; a moment of run loop lets the preview's "?" answer arrive.
+        if let index = CommandLine.arguments.firstIndex(of: "--query"), index + 1 < CommandLine.arguments.count {
+            searchField.stringValue = CommandLine.arguments[index + 1]
+            controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
+            RunLoop.main.run(until: Date().addingTimeInterval(1))
+        }
         guard let view = panel.contentView else { return NSApp.terminate(nil) }
         view.layoutSubtreeIfNeeded()
         table.layoutSubtreeIfNeeded()
@@ -592,12 +606,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     func controlTextDidChange(_ obj: Notification) {
         pendingActivation = nil
         remoteSuggestions = []
+        requestAssistant()
         if ready { updateRows() }
         requestSuggestions()
     }
 
+    /// Asks the on-device model about a "?" request once typing pauses.
+    private func requestAssistant() {
+        guard let question = AssistantPrompt.question(in: searchField.stringValue) else { return resetAssistant() }
+        guard question != assistantQuestion else { return }
+        resetAssistant()
+        assistantQuestion = question
+        guard question.count >= 3 else { return }
+        guard preview || TabAssistant.isAvailable else {
+            assistantStatus = "Apple Intelligence is not available on this Mac"
+            return
+        }
+        assistantStatus = "Asking Apple Intelligence..."
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.assistantQuestion == question else { return }
+            if self.preview {
+                self.assistantPicks = Array(self.tabs.filter { $0 != self.activeTab }.prefix(1))
+                self.assistantStatus = "Picked by Apple Intelligence"
+                return self.updateRows(preserveSelection: true)
+            }
+            let prompt = AssistantPrompt.prompt(question: question, tabs: self.tabs, recent: self.focusOrder, active: self.activeTab,
+                                                lastSeen: { self.lastSeen[PageTextIndex.Key($0)] }, now: Date())
+            let started = DispatchTime.now()
+            self.assistant.pick(prompt) { [weak self] result in
+                guard let self, self.assistantQuestion == question, self.panel.isVisible else { return }
+                Timing.log("assistant", since: started)
+                switch result {
+                case .success(let picks):
+                    self.assistantPicks = picks
+                    self.assistantStatus = picks.isEmpty ? "Apple Intelligence found no matching tab" : "Picked by Apple Intelligence"
+                case .failure:
+                    self.assistantStatus = "Apple Intelligence could not answer"
+                }
+                if self.ready { self.updateRows(preserveSelection: true) }
+            }
+        }
+        assistantWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+
+    private func resetAssistant() {
+        assistantWork?.cancel()
+        assistantWork = nil
+        assistant.cancel()
+        assistantQuestion = nil
+        assistantPicks = []
+        assistantStatus = nil
+    }
+
     private func requestSuggestions() {
         let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Requests for the on-device model are personal; they are never sent to Google.
+        guard AssistantPrompt.question(in: query) == nil else { googleSuggestions.cancel(); return }
         if preview {
             remoteSuggestions = ["swift programming", "swift documentation", "swift concurrency"].filter {
                 !query.isEmpty && $0.hasPrefix(query.lowercased())
@@ -650,7 +715,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         // A selection still on the top row follows the top row, so Enter keeps meaning the default result.
         let navigated = rows.indices.contains(table.selectedRow) && table.selectedRow != ResultNavigation.first(in: rows)
         let selected = preserveSelection && navigated ? rows[table.selectedRow] : nil
-        let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let typed = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A "?" request is also matched as ordinary text while the on-device model answers.
+        let question = AssistantPrompt.question(in: typed)
+        let query = question ?? typed
         let matches = searchIndex.matches(query: query)
         let now = Date()
         let similar = SemanticSearch.matches(query, in: searchIndex, textMatches: matches.count) { self.wordNeighbors($0) }
@@ -661,7 +729,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                                      dwell: tabDwell, related: relatedTabs.mapValues(\.strength),
                                      transition: tabTransition, timeOfDay: tabTimeOfDay,
                                      semantic: Dictionary(similar.map { ($0.tab, $0.strength) }, uniquingKeysWith: max),
-                                     content: mentioned.mapValues(\.strength))
+                                     content: mentioned.mapValues(\.strength),
+                                     assistant: question != nil && question == assistantQuestion
+                                        ? Dictionary(assistantPicks.enumerated().map { ($1, 1 - 0.1 * Double($0)) }, uniquingKeysWith: max) : [:])
         rows = SearchResultBuilder.rows(query: query, matches: matches, allTabs: tabs, history: historyIndex,
                                         suggestions: remoteSuggestions, now: now, openTabs: openTabs,
                                         previousTab: previousTab, activeTab: activeTab, context: context)
@@ -679,6 +749,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }.count
         let suggestionCount = rows.filter { if case .suggestion = $0 { return true }; return false }.count
         footer.stringValue = query.isEmpty ? "\(tabCount) in \(windowCount)" : "\(localCount) local \(localCount == 1 ? "result" : "results")" + (suggestionCount > 0 ? " | \(suggestionCount) Google suggestions" : "")
+        if question != nil { footer.stringValue = assistantStatus ?? "Type a request for Apple Intelligence" }
         footer.toolTip = preview ? nil : historyStore.localStorageError?.localizedDescription
     }
 
@@ -712,7 +783,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         case .previousTab(let tab), .tab(let tab):
             let image = preview ? nil : favicons.imageFor(url: tab.url)
             var location = (tab.url.isEmpty ? "Start Page" : tab.url) + " | Window \(windowNumbers[tab.windowID] ?? 1)"
-            if let snippet = mentions[tab] {
+            if assistantPicks.contains(tab), AssistantPrompt.question(in: searchField.stringValue) == assistantQuestion {
+                location = "Picked by Apple Intelligence | " + location
+            } else if let snippet = mentions[tab] {
                 location = "Mentions: \(snippet) | " + location
             } else if let related = relatedTabs[tab], related.strength >= RelatedTabs.named {
                 location = "Related: \(related.shared.label) | " + location
@@ -790,7 +863,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let typed = searchField.stringValue
         let offeredTabs = rows.contains { if case .tab = $0 { return true }; return false }
         let row: SearchRow
-        if forceNew { row = .newTab(NewTabDestination.from(searchField.stringValue)) }
+        if forceNew { row = .newTab(NewTabDestination.from(AssistantPrompt.question(in: typed) ?? typed)) }
         else {
             guard rows.indices.contains(table.selectedRow) else { return }
             row = rows[table.selectedRow]
@@ -867,6 +940,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         pendingActivation = nil
         if !preview { googleSuggestions.cancel() }
         remoteSuggestions = []
+        resetAssistant()
         panel.orderOut(nil)
         clearResults()
         searchField.stringValue = ""
