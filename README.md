@@ -18,6 +18,7 @@ Tab Scout is a **native macOS menu-bar app**. Press **Cmd+T in Safari** to open 
 - With empty input, list the other tabs in the order you last viewed them. Tab switches are followed as they happen through the keyboard permission's accessibility access, and how long you read each page breaks ties.
 - Bring tabs about the same work as the current page forward and label them, such as the Jira ticket named by the pull request on screen. Ticket keys, pull and merge requests, repositories and Google document IDs in titles and addresses connect tabs.
 - Find tabs by meaning when few match the typed text: each typed English word is widened to similar words with the system's on-device word embedding, so "email" finds an inbox and "cooking" a recipe. These guesses are labeled with the connecting word and listed below text matches; Enter keeps searching the typed text.
+- Optionally search page text (off by default): pages you have viewed for a few seconds are read through Safari's scripting interface, so typing finds tabs that mention your words, with a snippet. Pages you have not viewed are not read, so sleeping tabs stay asleep.
 - Learn habits: which site usually follows the one on screen, and which sites belong to this hour of a weekday or weekend. Habits nudge empty-input order and break ties between equally good matches; glances while flicking through tabs do not count.
 - Center the native palette on the focused Safari window when its geometry is available, with a screen-based fallback.
 
@@ -81,7 +82,7 @@ Open tabs come first without a heading; Recent Searches, History, and Google Sug
 
 ## Privacy And Limits
 
-Tab titles and URLs are read through Safari's local scripting interface. Tab Scout does not read webpage bodies or form fields. Tab snapshots, imported Safari history, and Google prediction caches stay in memory. Accepted choices and the bounded favicon cache are stored locally.
+Tab titles and URLs are read through Safari's local scripting interface. Tab Scout does not read webpage bodies or form fields unless **Search Page Text** is enabled; then it reads the visible text of pages you have viewed, keeps at most 30,000 characters of each in memory only, never saves or sends it, and drops it when a tab closes, the option is turned off, or history is cleared. Tab snapshots, imported Safari history, and Google prediction caches stay in memory. Accepted choices, what Tab Scout learned from them (typed text per page, reading time, site habits) and the bounded favicon cache are stored locally; Clear Tab Scout History removes them.
 
 Enabling Google Suggestions sends eligible typed search text to Google's public autocomplete endpoint before Enter. Requests use an ephemeral session without cookies, credentials, Safari's login session, or local history. Predictions are generic, not signed-in Google Account personalization. The undocumented endpoint is best-effort and may be unavailable. Submitted searches still use Safari's configured provider.
 

@@ -27,6 +27,18 @@ final class SafariBridge {
         execute(["active"], on: readQueue) { result in completion(result.flatMap { data in Result { try TabInventory.decodeActive(data) } }) }
     }
 
+    /// The visible text of `tab`, at most 30,000 characters. Fails as stale when the tab moved or navigated.
+    func text(of tab: SafariTab, completion: @escaping (Result<String, Error>) -> Void) {
+        execute(["text", String(tab.windowID), String(tab.index), tab.url], on: readQueue) { result in
+            completion(result.map { data in
+                // osascript ends its output with a newline.
+                var text = String(decoding: data, as: UTF8.self)
+                if text.hasSuffix("\n") { text.removeLast() }
+                return text
+            })
+        }
+    }
+
     func select(_ tab: SafariTab, completion: @escaping (Result<Data, Error>) -> Void) {
         execute(["switch", String(tab.windowID), String(tab.index), tab.url, tab.title], on: actionQueue, completion: completion)
     }

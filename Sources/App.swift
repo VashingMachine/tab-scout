@@ -20,6 +20,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private lazy var learning = LearningStore(directory: preview ? nil : LearningStore.defaultDirectory)
     private lazy var wordNeighbors = WordNeighbors()
     private var similarWords: [SafariTab: String] = [:]
+    private var pageText = PageTextIndex()
+    private var pageTextQueue: [SafariTab] = []
+    private var pageTextReading = false
+    private var pageTextItems: [NSMenuItem] = []
+    private var mentions: [SafariTab: String] = [:]
+    private var pageTextEnabled: Bool { UserDefaults.standard.bool(forKey: "PageTextEnabled") }
     private lazy var googleSuggestions = GoogleSuggestionsService()
     private let historyQueue = DispatchQueue(label: "local.tabscout.history-index", qos: .userInitiated)
     private var historyIndex = HistorySearchIndex(.empty)
@@ -245,6 +251,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         history.target = self
         history.state = safariHistoryEnabled ? .on : .off
         historyItems.append(history)
+        let text = menu.addItem(withTitle: "Search Page Text", action: #selector(togglePageText(_:)), keyEquivalent: "")
+        text.target = self
+        text.state = pageTextEnabled ? .on : .off
+        pageTextItems.append(text)
         let clear = menu.addItem(withTitle: "Clear Tab Scout History...", action: #selector(clearHistory(_:)), keyEquivalent: "")
         clear.target = self
     }
@@ -307,6 +317,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private func observeFocus(_ tab: SafariTab) {
         focusHistory.focus(tab)
         if safariActive, let visit = focusTracker.observe(tab, at: Date()) { recordVisit(visit) }
+        // A page looked at for a few seconds has loaded; reading only viewed pages never wakes sleeping tabs.
+        guard pageTextEnabled, !preview else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, let current = self.focusTracker.current,
+                  current.windowID == tab.windowID, current.url == tab.url else { return }
+            self.readPageText(current)
+        }
+    }
+
+    private func readPageText(_ tab: SafariTab) {
+        guard pageText.needsReading(tab, now: Date()), !pageTextQueue.contains(where: { PageTextIndex.Key($0) == PageTextIndex.Key(tab) }) else { return }
+        pageTextQueue.append(tab)
+        readNextPageText()
+    }
+
+    private func readNextPageText() {
+        guard pageTextEnabled, !pageTextReading, !pageTextQueue.isEmpty else { return }
+        let tab = pageTextQueue.removeFirst()
+        pageTextReading = true
+        bridge.text(of: tab) { [weak self] result in
+            guard let self else { return }
+            if self.pageTextEnabled, case .success(let text) = result { self.pageText.store(text, for: tab, at: Date()) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.pageTextReading = false
+                self.readNextPageText()
+            }
+        }
     }
 
     private func pauseFocus() {
@@ -516,6 +553,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 return strength > 0 ? (tab, strength) : nil
             }, uniquingKeysWith: max)
             relatedTabs = RelatedTabs.relations(to: snapshot.active, in: snapshot.tabs)
+            pageText.retain(snapshot.tabs)
             let habits = learning.state.habits
             let from = snapshot.active.flatMap { Habits.site($0.url) }
             tabTransition = [:]
@@ -617,10 +655,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let now = Date()
         let similar = SemanticSearch.matches(query, in: searchIndex, textMatches: matches.count) { self.wordNeighbors($0) }
         similarWords = Dictionary(similar.map { ($0.tab, $0.word) }, uniquingKeysWith: { first, _ in first })
+        let mentioned = pageTextEnabled ? pageText.matches(query, in: tabs) : [:]
+        mentions = mentioned.mapValues(\.snippet)
         let context = RankingContext(focusOrder: focusOrder, affinity: learning.state.affinity.strengths(for: query, now: now),
                                      dwell: tabDwell, related: relatedTabs.mapValues(\.strength),
                                      transition: tabTransition, timeOfDay: tabTimeOfDay,
-                                     semantic: Dictionary(similar.map { ($0.tab, $0.strength) }, uniquingKeysWith: max))
+                                     semantic: Dictionary(similar.map { ($0.tab, $0.strength) }, uniquingKeysWith: max),
+                                     content: mentioned.mapValues(\.strength))
         rows = SearchResultBuilder.rows(query: query, matches: matches, allTabs: tabs, history: historyIndex,
                                         suggestions: remoteSuggestions, now: now, openTabs: openTabs,
                                         previousTab: previousTab, activeTab: activeTab, context: context)
@@ -671,7 +712,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         case .previousTab(let tab), .tab(let tab):
             let image = preview ? nil : favicons.imageFor(url: tab.url)
             var location = (tab.url.isEmpty ? "Start Page" : tab.url) + " | Window \(windowNumbers[tab.windowID] ?? 1)"
-            if let related = relatedTabs[tab], related.strength >= RelatedTabs.named {
+            if let snippet = mentions[tab] {
+                location = "Mentions: \(snippet) | " + location
+            } else if let related = relatedTabs[tab], related.strength >= RelatedTabs.named {
                 location = "Related: \(related.shared.label) | " + location
             } else if let word = similarWords[tab] {
                 location = "Similar: \(word) | " + location
@@ -842,6 +885,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         tabTransition = [:]
         tabTimeOfDay = [:]
         similarWords = [:]
+        mentions = [:]
         rows = []
         searchIndex = TabSearchIndex([])
         openTabs = OpenTabLookup([])
@@ -897,6 +941,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         reloadHistory()
     }
 
+    @objc private func togglePageText(_ sender: Any?) {
+        guard !preview else { return }
+        let enable = !pageTextEnabled
+        if enable {
+            let alert = NSAlert()
+            alert.messageText = "Search Page Text?"
+            alert.informativeText = "Tab Scout will read the visible text of Safari pages after you have looked at them for a few seconds, so typing finds tabs that mention your words. The text stays in memory on this Mac: it is never saved or sent, and is dropped when a tab closes or this option is turned off. Pages you have not viewed are not read."
+            alert.addButton(withTitle: "Enable")
+            alert.addButton(withTitle: "Cancel")
+            NSApp.activate(ignoringOtherApps: true)
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        UserDefaults.standard.set(enable, forKey: "PageTextEnabled")
+        pageTextItems.forEach { $0.state = enable ? .on : .off }
+        if enable {
+            if let current = focusTracker.current { readPageText(current) }
+        } else {
+            pageText.removeAll()
+            pageTextQueue.removeAll()
+        }
+    }
+
     @objc private func clearHistory(_ sender: Any?) {
         guard !preview else { return }
         let alert = NSAlert()
@@ -908,6 +974,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         historyStore.clearLocal()
         learning.clear()
+        pageText.removeAll()
         googleSuggestions.clearCache()
         remoteSuggestions = []
         reloadHistory()

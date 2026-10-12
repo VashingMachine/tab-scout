@@ -45,6 +45,25 @@ on run argv
         return my jsonText(my activeRow(windowID, tabIndex, tabTitle, tabURL))
     end if
 
+    -- The visible text of one tab, for the optional page text search. The URL check avoids
+    -- reading a page that replaced the expected one.
+    if operation is "text" then
+        set targetWindowID to (item 2 of argv) as integer
+        set targetIndex to (item 3 of argv) as integer
+        set targetURL to item 4 of argv
+        with timeout of 10 seconds
+            tell application "Safari"
+                if not (exists window id targetWindowID) then error "TAB_SCOUT_STALE"
+                set browserWindow to window id targetWindowID
+                if targetIndex > (count of tabs of browserWindow) then error "TAB_SCOUT_STALE"
+                set targetTab to tab targetIndex of browserWindow
+                if (URL of targetTab) is not targetURL then error "TAB_SCOUT_STALE"
+                set pageText to text of targetTab
+            end tell
+        end timeout
+        return my excerpt(pageText, 30000)
+    end if
+
     if operation is "switch" then
         set targetWindowID to (item 2 of argv) as integer
         set targetIndex to (item 3 of argv) as integer
@@ -189,6 +208,12 @@ on rowsFromSnapshot(windowID, tabTitles, tabURLs, currentIndex)
     end repeat
     return windowRows
 end rowsFromSnapshot
+
+on excerpt(pageText, limit)
+    if pageText is missing value then return ""
+    if (length of pageText) > limit then return text 1 thru limit of pageText
+    return pageText
+end excerpt
 
 on activeRow(windowID, tabIndex, tabTitle, tabURL)
     if tabTitle is missing value then set tabTitle to ""

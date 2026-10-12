@@ -27,7 +27,10 @@ on run argv
     set active to bridge's activeRow(7, 3, missing value, "https://example.org/B")
     my expect(active is {7, 3, "", "https://example.org/B"}, "The active tab row has no missing values")
     my expect((bridge's jsonText(active)) is "[7,3,\"\",\"https:\\/\\/example.org\\/B\"]", "The active tab serializes as one JSON row")
-    return "Passed 16 AppleScript snapshot checks"
+    my expect((bridge's excerpt(missing value, 5)) is "", "A tab without text gives empty text")
+    my expect((bridge's excerpt("abcdefgh", 5)) is "abcde", "Long page text is cut to the limit")
+    my expect((bridge's excerpt("abc", 5)) is "abc", "Short page text is kept whole")
+    return "Passed 19 AppleScript snapshot checks"
 end run
 
 on expect(condition, messageText)

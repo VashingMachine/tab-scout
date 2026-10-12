@@ -7,7 +7,8 @@ mkdir -p "$WORK_DIR"
 RANKING=("$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/History.swift" "$SOURCE_DIR/Sources/SearchResults.swift"
     "$SOURCE_DIR/Sources/HistoryRanking.swift" "$SOURCE_DIR/Sources/TabRanking.swift"
     "$SOURCE_DIR/Sources/QueryAffinity.swift" "$SOURCE_DIR/Sources/FocusTracking.swift"
-    "$SOURCE_DIR/Sources/RelatedTabs.swift" "$SOURCE_DIR/Sources/Habits.swift" "$SOURCE_DIR/Sources/SemanticSearch.swift")
+    "$SOURCE_DIR/Sources/RelatedTabs.swift" "$SOURCE_DIR/Sources/Habits.swift" "$SOURCE_DIR/Sources/SemanticSearch.swift"
+    "$SOURCE_DIR/Sources/PageText.swift")
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" \
     "$SOURCE_DIR/Tests/CoreTests.swift" -o "$WORK_DIR/CoreTests"
 "$WORK_DIR/CoreTests"
@@ -37,6 +38,9 @@ done
 /usr/bin/xcrun swiftc -swift-version 5 "${RANKING[@]}" "$SOURCE_DIR/Tests/SemanticSearchTests.swift" \
     -lsqlite3 -o "$WORK_DIR/SemanticSearchTests"
 "$WORK_DIR/SemanticSearchTests"
+/usr/bin/xcrun swiftc -swift-version 5 -O "${RANKING[@]}" "$SOURCE_DIR/Tests/PageTextTests.swift" \
+    -lsqlite3 -o "$WORK_DIR/PageTextTests"
+"$WORK_DIR/PageTextTests"
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/RelatedTabs.swift" "$SOURCE_DIR/Sources/Core.swift" \
     "$SOURCE_DIR/Tests/RelatedTabsTests.swift" -o "$WORK_DIR/RelatedTabsTests"
 "$WORK_DIR/RelatedTabsTests"

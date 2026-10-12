@@ -3,7 +3,7 @@ import Foundation
 /// The signals that place an open tab in the results. Every value lies between 0 and 1;
 /// `lexical` is the text-match tier divided by 100 and is 0 for empty input.
 enum RankingSignal: Int, CaseIterable {
-    case lexical, usage, recency, affinity, dwell, related, transition, timeOfDay, semantic
+    case lexical, usage, recency, affinity, dwell, related, transition, timeOfDay, semantic, content
 
     var name: String { String(describing: self) }
 }
@@ -27,7 +27,7 @@ struct RankingWeights: Equatable {
 
     static let standard = RankingWeights(
         typed: weights([.lexical: 100, .usage: 4, .recency: 4, .affinity: 100, .dwell: 3, .related: 5,
-                        .transition: 3, .timeOfDay: 2, .semantic: 40]),
+                        .transition: 3, .timeOfDay: 2, .semantic: 40, .content: 45]),
         empty: weights([.usage: 4, .recency: 20, .dwell: 6, .related: 18, .transition: 10, .timeOfDay: 6]))
 
     static func weights(_ points: [RankingSignal: Double]) -> [Double] {
@@ -55,6 +55,8 @@ struct RankingContext {
     var timeOfDay: [SafariTab: Double] = [:]
     /// Tabs found by meaning rather than text, from `SemanticSearch`. They rank below every text match.
     var semantic: [SafariTab: Double] = [:]
+    /// Tabs whose page text contains the typed words, from `PageTextIndex`. They also rank below text matches.
+    var content: [SafariTab: Double] = [:]
     var weights = RankingWeights.standard
 }
 
@@ -119,8 +121,8 @@ enum TabRanker {
             }.map { TabSearchIndex.Match(tab: $0, relevance: 0) }
             listed.formUnion(candidates.map(\.tab))
         }
-        if typed && !context.semantic.isEmpty {
-            candidates += allTabs.filter { !listed.contains($0) && context.semantic[$0] != nil }
+        if typed && !(context.semantic.isEmpty && context.content.isEmpty) {
+            candidates += allTabs.filter { !listed.contains($0) && (context.semantic[$0] != nil || context.content[$0] != nil) }
                 .map { TabSearchIndex.Match(tab: $0, relevance: 0) }
         }
         let ranked = candidates.map { match -> RankedTab in
@@ -133,6 +135,7 @@ enum TabRanker {
             features[.transition] = context.transition[match.tab] ?? 0
             features[.timeOfDay] = context.timeOfDay[match.tab] ?? 0
             features[.semantic] = context.semantic[match.tab] ?? 0
+            features[.content] = context.content[match.tab] ?? 0
             if !context.affinity.isEmpty {
                 features[.affinity] = HistoryIdentity.url(match.tab.url).flatMap { context.affinity[$0] } ?? 0
             }
