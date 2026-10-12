@@ -61,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var focusHistory = TabFocusHistory()
     private var activeTab: SafariTab?
     private var previousTab: SafariTab?
+    private var focusOrder: [SafariTab] = []
     private var rows: [SearchRow] = []
     private var requestID = 0
     private var loading = false
@@ -440,6 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             openTabs = OpenTabLookup(snapshot.tabs)
             activeTab = snapshot.active
             previousTab = focusHistory.previous(active: snapshot.active, in: snapshot.tabs)
+            focusOrder = focusHistory.order(in: snapshot.tabs)
             windowNumbers = [:]
             for tab in tabs where windowNumbers[tab.windowID] == nil { windowNumbers[tab.windowID] = windowNumbers.count + 1 }
             ready = true
@@ -531,7 +533,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let matches = searchIndex.matches(query: query)
         rows = SearchResultBuilder.rows(query: query, matches: matches, allTabs: tabs, history: historyIndex,
                                         suggestions: remoteSuggestions, now: Date(), openTabs: openTabs,
-                                        previousTab: previousTab, activeTab: activeTab)
+                                        previousTab: previousTab, activeTab: activeTab,
+                                        context: RankingContext(focusOrder: focusOrder))
         table.reloadData()
         if let row = selected.flatMap({ SearchRow.retainedSelection(of: $0, in: rows) }) ?? ResultNavigation.first(in: rows) {
             table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
@@ -729,6 +732,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         tabs = []
         activeTab = nil
         previousTab = nil
+        focusOrder = []
         rows = []
         searchIndex = TabSearchIndex([])
         openTabs = OpenTabLookup([])

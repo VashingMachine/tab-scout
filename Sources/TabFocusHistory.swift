@@ -23,6 +23,12 @@ struct TabFocusHistory {
         return nil
     }
 
+    /// Every remembered tab that is still open, as it appears in `openTabs`, most recently viewed first.
+    func order(in openTabs: [SafariTab]) -> [SafariTab] {
+        var seen = Set<SafariTab>()
+        return tabs.compactMap { Self.resolve($0, in: openTabs) }.filter { seen.insert($0).inserted }
+    }
+
     private static func resolve(_ entry: SafariTab, in openTabs: [SafariTab]) -> SafariTab? {
         // A title can change in the background (unread counts, timers); a URL change means the tab navigated away.
         let candidates = openTabs.filter { $0.windowID == entry.windowID && $0.url == entry.url }

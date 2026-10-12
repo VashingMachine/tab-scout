@@ -40,10 +40,8 @@ struct HistorySearchIndex {
     }
 
     func rankTabs(_ matches: [TabSearchIndex.Match], now: Date) -> [SafariTab] {
-        matches.enumerated().map { ($0.offset, $0.element, usageScore(url: $0.element.tab.url, now: now)) }.sorted { a, b in
-            if a.1.relevance != b.1.relevance { return a.1.relevance > b.1.relevance }
-            return a.2 == b.2 ? a.0 < b.0 : a.2 > b.2
-        }.map { $0.1.tab }
+        TabRanker.rank(typed: matches.contains { $0.relevance > 0 }, matches: matches,
+                       history: self, context: RankingContext(), now: now).map(\.tab)
     }
 
     func recentSearches(query: String, now: Date) -> [PastSearch] {
@@ -76,7 +74,7 @@ struct HistorySearchIndex {
         }.prefix(8).map { $0.3 }
     }
 
-    private func usageScore(url: String, now: Date) -> Double {
+    func usageScore(url: String, now: Date) -> Double {
         guard let key = HistoryIdentity.url(url), let visit = usage[key] else { return 0 }
         return HistoryRelevance.score(lastUsed: visit.lastVisited, count: visit.visitCount, now: now)
     }
@@ -99,13 +97,16 @@ enum SearchResultBuilder {
     static func rows(query: String, matches: [TabSearchIndex.Match], allTabs: [SafariTab],
                      history: HistorySearchIndex, suggestions: [String], now: Date,
                      openTabs: OpenTabLookup? = nil, previousTab: SafariTab? = nil,
-                     activeTab: SafariTab? = nil) -> [SearchRow] {
+                     activeTab: SafariTab? = nil, context: RankingContext = RankingContext()) -> [SearchRow] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         var rows: [SearchRow] = []
         // The tab on screen is never a destination. With empty input, Enter returns to the previously
         // viewed tab, the other open tabs follow it, and the new-tab action comes after all of them.
         let previous = query.isEmpty ? previousTab : nil
-        let tabs = history.rankTabs(matches, now: now).filter { $0 != previous && $0 != activeTab }
+        var context = context
+        context.activeTab = activeTab
+        let tabs = TabRanker.rank(typed: !query.isEmpty, matches: matches, history: history, context: context, now: now)
+            .map(\.tab).filter { $0 != previous && $0 != activeTab }
         if let previous { rows.append(.previousTab(previous)) }
         rows += tabs.map(SearchRow.tab)
         if query.isEmpty { rows.append(.newTab(.defaultPage)) }

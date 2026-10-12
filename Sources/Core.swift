@@ -12,7 +12,7 @@ enum Timing {
     }
 }
 
-struct SafariTab: Equatable {
+struct SafariTab: Hashable {
     let windowID: Int
     let index: Int
     let title: String

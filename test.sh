@@ -3,6 +3,9 @@ set -euo pipefail
 SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORK_DIR="${TAB_SCOUT_WORK_DIR:-$SOURCE_DIR/.build}/tests"
 mkdir -p "$WORK_DIR"
+# Everything that decides which results appear and in what order.
+RANKING=("$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/History.swift" "$SOURCE_DIR/Sources/SearchResults.swift"
+    "$SOURCE_DIR/Sources/HistoryRanking.swift" "$SOURCE_DIR/Sources/TabRanking.swift")
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" \
     "$SOURCE_DIR/Tests/CoreTests.swift" -o "$WORK_DIR/CoreTests"
 "$WORK_DIR/CoreTests"
@@ -18,9 +21,7 @@ done
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/History.swift" \
     "$SOURCE_DIR/Tests/HistoryTests.swift" -lsqlite3 -o "$WORK_DIR/HistoryTests"
 "$WORK_DIR/HistoryTests"
-/usr/bin/xcrun swiftc -swift-version 5 -O "$SOURCE_DIR/Sources/Core.swift" \
-    "$SOURCE_DIR/Sources/History.swift" "$SOURCE_DIR/Sources/SearchResults.swift" \
-    "$SOURCE_DIR/Sources/HistoryRanking.swift" "$SOURCE_DIR/Tests/HistoryRankingTests.swift" \
+/usr/bin/xcrun swiftc -swift-version 5 -O "${RANKING[@]}" "$SOURCE_DIR/Tests/HistoryRankingTests.swift" \
     -lsqlite3 -o "$WORK_DIR/HistoryRankingTests"
 "$WORK_DIR/HistoryRankingTests"
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" \
@@ -32,9 +33,7 @@ done
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/PanelPlacement.swift" \
     "$SOURCE_DIR/Tests/PanelPlacementTests.swift" -o "$WORK_DIR/PanelPlacementTests"
 "$WORK_DIR/PanelPlacementTests"
-/usr/bin/xcrun swiftc -swift-version 5 -O "$SOURCE_DIR/Sources/Core.swift" \
-    "$SOURCE_DIR/Sources/History.swift" "$SOURCE_DIR/Sources/SearchResults.swift" \
-    "$SOURCE_DIR/Sources/HistoryRanking.swift" "$SOURCE_DIR/Tests/HistoryPerformanceTests.swift" \
+/usr/bin/xcrun swiftc -swift-version 5 -O "${RANKING[@]}" "$SOURCE_DIR/Tests/HistoryPerformanceTests.swift" \
     -lsqlite3 -o "$WORK_DIR/HistoryPerformanceTests"
 "$WORK_DIR/HistoryPerformanceTests"
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/GoogleSuggestions.swift" \

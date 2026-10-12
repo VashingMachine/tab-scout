@@ -11,6 +11,7 @@ struct HistoryRankingTests {
         historyRanking()
         resultComposition()
         previousTab()
+        recentlyViewed()
         currentTab()
         queryIdentity()
         navigation()
@@ -40,11 +41,12 @@ struct HistoryRankingTests {
 
     static func rows(_ query: String, tabs: [SafariTab] = [], visits: [HistoryVisit] = [],
                      searches: [PastSearch] = [], suggestions: [String] = [], previous: SafariTab? = nil,
-                     active: SafariTab? = nil) -> [SearchRow] {
+                     active: SafariTab? = nil, context: RankingContext = RankingContext()) -> [SearchRow] {
         SearchResultBuilder.rows(query: query, matches: TabSearchIndex(tabs).matches(query: query),
                                  allTabs: tabs,
                                  history: HistorySearchIndex(HistorySnapshot(visits: visits, searches: searches)),
-                                 suggestions: suggestions, now: now, previousTab: previous, activeTab: active)
+                                 suggestions: suggestions, now: now, previousTab: previous, activeTab: active,
+                                 context: context)
     }
 
     static func displayedTabs(_ rows: [SearchRow]) -> [SafariTab] {
@@ -317,6 +319,33 @@ struct HistoryRankingTests {
                "Without a previous tab the open tabs still come first and the new-tab action last")
         expect(rows("", tabs: [current], searches: [search("recent search")], active: current).first == .newTab(.defaultPage),
                "With only the current tab open, Enter opens a new tab")
+    }
+
+    static func recentlyViewed() {
+        let current = tab("Current", "https://example.com/current")
+        let a = tab("Alpha notes", "https://example.com/a", index: 2)
+        let b = tab("Beta notes", "https://example.com/b", index: 3)
+        let c = tab("Gamma notes", "https://example.com/c", index: 4)
+        let d = tab("Delta notes", "https://example.com/d", index: 5)
+        let inventory = [current, a, b, c, d]
+        let viewed = RankingContext(focusOrder: [current, c, a, d])
+        let empty = rows("", tabs: inventory, previous: c, active: current, context: viewed)
+        expect(empty.prefix(4) == [.previousTab(c), .tab(a), .tab(d), .tab(b)],
+               "Empty input lists the other tabs most recently viewed first, never-viewed tabs last")
+        expect(displayedTabs(rows("", tabs: inventory, visits: [visit(b.title, b.url, count: 100_000)],
+                                  previous: c, active: current, context: viewed)).first == a,
+               "Having just viewed a tab outweighs heavy history for empty input")
+        expect(displayedTabs(rows("notes", tabs: inventory, active: current, context: viewed)) == [c, a, d, b],
+               "Among equally good matches the most recently viewed comes first")
+        let exact = tab("notes", "https://example.com/exact", index: 6)
+        expect(displayedTabs(rows("notes", tabs: inventory + [exact], active: current, context: viewed)).first == exact,
+               "Recency cannot lift a weaker match over a much better one")
+        expect(TabRanker.recency(rank: 0) == 1 && TabRanker.recency(rank: 1) < 1 && TabRanker.recency(rank: 40) < 0.001,
+               "Recency fades with every tab switch")
+        var features = RankingFeatures()
+        features[.usage] = 7
+        features[.recency] = -.infinity
+        expect(features[.usage] == 1 && features[.recency] == 0, "Signals are clamped to the unit range")
     }
 
     static func currentTab() {

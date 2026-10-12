@@ -9,6 +9,7 @@ struct TabFocusHistoryTests {
         manualSwitches()
         changingTabs()
         bounds()
+        ordering()
         print("Passed \(checks) tab focus history checks")
     }
 
@@ -90,5 +91,22 @@ struct TabFocusHistoryTests {
         for item in tabs { history.focus(item) }
         expect(history.tabs == Array(tabs.suffix(3).reversed()), "The history keeps only the most recent tabs")
         expect(history.previous(active: tabs[4], in: tabs) == tabs[3], "Bounding keeps the latest previous tab")
+    }
+
+    static func ordering() {
+        let a = tab("A", "https://example.com/a")
+        let b = tab("B", "https://example.com/b", index: 2)
+        let c = tab("C", "https://example.com/c", index: 3)
+        let d = tab("D", "https://example.com/d", index: 4)
+        var history = TabFocusHistory()
+        expect(history.order(in: [a, b, c]).isEmpty, "Nothing viewed yet means no recency order")
+        for item in [a, b, c, b] { history.focus(item) }
+        expect(history.order(in: [a, b, c, d]) == [b, c, a], "Open tabs are listed most recently viewed first, never twice")
+        expect(history.order(in: [a, c, d]) == [c, a], "Closed tabs drop out of the order")
+        let retitled = tab("C (1)", c.url, index: 3)
+        expect(history.order(in: [a, b, retitled]) == [b, retitled, a], "A retitled tab keeps its place, as it appears now")
+        history.focus(retitled)
+        expect(history.order(in: [a, b, retitled]) == [retitled, b, a],
+               "A stale entry and a fresh one for the same tab collapse into one position")
     }
 }
