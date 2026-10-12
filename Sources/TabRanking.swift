@@ -53,6 +53,20 @@ struct RankedTab: Equatable {
     let score: Double
 }
 
+enum QueryIntent {
+    private static let questionWords: Set<String> = [
+        "how", "what", "why", "when", "where", "who", "which", "is", "are", "can", "does", "do", "should",
+        "could", "would", "will", "jak", "co", "czy", "dlaczego", "kiedy", "gdzie", "kto", "ile", "ktory", "ktora"
+    ]
+
+    /// Questions and phrases of four or more words read as something to search for, not a tab to find.
+    static func isQuestion(_ query: String) -> Bool {
+        let words = HistoryIdentity.query(query).split(separator: " ")
+        guard words.count >= 2 else { return false }
+        return query.hasSuffix("?") || words.count >= 4 || questionWords.contains(String(words[0]))
+    }
+}
+
 enum TabRanker {
     /// The weakest match that can be the Enter default: every query word found as typed.
     static let confidentMatch = 0.6
@@ -63,6 +77,17 @@ enum TabRanker {
 
     static func isConfident(_ features: RankingFeatures) -> Bool {
         features[.lexical] >= confidentMatch || features[.affinity] >= confidentAffinity
+    }
+
+    /// Whether Enter should search or open the typed text instead of switching to the best tab.
+    static func prefersTyped(query: String, best: RankedTab?, context: RankingContext) -> Bool {
+        guard let best, !query.isEmpty else { return false }
+        if !isConfident(best.features) { return true }
+        let learned = best.features[.affinity]
+        // Having chosen a new tab for this text before outweighs a weaker memory of any tab.
+        if (context.affinity[QueryAffinity.newTab] ?? 0) >= max(confidentAffinity, learned + 0.01) { return true }
+        // A question is only a tab when the page title holds the whole phrase or it was chosen for it before.
+        return QueryIntent.isQuestion(query) && best.features[.lexical] < 0.8 && learned < confidentAffinity
     }
 
     /// A tab viewed `rank` switches ago; the previous tab has rank 0.

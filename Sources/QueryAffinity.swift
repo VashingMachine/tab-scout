@@ -5,14 +5,14 @@ import Foundation
 struct QueryAffinity: Codable, Equatable {
     struct Choice: Codable, Equatable {
         let input: String
-        /// A normalized page URL, or `QueryAffinity.search` for choosing to search the typed text.
+        /// A normalized page URL, or `QueryAffinity.newTab`.
         let target: String
         var weight: Double
         var lastUsed: Date
     }
 
-    /// The target recorded when typed text was searched although open tabs were offered first.
-    static let search = "tabscout:search"
+    /// The target recorded when typed text was searched or opened in a new tab although open tabs were offered.
+    static let newTab = "tabscout:new-tab"
     static let limit = 500
     static let halfLife: TimeInterval = 30 * 24 * 60 * 60
 

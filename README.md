@@ -6,7 +6,7 @@ Tab Scout is a **native macOS menu-bar app**. Press **Cmd+T in Safari** to open 
 
 ## Features
 
-- Search tab titles and URLs with case-insensitive, diacritic-insensitive multiword matching.
+- Search tab titles and URLs with case-insensitive, diacritic-insensitive multiword matching. Matches at the start of a word rank first; the initials of title words (`gh` for GitHub, `pr` for a pull request) and one typo in longer words also find tabs.
 - Switch to an existing tab instead of creating a duplicate.
 - Offer the previously viewed tab first, so Cmd+T, Enter flips between your two most recent tabs.
 - Open an address or search using Safari's configured search engine.
@@ -14,6 +14,8 @@ Tab Scout is a **native macOS menu-bar app**. Press **Cmd+T in Safari** to open 
 - Load favicons asynchronously and cache them across app restarts.
 - Include optional Google autocomplete predictions without delaying local results.
 - Rank results using locally remembered Tab Scout choices and optional Safari browsing history.
+- Learn which tab you choose for what you type, so the same letters lead there again, even when the page title does not contain them.
+- With empty input, list the other tabs in the order you last viewed them.
 - Center the native palette on the focused Safari window when its geometry is available, with a screen-based fallback.
 
 ## Build And Run
@@ -65,13 +67,14 @@ The app must remain running for Cmd+T search. The shortcut is captured only whil
 - Type a tab title, URL, or search phrase. The search field is focused when the palette opens.
 - Use Up/Down to select a result, then Enter to activate it. Clicking an actionable result works too.
 - With empty input, the first result is the tab you viewed before the current one. Cmd+T, Enter switches to it; Cmd+T, Enter again returns to where you started.
-- Cmd+Enter opens the query in a new tab even when an existing tab matches.
+- Cmd+Enter opens the query in a new tab even when an existing tab matches. Doing that, or choosing the search row, teaches Enter to prefer a new tab for that text.
+- Questions and phrases of four or more words search by default unless a tab title holds the whole phrase. Guesses from typos or initials are listed below the typed search, which stays the default.
 - With empty input, the other open tabs follow the previous tab and the New tab action comes after them; Cmd+Enter also opens a new tab. It uses Safari's native new-tab command and configured page, not a forced `about:blank` URL.
 - The tab you are on is never listed. When it is the only match, Enter opens a new tab with your query.
 - Escape or Cmd+T dismisses the palette without changing tabs.
 - The refresh button updates results. Preferences and permission checks are available from the menu bar.
 
-Open tabs come first without a heading; Recent Searches, History, and Google Suggestions have their own sections. Match quality comes first; recent and repeated local use improve comparable matches. Open tabs stay prominent to reduce duplicates, and arriving predictions do not move a selection you have already navigated.
+Open tabs come first without a heading; Recent Searches, History, and Google Suggestions have their own sections. Match quality comes first; recent and repeated local use, and how recently you viewed a tab, improve comparable matches. A tab you chose repeatedly for the same text comes first. Open tabs stay prominent to reduce duplicates, and arriving predictions do not move a selection you have already navigated.
 
 ## Privacy And Limits
 

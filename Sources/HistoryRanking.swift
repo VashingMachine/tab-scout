@@ -106,8 +106,9 @@ enum SearchResultBuilder {
             .filter { $0.tab != previous && $0.tab != activeTab }
         let tabs = ranked.map(\.tab)
         if let previous { rows.append(.previousTab(previous)) }
-        // A guess from a typo or initials is offered, but Enter keeps meaning the typed text.
-        let typedFirst = !query.isEmpty && ranked.first.map { !TabRanker.isConfident($0.features) } == true
+        // A guess from a typo or initials, or a weak match for a question, is offered while Enter keeps
+        // meaning the typed text.
+        let typedFirst = TabRanker.prefersTyped(query: query, best: ranked.first, context: context)
         if typedFirst { rows.append(.newTab(NewTabDestination.from(query))) }
         rows += tabs.map(SearchRow.tab)
         if query.isEmpty { rows.append(.newTab(.defaultPage)) }

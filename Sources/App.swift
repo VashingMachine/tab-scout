@@ -654,6 +654,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         // Enter pressed while the tab list is still loading runs once it arrives.
         guard ready else { if loading { pendingActivation = forceNew }; return }
         let typed = searchField.stringValue
+        let offeredTabs = rows.contains { if case .tab = $0 { return true }; return false }
         let row: SearchRow
         if forceNew { row = .newTab(NewTabDestination.from(searchField.stringValue)) }
         else {
@@ -677,7 +678,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             self.retryButton.isEnabled = true
             switch result {
             case .success:
-                self.rememberChoice(row, typed: typed)
+                self.rememberChoice(row, typed: typed, offeredTabs: offeredTabs)
                 // Keep the tab list warm so an immediate Cmd+T needs no Safari read.
                 switch row {
                 case .previousTab(let tab), .tab(let tab):
@@ -703,13 +704,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
     }
 
-    private func rememberChoice(_ row: SearchRow, typed: String) {
-        let url: String? = switch row {
+    private func rememberChoice(_ row: SearchRow, typed: String, offeredTabs: Bool) {
+        let target: String? = switch row {
         case .previousTab(let tab), .tab(let tab): HistoryIdentity.url(tab.url)
         case .history(let visit): HistoryIdentity.url(visit.url)
+        // Searching the typed text while tabs were offered teaches Enter to do that next time.
+        case .newTab(.search), .newTab(.url): offeredTabs ? QueryAffinity.newTab : nil
         default: nil
         }
-        if let url { learning.update { $0.affinity.record(input: typed, target: url, at: Date()) } }
+        if let target { learning.update { $0.affinity.record(input: typed, target: target, at: Date()) } }
         switch row {
         case .previousTab(let tab), .tab(let tab): historyStore.recordVisit(url: tab.url, title: tab.displayTitle)
         case .history(let visit): historyStore.recordVisit(url: visit.url, title: visit.title)

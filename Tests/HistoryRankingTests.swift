@@ -13,6 +13,7 @@ struct HistoryRankingTests {
         previousTab()
         recentlyViewed()
         learnedChoices()
+        enterDefault()
         currentTab()
         queryIdentity()
         navigation()
@@ -383,6 +384,40 @@ struct HistoryRankingTests {
         let notesFirst = learned(2, notes)
         expect(displayedTabs(rows("standup", tabs: inventory, context: notesFirst)) == [notes],
                "Choosing the text match again keeps it first and lists nothing new")
+    }
+
+    static func enterDefault() {
+        let guide = tab("Git rebase - how to use it", "https://www.atlassian.com/git/tutorials/rebase")
+        let exact = tab("How to use git rebase", "https://git-scm.com/docs/rebase", index: 2)
+        let question = "how to use git rebase"
+        expect(rows(question, tabs: [guide]).first == .newTab(.search(question)) && displayedTabs(rows(question, tabs: [guide])) == [guide],
+               "A question whose words are only scattered over a title searches, offering the tab below")
+        expect(rows(question, tabs: [guide, exact]).first == .tab(exact), "A title holding the whole question is the default")
+        expect(rows("git rebase", tabs: [guide]).first == .tab(guide), "Two words that are not a question find the tab")
+        expect(QueryIntent.isQuestion("jak ugotować makaron") && QueryIntent.isQuestion("rebase vs merge?")
+               && QueryIntent.isQuestion("best pizza in krakow"),
+               "Polish question words, a question mark and long phrases read as questions")
+        expect(!QueryIntent.isQuestion("how") && !QueryIntent.isQuestion("git rebase") && !QueryIntent.isQuestion("what?"),
+               "Single words and short phrases are not questions")
+        var asked = QueryAffinity()
+        asked.record(input: question, target: HistoryIdentity.url(guide.url)!, at: now)
+        expect(rows(question, tabs: [guide], context: RankingContext(affinity: asked.strengths(for: question, now: now))).first == .tab(guide),
+               "A question answered by a tab before goes to that tab")
+
+        let github = tab("GitHub", "https://github.com/")
+        var fresh = QueryAffinity()
+        fresh.record(input: "github", target: QueryAffinity.newTab, at: now)
+        expect(rows("github", tabs: [github]).first == .tab(github), "An open matching tab is the default")
+        expect(rows("github", tabs: [github], context: RankingContext(affinity: fresh.strengths(for: "github", now: now))).first
+               == .newTab(.search("github")),
+               "Having chosen a new tab for this text before makes it the default, with the tab still listed")
+        var mixed = fresh
+        for _ in 0..<3 { mixed.record(input: "github", target: HistoryIdentity.url(github.url)!, at: now) }
+        expect(rows("github", tabs: [github], context: RankingContext(affinity: mixed.strengths(for: "github", now: now))).first
+               == .tab(github), "A tab chosen more often for the text than a new tab stays the default")
+        let typed = rows("github", tabs: [github], context: RankingContext(affinity: fresh.strengths(for: "github", now: now)))
+        expect(typed.filter { $0 == .newTab(.search("github")) }.count == 1, "The typed action still appears once")
+        expect(!TabRanker.prefersTyped(query: "", best: nil, context: RankingContext()), "Empty input never prefers typed text")
     }
 
     static func currentTab() {
