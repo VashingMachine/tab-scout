@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var tabStore: TabStore!
     private lazy var favicons = FaviconStore()
     private lazy var historyStore = HistoryStore()
+    private lazy var learning = LearningStore(directory: preview ? nil : LearningStore.defaultDirectory)
     private lazy var googleSuggestions = GoogleSuggestionsService()
     private let historyQueue = DispatchQueue(label: "local.tabscout.history-index", qos: .userInitiated)
     private var historyIndex = HistorySearchIndex(.empty)
@@ -164,6 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         permissionTimer?.invalidate()
         cacheTimer?.invalidate()
         if !preview { googleSuggestions.cancel() }
+        learning.flush()
     }
 
     private func buildMenu() {
@@ -531,10 +533,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let selected = preserveSelection && navigated ? rows[table.selectedRow] : nil
         let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let matches = searchIndex.matches(query: query)
+        let now = Date()
+        let context = RankingContext(focusOrder: focusOrder, affinity: learning.state.affinity.strengths(for: query, now: now))
         rows = SearchResultBuilder.rows(query: query, matches: matches, allTabs: tabs, history: historyIndex,
-                                        suggestions: remoteSuggestions, now: Date(), openTabs: openTabs,
-                                        previousTab: previousTab, activeTab: activeTab,
-                                        context: RankingContext(focusOrder: focusOrder))
+                                        suggestions: remoteSuggestions, now: now, openTabs: openTabs,
+                                        previousTab: previousTab, activeTab: activeTab, context: context)
         table.reloadData()
         if let row = selected.flatMap({ SearchRow.retainedSelection(of: $0, in: rows) }) ?? ResultNavigation.first(in: rows) {
             table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
@@ -650,6 +653,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         guard !acting else { return }
         // Enter pressed while the tab list is still loading runs once it arrives.
         guard ready else { if loading { pendingActivation = forceNew }; return }
+        let typed = searchField.stringValue
         let row: SearchRow
         if forceNew { row = .newTab(NewTabDestination.from(searchField.stringValue)) }
         else {
@@ -673,7 +677,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             self.retryButton.isEnabled = true
             switch result {
             case .success:
-                self.rememberChoice(row)
+                self.rememberChoice(row, typed: typed)
                 // Keep the tab list warm so an immediate Cmd+T needs no Safari read.
                 switch row {
                 case .previousTab(let tab), .tab(let tab):
@@ -699,7 +703,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
     }
 
-    private func rememberChoice(_ row: SearchRow) {
+    private func rememberChoice(_ row: SearchRow, typed: String) {
+        let url: String? = switch row {
+        case .previousTab(let tab), .tab(let tab): HistoryIdentity.url(tab.url)
+        case .history(let visit): HistoryIdentity.url(visit.url)
+        default: nil
+        }
+        if let url { learning.update { $0.affinity.record(input: typed, target: url, at: Date()) } }
         switch row {
         case .previousTab(let tab), .tab(let tab): historyStore.recordVisit(url: tab.url, title: tab.displayTitle)
         case .history(let visit): historyStore.recordVisit(url: visit.url, title: visit.title)
@@ -792,12 +802,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         guard !preview else { return }
         let alert = NSAlert()
         alert.messageText = "Clear Tab Scout History?"
-        alert.informativeText = "This removes searches and tab choices saved by Tab Scout. Safari's browsing history is not changed."
+        alert.informativeText = "This removes searches and tab choices saved by Tab Scout, and everything it learned from them. Safari's browsing history is not changed."
         alert.addButton(withTitle: "Clear")
         alert.addButton(withTitle: "Cancel")
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         historyStore.clearLocal()
+        learning.clear()
         googleSuggestions.clearCache()
         remoteSuggestions = []
         reloadHistory()

@@ -12,6 +12,7 @@ struct HistoryRankingTests {
         resultComposition()
         previousTab()
         recentlyViewed()
+        learnedChoices()
         currentTab()
         queryIdentity()
         navigation()
@@ -353,6 +354,35 @@ struct HistoryRankingTests {
         features[.usage] = 7
         features[.recency] = -.infinity
         expect(features[.usage] == 1 && features[.recency] == 0, "Signals are clamped to the unit range")
+    }
+
+    static func learnedChoices() {
+        let meet = tab("Meet - abc-defg-hij", "https://meet.google.com/abc-defg-hij")
+        let notes = tab("Standup notes", "https://docs.example.com/standup", index: 2)
+        let other = tab("Weather", "https://weather.example.com/", index: 3)
+        let inventory = [meet, notes, other]
+        func learned(_ picks: Int, _ target: SafariTab = meet, input: String = "standup") -> RankingContext {
+            var affinity = QueryAffinity()
+            for _ in 0..<picks { affinity.record(input: input, target: HistoryIdentity.url(target.url)!, at: now) }
+            return RankingContext(affinity: affinity.strengths(for: "standup", now: now))
+        }
+        expect(displayedTabs(rows("standup", tabs: inventory)) == [notes], "Nothing learned lists only text matches")
+        let once = rows("standup", tabs: inventory, context: learned(1))
+        expect(displayedTabs(once) == [notes, meet],
+               "A page chosen once for this text is listed even though its title does not contain it")
+        expect(displayedTabs(rows("standup", tabs: inventory, context: learned(3))) == [meet, notes],
+               "A page chosen repeatedly for this text comes first")
+        let only = rows("standup", tabs: [meet, other], context: learned(1))
+        expect(only.first == .tab(meet), "A page chosen before is a confident Enter default")
+        expect(!rows("standup", tabs: [meet, other], context: learned(1)).contains(.tab(other)),
+               "Learning about one page does not list unrelated tabs")
+        expect(displayedTabs(rows("standup", tabs: inventory, active: meet, context: learned(3))) == [notes],
+               "A learned page that is already on screen is still never offered")
+        expect(rows("", tabs: inventory, context: learned(3)).first == .tab(meet) && displayedTabs(rows("", tabs: inventory, context: learned(3))) == inventory,
+               "Learned text plays no part in empty input")
+        let notesFirst = learned(2, notes)
+        expect(displayedTabs(rows("standup", tabs: inventory, context: notesFirst)) == [notes],
+               "Choosing the text match again keeps it first and lists nothing new")
     }
 
     static func currentTab() {

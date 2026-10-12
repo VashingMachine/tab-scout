@@ -101,12 +101,13 @@ enum SearchResultBuilder {
         let previous = query.isEmpty ? previousTab : nil
         var context = context
         context.activeTab = activeTab
-        let ranked = TabRanker.rank(typed: !query.isEmpty, matches: matches, history: history, context: context, now: now)
+        let ranked = TabRanker.rank(typed: !query.isEmpty, matches: matches, allTabs: allTabs, history: history,
+                                    context: context, now: now)
             .filter { $0.tab != previous && $0.tab != activeTab }
         let tabs = ranked.map(\.tab)
         if let previous { rows.append(.previousTab(previous)) }
         // A guess from a typo or initials is offered, but Enter keeps meaning the typed text.
-        let typedFirst = !query.isEmpty && ranked.first.map { $0.features[.lexical] < TabRanker.confidentMatch } == true
+        let typedFirst = !query.isEmpty && ranked.first.map { !TabRanker.isConfident($0.features) } == true
         if typedFirst { rows.append(.newTab(NewTabDestination.from(query))) }
         rows += tabs.map(SearchRow.tab)
         if query.isEmpty { rows.append(.newTab(.defaultPage)) }
