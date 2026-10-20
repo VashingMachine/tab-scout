@@ -14,7 +14,7 @@ Tab Scout is a **native macOS menu-bar app**. Press **Cmd+T in Safari or Google 
 - Show cached tab results immediately while refreshing them in the background.
 - Load favicons asynchronously and cache them across app restarts.
 - Include optional Google autocomplete predictions without delaying local results.
-- Rank results using locally remembered Tab Scout choices and optional Safari browsing history.
+- Rank results using locally remembered Tab Scout choices and optional Safari and Chrome browsing history, from every profile.
 - Learn which tab you choose for what you type, so the same letters lead there again, even when the page title does not contain them.
 - With empty input, list the other tabs in the order you last viewed them. Tab switches are followed as they happen through the keyboard permission's accessibility access, and how long you read each page breaks ties.
 - Bring tabs about the same work as the current page forward and label them, such as the Jira ticket named by the pull request on screen. Ticket keys, pull and merge requests, repositories and Google document IDs in titles and addresses connect tabs.
@@ -63,9 +63,9 @@ Tab Scout runs in the menu bar rather than the Dock. Its Permissions window prov
 
 1. Allow **Device Control and Data Access** on macOS 27+, or **Accessibility** on earlier versions, for the Cmd+T keyboard hook in Safari and Chrome.
 2. Allow **Automation** for Safari and for Google Chrome so Tab Scout can read, select, and open their tabs. Each browser asks separately, the first time Tab Scout reads it or when you press its **Allow Access** button; a browser you do not allow is left out without hiding the other.
-3. Optionally allow **Full Disk Access** to read Safari history. This is a broad permission; tab search, local choices, and Google suggestions work without it.
+3. Optionally allow **Full Disk Access** to read Safari and Chrome history. This is a broad permission; tab search, local choices, and Google suggestions work without it.
 
-Use the menu-bar menu to check **Capture Cmd+T in Safari and Chrome**, enable **Google Suggestions** or **Use Safari History**, and optionally enable **Start at Login**. Google suggestions and Safari-history import are off on a fresh installation; an existing installation retains its preferences.
+Use the menu-bar menu to check **Capture Cmd+T in Safari and Chrome**, enable **Google Suggestions** or **Use Browser History**, choose profiles under **History Profiles**, and optionally enable **Start at Login**. Google suggestions and history import are off on a fresh installation; an existing installation retains its preferences.
 
 The app must remain running for Cmd+T search. The shortcut is captured only while Safari or Chrome is active; other apps and Cmd+Shift+T keep their normal behavior.
 
@@ -91,7 +91,7 @@ Tab titles and URLs are read through Safari's and Chrome's local scripting inter
 
 Enabling Google Suggestions sends eligible typed search text to Google's public autocomplete endpoint before Enter. Requests use an ephemeral session without cookies, credentials, Safari's login session, or local history. Predictions are generic, not signed-in Google Account personalization. The undocumented endpoint is best-effort and may be unavailable. Submitted searches still use Safari's configured provider, or Google in Chrome.
 
-Safari-history import is optional, read-only, and limited to the main Safari history database. Inactive Tab Groups, separate profiles, and synced history are not guaranteed to be fully represented. **Clear Tab Scout History** removes accepted Tab Scout choices, not Safari history or Google Account activity.
+History import is optional and read-only. It reads every Safari and Chrome profile, each of which can be left out under **History Profiles**; synced history from other devices is not guaranteed to be represented. Chrome's history and icons are read from a private copy that is deleted right away, because Chrome locks them while it runs. **Clear Tab Scout History** removes accepted Tab Scout choices, not browser history or Google Account activity.
 
 The native scripting interface does not reliably identify private-browsing tabs. **Do not treat this app or its caches as a private-browsing boundary.** Avoid using it for activity that must not be recorded, and disable suggestions when typed text must remain local.
 
@@ -99,7 +99,7 @@ See [Native App Details](docs/NATIVE_COMPANION.md) for permissions, cache bounds
 
 ## Verification
 
-`bash test.sh` covers search, ranking, previous-tab tracking, history fixtures, keyboard decisions, palette placement, cache races, Google response handling, favicons, Safari bridge fixtures, and the Chrome script against a stand-in for Chrome. Tests do not request permissions, touch a real browser, or read the user's real Safari history. Physical shortcut behavior needs a live check in Safari and Chrome.
+`bash test.sh` covers search, ranking, previous-tab tracking, Safari and Chrome history fixtures (including a locked Chrome database), keyboard decisions, palette placement, cache races, Google response handling, favicons, Safari bridge fixtures, and the Chrome script against a stand-in for Chrome. Tests do not request permissions, touch a real browser, or read the user's real Safari history. Physical shortcut behavior needs a live check in Safari and Chrome.
 
 The native installation was restored on 2026-10-12 without rebuilding or changing permissions. Google predictions appeared in the native palette, and the user confirmed that physical Cmd+T opens Tab Scout over the page. See [Native Restore Verification](docs/NATIVE_RESTORE_QA.md).
 

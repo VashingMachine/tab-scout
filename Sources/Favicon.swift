@@ -219,6 +219,9 @@ final class FaviconStore {
     private let queue = DispatchQueue(label: "local.tabscout.favicons", qos: .utility)
     private let memoryLock = NSLock()
     private var entries: [String: Entry] = [:]
+    private var localIcons: [String: Data] = [:]
+    private var localImages: [String: NSImage] = [:]
+    private var undecodable: Set<String> = []
     private var pending: [FaviconOrigin: [(NSImage?) -> Void]] = [:]
     private var waiting: [FaviconOrigin] = []
     private var active = 0
@@ -233,11 +236,38 @@ final class FaviconStore {
         queue.async { self.loadDisk() }
     }
 
+    /// Uses the icons a browser already shows, as PNG data by origin, before downloading any. The set replaces
+    /// the previous one; nothing from it is written to disk. Returns whether any icon changed.
+    @discardableResult
+    func useLocalIcons(_ icons: [String: Data]) -> Bool {
+        var byKey: [String: Data] = [:]
+        for (address, png) in icons {
+            if let origin = FaviconOrigin(address) { byKey[origin.cacheKey] = png }
+        }
+        memoryLock.lock()
+        defer { memoryLock.unlock() }
+        guard byKey != localIcons else { return false }
+        localIcons = byKey
+        localImages = [:]
+        undecodable = []
+        return true
+    }
+
+    /// Must be called with memoryLock held.
+    private func localImage(_ key: String) -> NSImage? {
+        if let image = localImages[key] { return image }
+        guard let png = localIcons[key], !undecodable.contains(key) else { return nil }
+        guard let image = Self.decode(png)?.1 else { undecodable.insert(key); return nil }
+        localImages[key] = image
+        return image
+    }
+
     func imageFor(url: String) -> NSImage? {
         guard let origin = FaviconOrigin(url) else { return nil }
         memoryLock.lock()
         defer { memoryLock.unlock() }
         let key = origin.cacheKey
+        if let image = localImage(key) { return image }
         guard var entry = entries[key], entry.disk.expires > clock() else { return nil }
         entry.disk.accessed = clock()
         entries[key] = entry
@@ -249,6 +279,11 @@ final class FaviconStore {
         queue.async {
             let key = origin.cacheKey
             self.memoryLock.lock()
+            if let image = self.localImage(key) {
+                self.memoryLock.unlock()
+                self.deliver([completion], image: image)
+                return
+            }
             var entry = self.entries[key]
             if entry?.disk.expires ?? .distantPast <= self.clock() { entry = nil }
             if var cached = entry {

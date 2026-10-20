@@ -73,6 +73,7 @@ struct FaviconTests {
         try coalescingAndConcurrency()
         try boundedAndCorruptCache()
         try nativeTransport()
+        try localIcons()
         print("Passed \(checks) favicon checks")
     }
 
@@ -270,6 +271,24 @@ struct FaviconTests {
         expect(isFailure(result), "Native transport rejects cross-origin response independently of store")
         result = transportFetch(transport, URL(string: "http://127.0.0.1/favicon.ico")!)
         expect(isFailure(result), "Native transport refuses unsafe URL before URLSession")
+    }
+
+    static func localIcons() throws {
+        let transport = FakeFaviconTransport()
+        let store = FaviconStore(transport: transport, directory: temporaryDirectory(), clock: FakeClock().now)
+        let png = try fixturePNG(width: 32, height: 32)
+        expect(store.useLocalIcons(["https://mail.example": png, "https://broken.example": Data("not an image".utf8),
+                                    "http://localhost:3000": png]), "A new set of browser icons is reported as a change")
+        expect(store.imageFor(url: "https://mail.example/inbox?x=1") != nil, "A browser's icon is shown at once for any page of its site")
+        expect(fetch(store, "https://MAIL.example:443/sent") != nil && transport.urls.isEmpty,
+               "A browser's icon is used without downloading anything")
+        expect(fetch(store, "https://broken.example/") == nil && transport.urls.map(\.host).contains("broken.example"),
+               "Unreadable icon data falls back to downloading the site's icon")
+        expect(store.imageFor(url: "http://localhost:3000/") == nil, "Private addresses get no icon from a browser either")
+        expect(!store.useLocalIcons(["https://mail.example": png, "https://broken.example": Data("not an image".utf8),
+                                     "http://localhost:3000": png]), "The same set again changes nothing")
+        store.useLocalIcons([:])
+        expect(store.imageFor(url: "https://mail.example/inbox") == nil, "Icons of a browser profile turned off disappear")
     }
 
     static func transportFetch(_ transport: FaviconTransport, _ url: URL) -> Result<FaviconResponse, Error> {

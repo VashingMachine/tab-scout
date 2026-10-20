@@ -13,7 +13,7 @@ See the [README](../README.md) for the quick start and [restore verification](NA
 - Xcode or the Xcode Command Line Tools to build from source.
 - Device Control and Data Access / Accessibility permission for the Cmd+T hook in Safari and Chrome.
 - Automation permission to read and control Safari tabs, and separately Chrome tabs.
-- Optional Full Disk Access to include Safari browsing history. Tab switching, ordinary searches, and Google predictions do not require this permission.
+- Optional Full Disk Access to include Safari and Chrome browsing history and Chrome's site icons. Tab switching, ordinary searches, and Google predictions do not require this permission.
 
 The project uses system frameworks only. It has no package dependencies.
 
@@ -51,7 +51,7 @@ In Tab Scout's Permissions window:
 
 The shortcut hook starts automatically after permission is granted. Permissions are granted by the user through macOS; the app and tests do not bypass them.
 
-**Google Suggestions** and **Use Safari History** are separate menu-bar toggles and are off on a new installation. Enable either feature only after reviewing the privacy details below. Tab Scout's accepted searches and choices are remembered locally; **Clear Tab Scout History** removes those records.
+**Google Suggestions** and **Use Browser History** are separate menu-bar toggles and are off on a new installation. Enable either feature only after reviewing the privacy details below. Tab Scout's accepted searches and choices are remembered locally; **Clear Tab Scout History** removes those records.
 
 ## Usage
 
@@ -62,7 +62,7 @@ The shortcut hook starts automatically after permission is granted. Permissions 
 - When the tab on screen is empty (the Start Page, Favorites or `about:blank`), anything that would open a new tab opens in it instead, and the **New tab** action keeps it. Tab Scout checks that the tab is still empty first; if it has loaded a page meanwhile, a new tab opens as usual.
 - Cmd+Enter always opens the query in a new tab. An empty or whitespace-only query uses Safari's native **New Tab** command and configured new-tab page. With **New tabs open with: Start Page** in Safari Settings > General, it shows the native Start Page with its configured sections and background instead of a forced `about:blank`. The native command also handles opening a tab when Safari has no windows.
 - Escape or Cmd+T closes the search panel without an action.
-- The refresh icon requests updated results. The menu-bar menu provides search, permissions, shortcut capture, **Google Suggestions**, **Use Safari History**, **Clear Tab Scout History**, **Start at Login**, and quit.
+- The refresh icon requests updated results. The menu-bar menu provides search, permissions, shortcut capture, **Google Suggestions**, **Use Browser History**, **History Profiles**, **Clear Tab Scout History**, **Start at Login**, and quit.
 - Cmd+T is captured only while Safari or Chrome is active. Cmd+Shift+T and shortcuts in other apps retain their normal behavior.
 
 ## Suggestions And History
@@ -73,9 +73,11 @@ Turn on **Google Suggestions** for Google's public autocomplete predictions. Req
 
 These are **Google** suggestions, not automatic discovery of Safari's selected engine. Safari's scripting interface exposes a search command but not provider identity or its Smart Search suggestion rows. Choosing any search result still uses Safari's configured search engine; Google can supply the prediction even if that engine is different. Change Safari's provider in Safari Settings > Search. [Apple: Customize searching](https://support.apple.com/guide/safari/customize-searching-in-safari-ibrwe75c2a3c/mac)
 
-Turn on **Use Safari History** to supplement accepted Tab Scout choices with recent Safari visits and recognizable Google searches in visited results URLs. Access is read-only, runs in the background, and is optional. If macOS denies access, tabs, Tab Scout recent searches, and ordinary searches remain usable. To allow it, add the installed app under System Settings > Privacy & Security > Full Disk Access, then fully quit and reopen Tab Scout. Full Disk Access grants broader access to protected app data, not just this history file. [Apple: Privacy & Security settings](https://support.apple.com/guide/mac-help/change-privacy-security-settings-mchl211c911f/mac)
+Turn on **Use Browser History** to supplement accepted Tab Scout choices with recent Safari and Chrome visits and recognizable Google searches in visited results URLs. Access is read-only, runs in the background, and is optional. If macOS denies access, tabs, Tab Scout recent searches, and ordinary searches remain usable. To allow it, add the installed app under System Settings > Privacy & Security > Full Disk Access, then fully quit and reopen Tab Scout. Full Disk Access grants broader access to protected app data, not just these history files. macOS also protects Chrome's profile folder, so Chrome history needs the same permission. [Apple: Privacy & Security settings](https://support.apple.com/guide/mac-help/change-privacy-security-settings-mchl211c911f/mac)
 
-The reader supports Safari's main `~/Library/Safari/History.db`, not a complete inventory of separate profile databases or synced history. It considers the last 183 days, bounds the database read, and keeps at most 5,000 merged URLs in memory. Safari's private database schema can change; missing or unsupported databases fail without blocking the core workflow. No copy of Safari's database is saved.
+Every profile is read: Safari's main `~/Library/Safari/History.db`, each further Safari profile's history in Safari's container, and each Chrome profile listed in Chrome's `Local State`, by the name it has in Chrome. **History Profiles** in the menu turns any of them off; a profile that cannot be read is marked unavailable there while the others still work. Synced history from other devices is not guaranteed to be represented. Each profile's read considers the last 183 days and at most 10,000 visits, and at most 5,000 merged URLs stay in memory; a page visited in several profiles counts every visit. Chrome visits loaded inside another page's frames are left out.
+
+Chrome locks its databases while it runs, so Tab Scout copies `History` and `Favicons`, with any journal or write-ahead log beside them, to a private temporary folder and reads the copy, which is deleted straight after. On APFS the copy is a clone that takes no time or space. Browsers' private database schemas can change; missing or unsupported databases fail without blocking the core workflow. No copy of any browser's database is kept.
 
 See [Safari search research](SAFARI_SEARCH.md) for the documented Safari behavior, primary references, integration limits, and Tab Scout's own ranking policy. Tab Scout does not reproduce Safari's undisclosed ranking algorithm.
 
@@ -87,7 +89,7 @@ A usable snapshot appears immediately when the panel opens, and each opening ref
 
 Snapshots older than 2 minutes are not reused when reopening the panel. The tab cache is cleared when Safari quits and does not survive a Tab Scout restart. Cached results can briefly reflect a tab that was renamed, moved, or closed; selecting a tab checks its identity again rather than blindly selecting a stale index. A failed refresh does not silently invent results.
 
-Favicons load asynchronously, with a system icon as the fallback. Icon loading never blocks typing, result selection, or Safari tab discovery. The favicon cache survives app restarts, keeps up to 256 entries, and expires successful entries after 7 days and unsuccessful lookups after 1 hour.
+Favicons load asynchronously, with a system icon as the fallback. Icon loading never blocks typing, result selection, or Safari tab discovery. The favicon cache survives app restarts, keeps up to 256 entries, and expires successful entries after 7 days and unsuccessful lookups after 1 hour. With browser history on, the icons Chrome already shows come first: for each site, the icon most of its pages use, in the size closest to 32 pixels. They stay in memory, are read again at most every 10 minutes, and cover sites that refuse an anonymous download, such as signed-in mail. Safari's own icon cache has no documented format and is not read.
 
 ## Privacy
 
@@ -95,7 +97,7 @@ Tab Scout reads the titles and URLs of tabs Safari exposes in its open windows. 
 
 After a successful action, Tab Scout stores the accepted search phrase or selected URL/title, use count, and last-use date at `~/Library/Application Support/TabScout/History/choices-v1.json`. It does not record every typed prefix, cancelled selection, or failed action. Local records are retained for up to 183 days and bounded to 1,000 visited URLs and 500 search phrases. **Clear Tab Scout History** deletes these accepted-choice records; it does not erase Safari history or a Google Account's activity.
 
-When **Use Safari History** is enabled, imported Safari URLs, titles, counts, and visit dates remain in memory and are never uploaded to Google. Disable the toggle to remove imported Safari results from the palette. To delete the original records, use Safari's own Clear History command; that does not clear independently stored Google Account activity. [Apple: Clear Safari history](https://support.apple.com/guide/safari/clear-your-browsing-history-sfri47acf5d6/mac)
+When **Use Browser History** is enabled, imported URLs, titles, counts, and visit dates, and Chrome's icons, remain in memory and are never uploaded to Google. Disable the toggle, or a profile under **History Profiles**, to remove its results from the palette. To delete the original records, use the browser's own Clear History command; that does not clear independently stored Google Account activity. [Apple: Clear Safari history](https://support.apple.com/guide/safari/clear-your-browsing-history-sfri47acf5d6/mac)
 
 When **Google Suggestions** is enabled, eligible typed search text is sent to `https://suggestqueries.google.com/complete/search?client=safari&q=...` before Enter. It is an undocumented, best-effort endpoint, not a supported or versioned Google developer API. Requests use an ephemeral session without cookies, credentials, referrer, or Safari's login session. They do not send local history, tab inventories, or accepted-choice records. Google can still observe the query and your network address. Obvious URLs, addresses, credential-like prefixes, empty input, and oversized text are excluded; this conservative filter is not a guarantee that arbitrary search text contains no sensitive information.
 
@@ -119,7 +121,7 @@ While Chrome is running, its tabs are listed with Safari's. Each browser is read
 - New tabs, addresses and searches open in the browser most recently in front. In Chrome, **New tab** opens Chrome's own new-tab page, and an empty Chrome new-tab page on screen is reused like Safari's Start Page.
 - Searches in Chrome go to Google: Chrome has no scripting command for its own search engine.
 - Incognito windows are never read, listed or used; a new tab opens in a normal window, which is made when none exists.
-- Every Chrome profile's windows are included. Chrome history is not imported.
+- Every Chrome profile's windows are included, and with **Use Browser History** on, every profile's history and icons too.
 - **Search Page Text** reads Chrome pages only with View > Developer > Allow JavaScript from Apple Events turned on in Chrome. Without it, Chrome refuses, and Tab Scout stops asking until the option is turned on again.
 
 The bridge is `Resources/ChromeBridge.js`, JavaScript for Automation compiled into the app. It needs no Chrome scripting dictionary to build, and takes the browser's bundle identifier, so other Chromium browsers that share Chrome's scripting terms could be added.

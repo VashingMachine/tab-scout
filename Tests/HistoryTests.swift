@@ -64,6 +64,7 @@ struct HistoryTests {
         refreshAndPermissions()
         partialFailures()
         disablingSafariHistory()
+        otherProfiles()
         print("Passed \(checks) history import, persistence and refresh checks")
     }
 
@@ -196,7 +197,7 @@ struct HistoryTests {
     static func databaseLimits() {
         let fixture = HistoryFixture()
         fixture.execute("BEGIN")
-        for index in 0..<(HistoryStore.maximumSafariRows + 2) {
+        for index in 0..<(HistoryStore.maximumProfileRows + 2) {
             fixture.add(id: index + 1, url: "https://example.com/\(index)", title: "\(index)", at: date.addingTimeInterval(Double(-index)))
         }
         fixture.execute("COMMIT")
@@ -205,7 +206,7 @@ struct HistoryTests {
         expect(snapshot.visits.first?.title == "0" && snapshot.visits.last?.title == "4999", "Newest history rows win the bounded import")
         let repeated = HistoryFixture()
         repeated.execute("BEGIN")
-        for index in 0..<(HistoryStore.maximumSafariRows + 2) {
+        for index in 0..<(HistoryStore.maximumProfileRows + 2) {
             repeated.add(id: index + 1, url: "https://repeat.example/", title: "Repeated", at: date.addingTimeInterval(Double(-index)), itemID: 1)
         }
         repeated.execute("COMMIT")
@@ -290,13 +291,13 @@ struct HistoryTests {
             return imported
         }
         var results: [Result<HistorySnapshot, Error>] = []
-        store.load(includeSafari: true) { expect(Thread.isMainThread, "History completion returns on main thread"); results.append($0) }
-        store.load(includeSafari: true) { results.append($0) }
+        store.load(includeBrowsers: true) { expect(Thread.isMainThread, "History completion returns on main thread"); results.append($0) }
+        store.load(includeBrowsers: true) { results.append($0) }
         spin { results.count == 2 }
         expect(reads == 1 && !readerOnMain, "Concurrent refreshes coalesce into one background import")
         expect(results.allSatisfy { (try? $0.get()) == imported }, "Every coalesced caller receives the imported snapshot")
         var synchronous = false
-        store.load(includeSafari: true) { _ in synchronous = true }
+        store.load(includeBrowsers: true) { _ in synchronous = true }
         expect(synchronous && reads == 1, "Fresh history cache responds synchronously without SQLite")
         current.addTimeInterval(30)
         _ = load(store, safari: true)
@@ -386,10 +387,10 @@ struct HistoryTests {
             return imported
         }
         var originalResponse: Result<HistorySnapshot, Error>?
-        late.load(includeSafari: true) { originalResponse = $0 }
+        late.load(includeBrowsers: true) { originalResponse = $0 }
         spin { started }
         var offResponse: Result<HistorySnapshot, Error>?
-        late.load(includeSafari: false) { offResponse = $0 }
+        late.load(includeBrowsers: false) { offResponse = $0 }
         expect(late.snapshot == .empty, "Disabling a source clears visible data without waiting for its blocked reader")
         gate.signal()
         spin { originalResponse != nil && offResponse != nil }
@@ -413,15 +414,45 @@ struct HistoryTests {
         }
         var oldResponse: Result<HistorySnapshot, Error>?
         var newResponse: Result<HistorySnapshot, Error>?
-        reenabling.load(includeSafari: true) { oldResponse = $0 }
+        reenabling.load(includeBrowsers: true) { oldResponse = $0 }
         spin { reenablingStarted }
-        reenabling.load(includeSafari: false) { _ in }
-        reenabling.load(includeSafari: true) { newResponse = $0 }
+        reenabling.load(includeBrowsers: false) { _ in }
+        reenabling.load(includeBrowsers: true) { newResponse = $0 }
         reenablingGate.signal()
         spin { oldResponse != nil && newResponse != nil }
         expect(reenablingReads == 2, "Re-enabling during an old import starts a new generation rather than coalescing obsolete work")
         expect((try! oldResponse!.get()) == imported && (try! newResponse!.get()) == replacement, "Each generation receives the response it requested")
         expect(reenabling.snapshot == replacement, "Only post-enable generation is retained as the current Safari cache")
+    }
+
+    static func otherProfiles() {
+        let fixture = HistoryFixture()
+        fixture.add(id: 1, url: "https://safari.example/", title: "Safari page", at: date.addingTimeInterval(-60))
+        let chrome = HistoryVisit(url: "https://chrome.example/", title: "Chrome page", lastVisited: date.addingTimeInterval(-30), visitCount: 1)
+        let shared = HistoryVisit(url: "https://safari.example/", title: "Safari page", lastVisited: date.addingTimeInterval(-90), visitCount: 2)
+        var profiles = HistorySnapshot(visits: [chrome, shared], searches: [])
+        var reads = 0
+        var safariError: HistoryError?
+        let store = HistoryStore(directory: fixture.directory.appendingPathComponent("profiles"), safariDBURL: fixture.databaseURL,
+                                 now: { date }, safariReader: { url, now in
+            if let safariError { throw safariError }
+            return try HistoryStore.readSafari(at: url, now: now)
+        }, profileReader: { _ in reads += 1; return profiles })
+        let merged = try! load(store, safari: true).get()
+        expect(merged.visits.map(\.url) == ["https://chrome.example/", "https://safari.example/"]
+               && merged.visits[1].visitCount == 3, "Other profiles join Safari's history, counting visits made in either")
+        profiles = HistorySnapshot(visits: [HistoryVisit(url: "https://newer.example/", title: "Newer", lastVisited: date, visitCount: 1)], searches: [])
+        expect((try! load(store, safari: true).get()) == merged && reads == 1, "A fresh import is reused without reading profiles again")
+        store.discardImported()
+        expect(store.snapshot.visits.isEmpty, "Discarding an import removes its pages at once")
+        expect((try! load(store, safari: true).get()).visits.map(\.url) == ["https://newer.example/", "https://safari.example/"] && reads == 2,
+               "After discarding, every profile is read again, such as after one is turned off")
+        safariError = .needsPermission
+        store.discardImported()
+        expect(error(load(store, safari: true)) == .needsPermission, "Safari's own failure is still reported")
+        expect(store.snapshot.visits.map(\.url) == ["https://newer.example/"], "Without Safari's history, other profiles still show")
+        _ = load(store, safari: false)
+        expect(reads == 3 && store.snapshot.visits.isEmpty, "With history off, no profile is read")
     }
 
     static func read(_ url: URL) -> Result<HistorySnapshot, Error> {
@@ -436,7 +467,7 @@ struct HistoryTests {
 
     static func load(_ store: HistoryStore, safari: Bool) -> Result<HistorySnapshot, Error> {
         var result: Result<HistorySnapshot, Error>?
-        store.load(includeSafari: safari) { result = $0 }
+        store.load(includeBrowsers: safari) { result = $0 }
         spin { result != nil }
         return result!
     }

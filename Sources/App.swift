@@ -11,7 +11,8 @@ private final class SearchPanel: NSPanel {
     override var canBecomeMain: Bool { true }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSWindowDelegate,
+                         NSMenuDelegate {
     private let preview = CommandLine.arguments.contains("--preview")
     private var bridges: [Browser: BrowserBridge] = [:]
     private var stores: [Browser: TabStore] = [:]
@@ -21,7 +22,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var waiting: Set<Browser> = []
     private var browserErrors: [Browser: Error] = [:]
     private lazy var favicons = FaviconStore()
-    private lazy var historyStore = HistoryStore()
+    private lazy var browserHistory = BrowserHistory()
+    private lazy var historyStore = HistoryStore(safariReader: { url, date in
+        AppDelegate.excludedProfiles.contains(HistoryProfile.safariID) ? .empty : try HistoryStore.readSafari(at: url, now: date)
+    }, profileReader: { [weak self, browserHistory] date in
+        let found = browserHistory.read(excluding: AppDelegate.excludedProfiles, now: date)
+        DispatchQueue.main.async { self?.didImport(found) }
+        return found.snapshot
+    })
+    /// Every browser profile the last history import found, for the History Profiles menu.
+    private var historyProfiles: [HistoryProfile] = []
+    private var unreadableProfiles: Set<String> = []
     private lazy var learning = LearningStore(directory: preview ? nil : LearningStore.defaultDirectory)
     private lazy var wordNeighbors = WordNeighbors()
     private var similarWords: [BrowserTab: String] = [:]
@@ -59,6 +70,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }()
     private var googleEnabled: Bool { UserDefaults.standard.bool(forKey: "GoogleSuggestionsEnabled") }
     private var safariHistoryEnabled: Bool { UserDefaults.standard.bool(forKey: "SafariHistoryEnabled") }
+    /// Read by the history worker too; UserDefaults is safe to read from any thread.
+    private static var excludedProfiles: Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: "ExcludedHistoryProfiles") ?? [])
+    }
     private var searchIndex = TabSearchIndex([])
     private var windowNumbers: [Browser: [Int: Int]] = [:]
     private var statusItem: NSStatusItem!
@@ -287,10 +302,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         google.target = self
         google.state = googleEnabled ? .on : .off
         googleItems.append(google)
-        let history = menu.addItem(withTitle: "Use Safari History", action: #selector(toggleSafariHistory(_:)), keyEquivalent: "")
+        let history = menu.addItem(withTitle: "Use Browser History", action: #selector(toggleSafariHistory(_:)), keyEquivalent: "")
         history.target = self
         history.state = safariHistoryEnabled ? .on : .off
         historyItems.append(history)
+        let profiles = menu.addItem(withTitle: "History Profiles", action: nil, keyEquivalent: "")
+        profiles.submenu = NSMenu(title: "History Profiles")
+        profiles.submenu?.delegate = self
         let text = menu.addItem(withTitle: "Search Page Text", action: #selector(togglePageText(_:)), keyEquivalent: "")
         text.target = self
         text.state = pageTextEnabled ? .on : .off
@@ -793,7 +811,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             ], searches: [PastSearch(query: "swift concurrency", lastUsed: now.addingTimeInterval(-120), useCount: 3)]))
             return
         }
-        historyStore.load(includeSafari: safariHistoryEnabled) { [weak self] result in
+        historyStore.load(includeBrowsers: safariHistoryEnabled) { [weak self] result in
             guard let self, token == self.historyRequestID else { return }
             self.historyLoaded = true
             if case .failure(let error) = result { self.historyError = error } else { self.historyError = nil }
@@ -1175,7 +1193,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let enable = !safariHistoryEnabled
         UserDefaults.standard.set(enable, forKey: "SafariHistoryEnabled")
         historyItems.forEach { $0.state = enable ? .on : .off }
-        // Remove imported results immediately; a denied or superseded read cannot leave them visible.
+        if !enable { favicons.useLocalIcons([:]) }
+        reimportHistory()
+    }
+
+    @objc private func toggleHistoryProfile(_ sender: NSMenuItem) {
+        guard !preview, let id = sender.representedObject as? String else { return }
+        var excluded = Self.excludedProfiles
+        if excluded.remove(id) == nil { excluded.insert(id) }
+        UserDefaults.standard.set(excluded.sorted(), forKey: "ExcludedHistoryProfiles")
+        historyStore.discardImported()
+        reimportHistory()
+    }
+
+    /// Removes imported results immediately, so a denied or superseded read cannot leave them visible, and reads
+    /// history again.
+    private func reimportHistory() {
         historyIndex = HistorySearchIndex(.empty)
         indexedHistory = nil
         historyLoaded = false
@@ -1183,6 +1216,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         if ready && panel.isVisible { updateRows(preserveSelection: true) }
         updatePermissionLabels()
         reloadHistory()
+    }
+
+    /// Runs after each import of other browser profiles, before the history it read is indexed.
+    private func didImport(_ found: BrowserImport) {
+        // History turned off while it was being read.
+        guard safariHistoryEnabled else { return }
+        historyProfiles = found.profiles
+        unreadableProfiles = found.failed
+        if favicons.useLocalIcons(found.icons), ready, panel.isVisible, table.numberOfRows > 0 {
+            table.reloadData(forRowIndexes: IndexSet(integersIn: 0..<table.numberOfRows), columnIndexes: IndexSet(integer: 0))
+        }
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        guard safariHistoryEnabled else {
+            menu.addItem(withTitle: "Turn on Use Browser History first", action: nil, keyEquivalent: "")
+            return
+        }
+        guard !historyProfiles.isEmpty else {
+            menu.addItem(withTitle: historyLoaded ? "No browser profiles found" : "Looking for profiles...", action: nil, keyEquivalent: "")
+            return
+        }
+        let excluded = Self.excludedProfiles
+        for profile in historyProfiles {
+            let unreadable = unreadableProfiles.contains(profile.id) || (profile.id == HistoryProfile.safariID && historyError != nil)
+            let item = menu.addItem(withTitle: profile.name + (unreadable ? " (unavailable)" : ""),
+                                    action: #selector(toggleHistoryProfile(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = profile.id
+            item.state = excluded.contains(profile.id) ? .off : .on
+        }
     }
 
     @objc private func togglePageText(_ sender: Any?) {
@@ -1300,7 +1365,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             allow.frame = NSRect(x: 322, y: top - 16, width: 132, height: 32)
             content.addSubview(allow)
         }
-        let historyTitle = NSTextField(labelWithString: "Safari History (Optional)")
+        let historyTitle = NSTextField(labelWithString: "Browser History (Optional)")
         historyTitle.font = .systemFont(ofSize: 15, weight: .medium)
         historyTitle.frame = NSRect(x: 28, y: 124, width: 280, height: 22)
         content.addSubview(historyTitle)
@@ -1335,7 +1400,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let trusted = AXIsProcessTrusted()
         accessibilityState?.stringValue = trusted ? (eventTap == nil ? "Access granted; shortcut unavailable" : "Allowed") : "Required for Cmd+T"
         for (browser, state) in browserStates { state.stringValue = accessState(browser) }
-        historyState?.stringValue = !safariHistoryEnabled ? "Off" : !historyLoaded ? "Checking..." : historyError == nil ? "Allowed" : "Unavailable; local choices still work"
+        let included = historyProfiles.filter { !Self.excludedProfiles.contains($0.id) }.count
+        historyState?.stringValue = !safariHistoryEnabled ? "Off" : !historyLoaded ? "Checking..."
+            : historyError != nil ? "Unavailable; local choices still work"
+            : historyProfiles.count > 1 ? "Allowed; \(included) of \(historyProfiles.count) profiles used" : "Allowed"
         historyState?.toolTip = historyError?.localizedDescription
         setupStatus?.stringValue = trusted && !allowedBrowsers.isEmpty && eventTap != nil ? "Ready" : "Permissions needed"
     }
@@ -1355,8 +1423,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     @objc private func openHistorySettings(_ sender: Any?) {
         let alert = NSAlert()
-        alert.messageText = "Safari History Access"
-        alert.informativeText = "macOS protects Safari history with Full Disk Access, a broad permission. Tab Scout reads history locally and never sends it to Google. Add this Tab Scout.app under Privacy & Security > Full Disk Access, then restart Tab Scout. Tab search and local choices work without this permission."
+        alert.messageText = "Browser History Access"
+        alert.informativeText = "macOS protects Safari and Chrome history with Full Disk Access, a broad permission. Tab Scout reads the history of every Safari and Chrome profile locally, never sends it to Google, and can leave out any profile under History Profiles. Add this Tab Scout.app under Privacy & Security > Full Disk Access, then restart Tab Scout. Tab search and local choices work without this permission."
         alert.addButton(withTitle: "Open Settings")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }

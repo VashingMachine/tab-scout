@@ -19,6 +19,15 @@ struct HistorySnapshot: Codable, Equatable {
     var searches: [PastSearch]
 
     static let empty = HistorySnapshot(visits: [], searches: [])
+
+    /// Adds one visit read from a browser's history, and the Google search it was, if any.
+    mutating func add(url: String, title: String, at date: Date) {
+        guard let normalized = HistoryIdentity.url(url) else { return }
+        visits.append(HistoryVisit(url: normalized, title: title, lastVisited: date, visitCount: 1))
+        if let query = HistorySearchQuery.from(url: url) {
+            searches.append(PastSearch(query: query, lastUsed: date, useCount: 1))
+        }
+    }
 }
 
 enum HistoryError: Error, LocalizedError, Equatable {
@@ -100,7 +109,8 @@ enum HistorySearchQuery {
 // Main-thread owned. Only the serial worker touches files and SQLite connections.
 final class HistoryStore {
     static let retention: TimeInterval = 183 * 24 * 60 * 60
-    static let maximumSafariRows = 10_000
+    /// Visits read from each browser profile, newest first.
+    static let maximumProfileRows = 10_000
     static let maximumVisits = 5_000
     static let maximumLocalVisits = 1_000
     static let maximumSearches = 500
@@ -112,7 +122,7 @@ final class HistoryStore {
     }
 
     private struct LoadKey: Hashable {
-        let includeSafari: Bool
+        let includeBrowsers: Bool
         let generation: Int
     }
 
@@ -121,26 +131,30 @@ final class HistoryStore {
     private let freshFor: TimeInterval
     private let now: () -> Date
     private let safariReader: (URL, Date) throws -> HistorySnapshot
+    private let profileReader: (Date) -> HistorySnapshot
     private let queue = DispatchQueue(label: "local.tabscout.history", qos: .utility)
     private var local = HistorySnapshot.empty
-    private var safari = HistorySnapshot.empty
+    private var browsers = HistorySnapshot.empty
     private var localLoaded = false
-    private var requestedSafari = false
+    private var requestedBrowsers = false
     private var localLoadedAt: Date?
-    private var safariLoadedAt: Date?
+    private var browsersLoadedAt: Date?
     private var mergedSnapshot: HistorySnapshot?
     private var mergedAt: Date?
     private var mutationVersion = 0
-    private var safariGeneration = 0
+    private var browsersGeneration = 0
     private var waiters: [LoadKey: [(Result<HistorySnapshot, Error>) -> Void]] = [:]
     private(set) var localStorageError: HistoryError?
     // Accessed only by queue.
     private var storedLocal: HistorySnapshot?
     private var storedLocalError: HistoryError?
 
+    /// `safariReader` reads Safari's own history; `profileReader` reads every other browser profile, such as
+    /// Chrome's or a second Safari profile, and leaves out any it cannot read.
     init(directory: URL? = nil, safariDBURL: URL? = nil, freshFor: TimeInterval = 30,
          now: @escaping () -> Date = Date.init,
-         safariReader: @escaping (URL, Date) throws -> HistorySnapshot = HistoryStore.readSafari) {
+         safariReader: @escaping (URL, Date) throws -> HistorySnapshot = HistoryStore.readSafari,
+         profileReader: @escaping (Date) -> HistorySnapshot = { _ in .empty }) {
         self.directory = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("TabScout/History", isDirectory: true)
         self.safariDBURL = safariDBURL ?? FileManager.default.homeDirectoryForCurrentUser
@@ -148,36 +162,37 @@ final class HistoryStore {
         self.freshFor = freshFor
         self.now = now
         self.safariReader = safariReader
+        self.profileReader = profileReader
     }
 
     var snapshot: HistorySnapshot {
         let date = now()
         if let mergedSnapshot, let mergedAt, date.timeIntervalSince(mergedAt) >= 0,
            date.timeIntervalSince(mergedAt) < freshFor { return mergedSnapshot }
-        let result = Self.merge(local, requestedSafari ? safari : .empty, now: date)
+        let result = Self.merge(local, requestedBrowsers ? browsers : .empty, now: date)
         mergedSnapshot = result
         mergedAt = date
         return result
     }
 
-    func load(includeSafari: Bool, completion: @escaping (Result<HistorySnapshot, Error>) -> Void) {
+    func load(includeBrowsers: Bool, completion: @escaping (Result<HistorySnapshot, Error>) -> Void) {
         precondition(Thread.isMainThread)
-        if requestedSafari != includeSafari { mergedSnapshot = nil }
-        if requestedSafari && !includeSafari {
-            safariGeneration += 1
-            safari = .empty
-            safariLoadedAt = nil
+        if requestedBrowsers != includeBrowsers { mergedSnapshot = nil }
+        if requestedBrowsers && !includeBrowsers {
+            browsersGeneration += 1
+            browsers = .empty
+            browsersLoadedAt = nil
         }
-        requestedSafari = includeSafari
+        requestedBrowsers = includeBrowsers
         let date = now()
-        let loadedAt = includeSafari ? safariLoadedAt : localLoadedAt
+        let loadedAt = includeBrowsers ? browsersLoadedAt : localLoadedAt
         if localLoaded, let loadedAt, date.timeIntervalSince(loadedAt) >= 0,
            date.timeIntervalSince(loadedAt) < freshFor {
-            if !includeSafari, let localStorageError { completion(.failure(localStorageError)); return }
+            if !includeBrowsers, let localStorageError { completion(.failure(localStorageError)); return }
             completion(.success(snapshot))
             return
         }
-        let key = LoadKey(includeSafari: includeSafari, generation: safariGeneration)
+        let key = LoadKey(includeBrowsers: includeBrowsers, generation: browsersGeneration)
         if waiters[key] != nil {
             waiters[key]?.append(completion)
             return
@@ -187,8 +202,11 @@ final class HistoryStore {
         queue.async { [weak self] in
             guard let self else { return }
             let stored: Result<HistorySnapshot, Error> = Result { try self.loadLocal(now: date) }
-            let imported: Result<HistorySnapshot, Error> = includeSafari
+            let safari: Result<HistorySnapshot, Error> = includeBrowsers
                 ? Result { try self.safariReader(self.safariDBURL, date) } : .success(.empty)
+            // Read even when Safari's history is not, so other browsers' history needs no Safari access.
+            let profiles = includeBrowsers ? self.profileReader(date) : .empty
+            let imported = safari.map { Self.merge($0, profiles, now: date, additive: true) }
             let localError = self.storedLocalError
             DispatchQueue.main.async {
                 if case .success(let saved) = stored {
@@ -197,26 +215,36 @@ final class HistoryStore {
                 if version == self.mutationVersion { self.localStorageError = localError }
                 self.localLoaded = true
                 self.localLoadedAt = date
-                let currentGeneration = key.generation == self.safariGeneration
-                if includeSafari && self.requestedSafari && currentGeneration {
+                let currentGeneration = key.generation == self.browsersGeneration
+                if includeBrowsers && self.requestedBrowsers && currentGeneration {
                     if case .success(let imported) = imported {
-                        self.safari = imported
-                        self.safariLoadedAt = date
+                        self.browsers = imported
+                        self.browsersLoadedAt = date
                     } else {
-                        self.safari = .empty
-                        self.safariLoadedAt = nil
+                        self.browsers = profiles
+                        self.browsersLoadedAt = nil
                     }
                 }
                 self.mergedSnapshot = nil
-                let result: Result<HistorySnapshot, Error> = !includeSafari && localError != nil
+                let result: Result<HistorySnapshot, Error> = !includeBrowsers && localError != nil
                     ? .failure(localError!) : imported.map { imported in
-                    includeSafari == self.requestedSafari && currentGeneration ? self.snapshot
-                        : Self.merge(self.local, includeSafari ? imported : .empty, now: self.now())
+                    includeBrowsers == self.requestedBrowsers && currentGeneration ? self.snapshot
+                        : Self.merge(self.local, includeBrowsers ? imported : .empty, now: self.now())
                 }
                 let callbacks = self.waiters.removeValue(forKey: key) ?? []
                 callbacks.forEach { $0(result) }
             }
         }
+    }
+
+    /// Forgets imported browser history, so the next load reads it again, such as after a profile is turned off.
+    /// A read already running is discarded when it returns.
+    func discardImported() {
+        precondition(Thread.isMainThread)
+        browsersGeneration += 1
+        browsers = .empty
+        browsersLoadedAt = nil
+        mergedSnapshot = nil
     }
 
     func recordVisit(url: String, title: String) {
@@ -371,13 +399,38 @@ final class HistoryStore {
             if error.code == NSFileReadNoSuchFileError { throw HistoryError.unavailable }
             throw HistoryError.needsPermission
         }
+        let sql = """
+        SELECT items.url, COALESCE(visits.title, ''), visits.visit_time
+        FROM history_visits AS visits JOIN history_items AS items ON items.id = visits.history_item
+        WHERE visits.visit_time >= ? AND visits.visit_time <= ?
+        ORDER BY visits.visit_time DESC, visits.id DESC LIMIT ?
+        """
+        var rows = HistorySnapshot.empty
+        try query(url, sql: sql, bind: { statement in
+            sqlite3_bind_double(statement, 1, now.addingTimeInterval(-retention).timeIntervalSinceReferenceDate)
+            sqlite3_bind_double(statement, 2, now.timeIntervalSinceReferenceDate)
+            sqlite3_bind_int(statement, 3, Int32(maximumProfileRows))
+        }, row: { statement in
+            guard let rawURL = sqlite3_column_text(statement, 0), let rawTitle = sqlite3_column_text(statement, 1) else { return }
+            let time = sqlite3_column_double(statement, 2)
+            guard time.isFinite else { return }
+            rows.add(url: String(cString: rawURL), title: String(cString: rawTitle), at: Date(timeIntervalSinceReferenceDate: time))
+        })
+        return merge(rows, .empty, now: now, additive: true)
+    }
+
+    /// Runs one query against a history database within a two-second budget, passing each result row to `row`.
+    /// A read-write connection is only ever opened on Tab Scout's own copy of another browser's database.
+    static func query(_ url: URL, readOnly: Bool = true, sql: String, bind: (OpaquePointer) -> Void,
+                      row: (OpaquePointer) -> Void) throws {
         var database: OpaquePointer?
-        let opened = sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil)
+        let flags = (readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE) | SQLITE_OPEN_NOMUTEX
+        let opened = sqlite3_open_v2(url.path, &database, flags, nil)
         defer { if let database { sqlite3_close(database) } }
         guard opened == SQLITE_OK, let database else {
             throw sqliteError(opened, database: database)
         }
-        guard sqlite3_db_readonly(database, "main") == 1 else { throw HistoryError.invalidDatabase }
+        guard !readOnly || sqlite3_db_readonly(database, "main") == 1 else { throw HistoryError.invalidDatabase }
         sqlite3_busy_timeout(database, 100)
         let deadline = DispatchTime.now().uptimeNanoseconds + 2_000_000_000
         let budget = UnsafeMutablePointer<UInt64>.allocate(capacity: 1)
@@ -387,12 +440,6 @@ final class HistoryStore {
             guard let context else { return 1 }
             return DispatchTime.now().uptimeNanoseconds > context.assumingMemoryBound(to: UInt64.self).pointee ? 1 : 0
         }, budget)
-        let sql = """
-        SELECT items.url, COALESCE(visits.title, ''), visits.visit_time
-        FROM history_visits AS visits JOIN history_items AS items ON items.id = visits.history_item
-        WHERE visits.visit_time >= ? AND visits.visit_time <= ?
-        ORDER BY visits.visit_time DESC, visits.id DESC LIMIT ?
-        """
         var statement: OpaquePointer?
         let prepared = sqlite3_prepare_v2(database, sql, -1, &statement, nil)
         guard prepared == SQLITE_OK, let statement else {
@@ -400,30 +447,15 @@ final class HistoryStore {
             throw sqliteError(prepared, database: database)
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_double(statement, 1, now.addingTimeInterval(-retention).timeIntervalSinceReferenceDate)
-        sqlite3_bind_double(statement, 2, now.timeIntervalSinceReferenceDate)
-        sqlite3_bind_int(statement, 3, Int32(maximumSafariRows))
-        var rows = HistorySnapshot.empty
+        bind(statement)
         var status = sqlite3_step(statement)
         while status == SQLITE_ROW {
-            if let rawURL = sqlite3_column_text(statement, 0), let rawTitle = sqlite3_column_text(statement, 1) {
-                let url = String(cString: rawURL)
-                let title = String(cString: rawTitle)
-                let time = sqlite3_column_double(statement, 2)
-                if time.isFinite, let normalized = HistoryIdentity.url(url) {
-                    let date = Date(timeIntervalSinceReferenceDate: time)
-                    rows.visits.append(HistoryVisit(url: normalized, title: title, lastVisited: date, visitCount: 1))
-                    if let query = HistorySearchQuery.from(url: url) {
-                        rows.searches.append(PastSearch(query: query, lastUsed: date, useCount: 1))
-                    }
-                }
-            }
+            row(statement)
             status = sqlite3_step(statement)
         }
         guard status == SQLITE_DONE else {
             throw sqliteError(status, database: database)
         }
-        return merge(rows, .empty, now: now, additive: true)
     }
 
     private static func sqliteError(_ code: Int32, database: OpaquePointer?) -> HistoryError {

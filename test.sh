@@ -24,6 +24,9 @@ done
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/History.swift" \
     "$SOURCE_DIR/Tests/HistoryTests.swift" -lsqlite3 -o "$WORK_DIR/HistoryTests"
 "$WORK_DIR/HistoryTests"
+/usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/History.swift" "$SOURCE_DIR/Sources/BrowserHistory.swift" \
+    "$SOURCE_DIR/Tests/BrowserHistoryTests.swift" -lsqlite3 -o "$WORK_DIR/BrowserHistoryTests"
+"$WORK_DIR/BrowserHistoryTests"
 /usr/bin/xcrun swiftc -swift-version 5 -O "${RANKING[@]}" "$SOURCE_DIR/Tests/HistoryRankingTests.swift" \
     -lsqlite3 -o "$WORK_DIR/HistoryRankingTests"
 "$WORK_DIR/HistoryRankingTests"

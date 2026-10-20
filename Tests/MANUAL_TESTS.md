@@ -32,7 +32,9 @@ Use a throwaway Safari window and public fixture pages. Record the macOS/Safari 
 15. With Chrome running, press Cmd+T in Chrome. Confirm the palette opens over Chrome, lists Chrome and Safari tabs with **Chrome window** and **Safari window** labels, and omits incognito tabs. Choose a Safari tab: Safari must come forward on that tab. Press Cmd+T, Enter: Chrome must come back on the tab you left.
 16. In Chrome, enter an address and a search. Each must open in a new Chrome tab, the search on Google. On Chrome's empty new-tab page, both must load in that tab instead. Choose **New tab**: Chrome's own new-tab page opens.
 17. Quit Chrome with the palette closed, then press Cmd+T in Safari: only Safari tabs are listed and no Chrome error appears. With Chrome's Automation access denied, Safari tabs still appear and the footer names Chrome as unavailable.
-18. Restart Tab Scout from a script (for example `task deploy`) while Safari is frontmost, without clicking Tab Scout's menu-bar icon. The first physical Cmd+T must open the palette with the search field focused, and Safari must remain the active app.
+18. With Full Disk Access and **Use Browser History** on, open **History Profiles**. Every Safari and Chrome profile must be listed by its name and checked. Type a page visited only in Chrome, then one visited only in a second profile: each appears under History. Uncheck that profile: its pages disappear, and checking it again brings them back.
+19. With Chrome running, open the palette on a Safari tab of a signed-in site you also use in Chrome, such as Gmail. Its row shows the site's icon instead of the globe. Turn off **Use Browser History**: the icon returns to whatever the download finds.
+20. Restart Tab Scout from a script (for example `task deploy`) while Safari is frontmost, without clicking Tab Scout's menu-bar icon. The first physical Cmd+T must open the palette with the search field focused, and Safari must remain the active app.
 
 ## Native Panel Placement
 
