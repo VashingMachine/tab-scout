@@ -6,11 +6,11 @@ Use a throwaway Safari window and public fixture queries. Record the build revis
 
 ## Settings And Consent
 
-1. On a clean installation, verify **Google Suggestions** and **Use Safari History** are off. Search open tabs and run an ordinary web search without enabling either feature.
+1. On a clean installation, verify **Google Suggestions** and **Use Browser History** are off. Search open tabs and run an ordinary web search without enabling either feature.
 2. Confirm the menu names are explicit: Google predictions are not labeled as automatically using every Safari provider. Verify enabling either option does not enable the other.
 3. Enable Google Suggestions using public query text such as `weather`. Confirm local results appear immediately and the Google section appears only when usable predictions arrive.
 4. Disable Google Suggestions while a request is pending. Confirm pending results do not appear afterward and later typing causes no Google autocomplete request.
-5. Enable Use Safari History without Full Disk Access. The history access error must not block open tabs, accepted Tab Scout searches, query editing, cancellation, or ordinary searches.
+5. Enable Use Browser History without Full Disk Access. The history access error must not block open tabs, accepted Tab Scout searches, query editing, cancellation, or ordinary searches.
 6. Explain the broader scope of Full Disk Access before granting it. Grant it manually to the installed app, fully quit/reopen, and confirm the setting is independent of Safari Automation and keyboard-hook permission.
 7. Revoke Full Disk Access and refresh. History failures must stay nonblocking and must not be presented as a successful empty history read. Restore only permissions explicitly changed for this test.
 
@@ -54,7 +54,7 @@ Use an injected transport or controlled proxy for precise network assertions. Do
 1. Verify Safari access is read-only and limited to its main `~/Library/Safari/History.db`. Tab Scout must not copy the database into its application-support folder.
 2. With synthetic fixtures, verify the 183-day retention boundary, bounded database reads, and at most 5,000 merged URL results. Future, invalid, or malformed dates and unsupported schemas must fail safely.
 3. While history loads or refreshes, type, navigate, and cancel. Matching open tabs and already usable local results must not wait for a database read.
-4. Disable Use Safari History. Imported rows must disappear from the palette; local accepted choices and tab search must keep working.
+4. Disable Use Browser History. Imported rows must disappear from the palette; local accepted choices and tab search must keep working.
 5. Delete a public fixture visit using Safari's own history UI, then refresh after the history-cache window. The deleted visit must not remain indefinitely imported. Do not clear unrelated Safari history.
 6. Test a separate Safari profile and document which main-database records are visible. Do not claim support for every profile database or complete iCloud history.
 7. Check the private-window caveat using a harmless public fixture. Safari's scripting interface may expose private tabs without identifying them: Tab Scout must not promise automatic private isolation. Successful actions can still be locally remembered and opted-in suggestions can still send typed text.

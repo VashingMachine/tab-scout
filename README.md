@@ -101,8 +101,6 @@ See [Native App Details](docs/NATIVE_COMPANION.md) for permissions, cache bounds
 
 `bash test.sh` covers search, ranking, previous-tab tracking, Safari and Chrome history fixtures (including a locked Chrome database), keyboard decisions, palette placement, cache races, Google response handling, favicons, Safari bridge fixtures, and the Chrome script against a stand-in for Chrome. Tests do not request permissions, touch a real browser, or read the user's real Safari history. Physical shortcut behavior needs a live check in Safari and Chrome.
 
-The native installation was restored on 2026-10-12 without rebuilding or changing permissions. Google predictions appeared in the native palette, and the user confirmed that physical Cmd+T opens Tab Scout over the page. See [Native Restore Verification](docs/NATIVE_RESTORE_QA.md).
-
 ## Repository Layout
 
 - `Sources/` and `Resources/`: native app and the Safari (AppleScript) and Chrome (JavaScript for Automation) scripting bridges.

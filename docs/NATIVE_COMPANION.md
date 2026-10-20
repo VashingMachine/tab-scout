@@ -4,7 +4,7 @@ Search your open Safari and Chrome tabs with Cmd+T. Switch to a match in its own
 
 Tab Scout is a native macOS menu-bar app, **not a browser extension**. It uses Safari's and Chrome's local scripting interfaces and a keyboard hook. Optional Google predictions and local history ranking make the palette more useful without waiting for a network request. There is no subscription or Apple developer account requirement for a local build.
 
-See the [README](../README.md) for the quick start and [restore verification](NATIVE_RESTORE_QA.md) for the latest live Cmd+T check.
+See the [README](../README.md) for the quick start.
 
 ## Requirements
 
