@@ -28,7 +28,8 @@ Use a throwaway Safari window and public fixture pages. Record the macOS/Safari 
 11. Test a minimized Safari window and a fullscreen Safari window. The selected tab's window should become usable and the panel should not remain stranded behind it.
 12. In a throwaway session with no Safari windows, choose the empty-query action. Confirm Safari's native **New Tab** command opens one window with one tab, without an extra empty tab. Compare its page with Safari's own File > New Tab command. With two windows, verify the action opens in the palette's target window. Do not close or replace the user's existing windows to create these fixtures.
 13. Switch from tab A to tab B with Tab Scout, then press Cmd+T, Enter. Confirm Safari returns to A; repeat and confirm it returns to B. Confirm the empty-input first row is labelled **Previous tab** and that Down, Enter still opens a native new tab.
-14. Restart Tab Scout from a script (for example `task deploy`) while Safari is frontmost, without clicking Tab Scout's menu-bar icon. The first physical Cmd+T must open the palette with the search field focused, and Safari must remain the active app.
+14. Open a new tab showing the Start Page and press Cmd+T. Enter an address, then repeat with a search and with a history or suggestion row. Each must load in that tab, leaving the tab count unchanged; the address row reads **This empty tab**. Choosing **New tab** or Cmd+Enter with empty input must keep the empty tab without adding another. On a tab showing a page, the same actions must still open a new tab.
+15. Restart Tab Scout from a script (for example `task deploy`) while Safari is frontmost, without clicking Tab Scout's menu-bar icon. The first physical Cmd+T must open the palette with the search field focused, and Safari must remain the active app.
 
 ## Native Panel Placement
 

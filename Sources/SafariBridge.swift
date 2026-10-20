@@ -43,12 +43,18 @@ final class SafariBridge {
         execute(["switch", String(tab.windowID), String(tab.index), tab.url, tab.title], on: actionQueue, completion: completion)
     }
 
-    func open(_ destination: NewTabDestination, windowID: Int, completion: @escaping (Result<Data, Error>) -> Void) {
+    /// Opens `destination` in a new tab, or in `blank`, an empty tab on screen, so that no empty tab is left behind.
+    /// The script still opens a new tab when `blank` has navigated away meanwhile.
+    func open(_ destination: NewTabDestination, windowID: Int, reusing blank: SafariTab? = nil,
+              completion: @escaping (Result<Data, Error>) -> Void) {
+        let windowID = String(blank?.windowID ?? windowID)
+        let reuse = blank.map { [String($0.index), $0.url] } ?? []
         switch destination {
         case .defaultPage:
-            execute(["prepare-new-tab", String(windowID)], on: actionQueue, after: newTabExecutor, completion: completion)
-        case .url(let url): execute(["url", String(windowID), url], on: actionQueue, completion: completion)
-        case .search(let query): execute(["search", String(windowID), query], on: actionQueue, completion: completion)
+            if let blank { return select(blank, completion: completion) }
+            execute(["prepare-new-tab", windowID], on: actionQueue, after: newTabExecutor, completion: completion)
+        case .url(let url): execute(["url", windowID, url] + reuse, on: actionQueue, completion: completion)
+        case .search(let query): execute(["search", windowID, query] + reuse, on: actionQueue, completion: completion)
         }
     }
 

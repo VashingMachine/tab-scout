@@ -77,6 +77,7 @@ The app must remain running for Cmd+T search. The shortcut is captured only whil
 - Questions and phrases of four or more words search by default unless a tab title holds the whole phrase. Guesses from typos or initials are listed below the typed search, which stays the default.
 - With empty input, the other open tabs follow the previous tab and the New tab action comes after them; Cmd+Enter also opens a new tab. It uses Safari's native new-tab command and configured page, not a forced `about:blank` URL.
 - The tab you are on is never listed. When it is the only match, Enter opens a new tab with your query.
+- On an empty tab, such as the Start Page, an address, search, history page or suggestion opens in that tab instead of a second one beside it, and the New tab action keeps it.
 - Start with `?` to ask Apple Intelligence for a tab in your own words. While it answers, the request is also matched as ordinary text, and Enter on the search row searches it without the `?`.
 - Escape or Cmd+T dismisses the palette without changing tabs.
 - The refresh button updates results. Preferences and permission checks are available from the menu bar.

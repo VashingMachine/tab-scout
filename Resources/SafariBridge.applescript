@@ -126,6 +126,13 @@ on run argv
     if operation is "url" or operation is "search" then
         set targetWindowID to (item 2 of argv) as integer
         set destination to item 3 of argv
+        -- An empty tab, given by its index and URL, is used instead of opening another beside it.
+        set reuseIndex to 0
+        set reuseURL to ""
+        if (count of argv) is 5 then
+            set reuseIndex to (item 4 of argv) as integer
+            set reuseURL to item 5 of argv
+        end if
         with timeout of 12 seconds
             tell application "Safari"
                 set createdWindow to false
@@ -139,9 +146,15 @@ on run argv
                     set browserWindow to front window
                 end if
                 tell browserWindow
+                    set newTab to missing value
                     if createdWindow then
                         set newTab to current tab
-                    else
+                    else if reuseIndex > 0 and reuseIndex <= (count of tabs) then
+                        set candidateURL to URL of tab reuseIndex
+                        if candidateURL is missing value then set candidateURL to ""
+                        if candidateURL is reuseURL then set newTab to tab reuseIndex
+                    end if
+                    if newTab is missing value then
                         set newTab to make new tab at end of tabs with properties {URL:"about:blank"}
                     end if
                     set current tab to newTab

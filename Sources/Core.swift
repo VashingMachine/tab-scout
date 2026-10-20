@@ -20,6 +20,8 @@ struct SafariTab: Hashable {
 
     var displayTitle: String { title.isEmpty ? (url.isEmpty ? "Untitled tab" : url) : title }
     var host: String { URL(string: url)?.host ?? url }
+    /// A fresh tab showing the Start Page, Favorites or an empty page, which a new page can replace.
+    var isBlank: Bool { ["", "about:blank", "favorites://", "topsites://"].contains(url) }
 }
 
 struct TabInventory: Equatable {

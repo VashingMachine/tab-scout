@@ -10,6 +10,7 @@ struct BridgeTests {
         try listDecoding()
         try activeDecoding()
         try actionArguments()
+        try blankTabArguments()
         try defaultPageArguments()
         try defaultPageFailures()
         try serialization()
@@ -74,6 +75,26 @@ struct BridgeTests {
             ["search", "42", query],
             ["url", "0", "https://example.org/a?x=1&y=2"]
         ], "Selection and creation pass quotes, newlines and shell characters as literal argv")
+    }
+
+    static func blankTabArguments() throws {
+        let calls = CallRecorder()
+        let bridge = SafariBridge(scriptURL: scriptURL, newTabExecutor: {
+            calls.append(url: scriptURL, arguments: ["native-new-tab"])
+            return Data("ok".utf8)
+        }) { url, arguments in
+            calls.append(url: url, arguments: arguments)
+            return Data("ok".utf8)
+        }
+        let blank = SafariTab(windowID: 9, index: 3, title: "Start Page", url: "")
+        _ = try awaitResult { bridge.open(.url("https://example.org/"), windowID: 1, reusing: blank, completion: $0) }.get()
+        _ = try awaitResult { bridge.open(.search("swift"), windowID: 1, reusing: blank, completion: $0) }.get()
+        _ = try awaitResult { bridge.open(.defaultPage, windowID: 1, reusing: blank, completion: $0) }.get()
+        expect(calls.values.map(\.arguments) == [
+            ["url", "9", "https://example.org/", "3", ""],
+            ["search", "9", "swift", "3", ""],
+            ["switch", "9", "3", "", "Start Page"]
+        ], "Pages open in the empty tab on screen, and New Tab keeps that tab instead of opening another")
     }
 
     static func defaultPageArguments() throws {

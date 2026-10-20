@@ -822,7 +822,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 cell.configure(title: "New tab", detail: "Safari's new-tab page", url: nil,
                                image: symbol("plus.square"), tint: .systemBlue)
             case .url(let url):
-                cell.configure(title: url == "about:blank" ? "New tab" : "Open \(url)", detail: "New Safari tab", url: nil,
+                cell.configure(title: url == "about:blank" ? "New tab" : "Open \(url)",
+                               detail: blankActiveTab == nil ? "New Safari tab" : "This empty tab", url: nil,
                                image: symbol("plus.square"), tint: .systemBlue)
             case .search(let query):
                 cell.configure(title: "Search for \(query)", detail: "Safari's default search engine", url: nil,
@@ -932,9 +933,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         switch row {
         case .previousTab(let tab), .tab(let tab): bridge.select(tab, completion: completion)
         default:
-            if let destination = row.destination { bridge.open(destination, windowID: tabs.first?.windowID ?? 0, completion: completion) }
+            if let destination = row.destination {
+                bridge.open(destination, windowID: tabs.first?.windowID ?? 0, reusing: blankActiveTab, completion: completion)
+            }
         }
     }
+
+    /// The tab on screen when it is empty, such as the Start Page; pages chosen in the palette open there.
+    private var blankActiveTab: SafariTab? { activeTab?.isBlank == true ? activeTab : nil }
 
     /// Logs which of the listed tabs was picked and, every few picks, relearns the ranking weights in the
     /// background. Learned weights are adopted only when they rank recent picks at least as well as the standard ones.

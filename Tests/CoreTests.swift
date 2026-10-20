@@ -30,6 +30,8 @@ struct CoreTests {
         expect(NewTabDestination.from("about:blank") == .search("about:blank"), "Typed non-web schemes remain search text")
         expect(NewTabDestination.from("  Swift programming  ") == .search("Swift programming"), "Nonempty search input still trims surrounding whitespace")
         expect(NewTabDestination.from("query \"quoted\"\nsecond line") == .search("query \"quoted\"\nsecond line"), "Preserve quotes and newlines as data")
+        expect(["", "about:blank", "favorites://"].allSatisfy { tab("Start Page", $0).isBlank }, "Start Page and empty pages are blank tabs")
+        expect(!tab("Example", "https://example.org/").isBlank && !tab("", "bookmarks://").isBlank, "A loaded page is not a blank tab")
 
         let data = Data("[[9,1,\"A \\\"quote\\\" \\n title\",\"https://example.com/a?x=1&y=2\",true]]".utf8)
         let decoded = try TabInventory.decode(data)
