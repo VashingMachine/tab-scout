@@ -4,6 +4,7 @@ import Foundation
 struct BridgeTests {
     static var checks = 0
     static let scriptURL = URL(fileURLWithPath: "/test resources/SafariBridge.scpt")
+    static let chromeURL = URL(fileURLWithPath: "/test resources/ChromeBridge.scpt")
     static let sampleJSON = Data("[[11,1,\"A \\\"quoted\\\" title\",\"https://example.org/a?x=1&y=2\",false],[11,2,\"\",\"\",true],[27,1,\"Other window\",\"https://example.net\",true]]".utf8)
 
     static func main() throws {
@@ -11,6 +12,7 @@ struct BridgeTests {
         try activeDecoding()
         try actionArguments()
         try blankTabArguments()
+        try chromeArguments()
         try defaultPageArguments()
         try defaultPageFailures()
         try serialization()
@@ -21,7 +23,7 @@ struct BridgeTests {
 
     static func listDecoding() throws {
         let calls = CallRecorder()
-        let bridge = SafariBridge(scriptURL: scriptURL, executor: { url, arguments in
+        let bridge = BrowserBridge(scriptURL: scriptURL, executor: { url, arguments in
             expect(!Thread.isMainThread, "Execute Safari scripts off the main thread")
             calls.append(url: url, arguments: arguments)
             return sampleJSON
@@ -31,29 +33,29 @@ struct BridgeTests {
         expect(calls.values == [Call(url: scriptURL, arguments: ["list"])], "List uses the compiled script and list argv")
         expect(tabs.count == 3, "Decode multiple windows and blank tabs")
         expect(tabs[0].title == "A \"quoted\" title", "Decode escaped titles without altering them")
-        expect(tabs[1] == SafariTab(windowID: 11, index: 2, title: "", url: ""), "Keep blank tabs addressable")
+        expect(tabs[1] == BrowserTab(windowID: 11, index: 2, title: "", url: ""), "Keep blank tabs addressable")
         expect(tabs[2].windowID == 27 && tabs[2].index == 1, "Preserve one-based indices independently per window")
         expect(inventory.active == tabs[1], "The front window's current tab is the active tab, not a background window's")
 
-        let emptyBridge = SafariBridge(scriptURL: scriptURL, executor: { _, _ in Data("[]".utf8) })
+        let emptyBridge = BrowserBridge(scriptURL: scriptURL, executor: { _, _ in Data("[]".utf8) })
         let empty = try awaitResult { emptyBridge.list(completion: $0) }.get()
         expect(empty.tabs.isEmpty && empty.active == nil, "An empty Safari session succeeds without an active tab")
     }
 
     static func activeDecoding() throws {
         let calls = CallRecorder()
-        let bridge = SafariBridge(scriptURL: scriptURL, executor: { url, arguments in
+        let bridge = BrowserBridge(scriptURL: scriptURL, executor: { url, arguments in
             calls.append(url: url, arguments: arguments)
             return Data("[11,2,\"A \\\"quoted\\\" title\",\"https://example.org/a\"]".utf8)
         })
         let active = try awaitResult { bridge.active(completion: $0) }.get()
         expect(calls.values == [Call(url: scriptURL, arguments: ["active"])], "The active tab read uses the active argv")
-        expect(active == SafariTab(windowID: 11, index: 2, title: "A \"quoted\" title", url: "https://example.org/a"),
+        expect(active == BrowserTab(windowID: 11, index: 2, title: "A \"quoted\" title", url: "https://example.org/a"),
                "Decode the tab on screen")
-        let none = SafariBridge(scriptURL: scriptURL, executor: { _, _ in Data("[]".utf8) })
+        let none = BrowserBridge(scriptURL: scriptURL, executor: { _, _ in Data("[]".utf8) })
         try expect(try awaitResult { none.active(completion: $0) }.get() == nil, "No window means no active tab")
         for invalid in ["[1,2,\"A\"]", "[\"1\",2,\"A\",\"a\"]", "{}", "[1,2,3,\"a\"]"] {
-            let broken = SafariBridge(scriptURL: scriptURL, executor: { _, _ in Data(invalid.utf8) })
+            let broken = BrowserBridge(scriptURL: scriptURL, executor: { _, _ in Data(invalid.utf8) })
             expect((try? awaitResult { broken.active(completion: $0) }.get()) == nil
                    && (try? TabInventory.decodeActive(Data(invalid.utf8))) == nil, "Reject a malformed active row: \(invalid)")
         }
@@ -61,11 +63,11 @@ struct BridgeTests {
 
     static func actionArguments() throws {
         let calls = CallRecorder()
-        let bridge = SafariBridge(scriptURL: scriptURL, executor: { url, arguments in
+        let bridge = BrowserBridge(scriptURL: scriptURL, executor: { url, arguments in
             calls.append(url: url, arguments: arguments)
             return Data("ok".utf8)
         })
-        let tab = SafariTab(windowID: 42, index: 6, title: "A \"title\"\nnext line", url: "https://example.org/?quote=\"&a=1")
+        let tab = BrowserTab(windowID: 42, index: 6, title: "A \"title\"\nnext line", url: "https://example.org/?quote=\"&a=1")
         _ = try awaitResult { bridge.select(tab, completion: $0) }.get()
         let query = "query \"quoted\"\nsecond line; $(echo never)"
         _ = try awaitResult { bridge.open(.search(query), windowID: 42, completion: $0) }.get()
@@ -79,14 +81,14 @@ struct BridgeTests {
 
     static func blankTabArguments() throws {
         let calls = CallRecorder()
-        let bridge = SafariBridge(scriptURL: scriptURL, newTabExecutor: {
+        let bridge = BrowserBridge(scriptURL: scriptURL, newTabExecutor: {
             calls.append(url: scriptURL, arguments: ["native-new-tab"])
             return Data("ok".utf8)
         }) { url, arguments in
             calls.append(url: url, arguments: arguments)
             return Data("ok".utf8)
         }
-        let blank = SafariTab(windowID: 9, index: 3, title: "Start Page", url: "")
+        let blank = BrowserTab(windowID: 9, index: 3, title: "Start Page", url: "")
         _ = try awaitResult { bridge.open(.url("https://example.org/"), windowID: 1, reusing: blank, completion: $0) }.get()
         _ = try awaitResult { bridge.open(.search("swift"), windowID: 1, reusing: blank, completion: $0) }.get()
         _ = try awaitResult { bridge.open(.defaultPage, windowID: 1, reusing: blank, completion: $0) }.get()
@@ -97,10 +99,38 @@ struct BridgeTests {
         ], "Pages open in the empty tab on screen, and New Tab keeps that tab instead of opening another")
     }
 
+    static func chromeArguments() throws {
+        let calls = CallRecorder()
+        let bridge = BrowserBridge(browser: .chrome, scriptURL: chromeURL, newTabExecutor: {
+            fatalError("Chrome opens its own new-tab page")
+        }) { url, arguments in
+            calls.append(url: url, arguments: arguments)
+            return arguments[1] == "list" ? Data("[[7,1,\"Mail\",\"https://mail.example/\",true]]".utf8) : Data("ok".utf8)
+        }
+        let inventory = try awaitResult { bridge.list(completion: $0) }.get()
+        expect(inventory.tabs.map(\.browser) == [.chrome] && inventory.active?.browser == .chrome, "Chrome's rows become Chrome tabs")
+        let blank = BrowserTab(browser: .chrome, windowID: 7, index: 2, title: "New Tab", url: "chrome://newtab/")
+        _ = try awaitResult { bridge.select(inventory.tabs[0], completion: $0) }.get()
+        _ = try awaitResult { bridge.open(.defaultPage, windowID: 7, completion: $0) }.get()
+        _ = try awaitResult { bridge.open(.url("https://example.org/"), windowID: 7, completion: $0) }.get()
+        _ = try awaitResult { bridge.open(.search("C++ & rust"), windowID: 0, reusing: blank, completion: $0) }.get()
+        _ = try awaitResult { bridge.open(.defaultPage, windowID: 7, reusing: blank, completion: $0) }.get()
+        let id = "com.google.Chrome"
+        expect(calls.values.map(\.arguments) == [
+            [id, "list"],
+            [id, "switch", "7", "1", "https://mail.example/", "Mail"],
+            [id, "new-tab", "7"],
+            [id, "url", "7", "https://example.org/"],
+            [id, "url", "7", "https://www.google.com/search?q=C%2B%2B%20%26%20rust", "2", "chrome://newtab/"],
+            [id, "switch", "7", "2", "chrome://newtab/", "New Tab"]
+        ], "Chrome commands name the browser, search through Google, open Chrome's own new-tab page and reuse an empty tab")
+        expect(calls.values.allSatisfy { $0.url == chromeURL }, "Chrome commands use Chrome's script")
+    }
+
     static func defaultPageArguments() throws {
         let calls = CallRecorder()
         let nativeOutput = Data("native-ok".utf8)
-        let bridge = SafariBridge(scriptURL: scriptURL, newTabExecutor: {
+        let bridge = BrowserBridge(scriptURL: scriptURL, newTabExecutor: {
             expect(!Thread.isMainThread, "The native Safari command runs off the main thread")
             calls.append(url: scriptURL, arguments: ["native-new-tab"])
             return nativeOutput
@@ -125,7 +155,7 @@ struct BridgeTests {
 
     static func defaultPageFailures() throws {
         let deniedCalls = CallRecorder()
-        let denied = SafariBridge(scriptURL: scriptURL, newTabExecutor: {
+        let denied = BrowserBridge(scriptURL: scriptURL, newTabExecutor: {
             deniedCalls.append(url: scriptURL, arguments: ["native-new-tab"])
             return Data("unexpected".utf8)
         }) { url, arguments in
@@ -138,7 +168,7 @@ struct BridgeTests {
                "Failed window preparation suppresses the native Safari command")
 
         let malformedCalls = CallRecorder()
-        let malformed = SafariBridge(scriptURL: scriptURL, newTabExecutor: {
+        let malformed = BrowserBridge(scriptURL: scriptURL, newTabExecutor: {
             malformedCalls.append(url: scriptURL, arguments: ["native-new-tab"])
             return Data("unexpected".utf8)
         }) { url, arguments in
@@ -151,7 +181,7 @@ struct BridgeTests {
                "An unconfirmed preparation response cannot trigger a native command")
 
         let nativeCalls = CallRecorder()
-        let rejected = SafariBridge(scriptURL: scriptURL, newTabExecutor: {
+        let rejected = BrowserBridge(scriptURL: scriptURL, newTabExecutor: {
             nativeCalls.append(url: scriptURL, arguments: ["native-new-tab"])
             throw NativeFixtureError.unavailable
         }) { url, arguments in
@@ -171,7 +201,7 @@ struct BridgeTests {
 
     static func serialization() throws {
         let calls = CallRecorder()
-        let bridge = SafariBridge(scriptURL: scriptURL, newTabExecutor: {
+        let bridge = BrowserBridge(scriptURL: scriptURL, newTabExecutor: {
             calls.append(url: scriptURL, arguments: ["native-new-tab"])
             return Data("ok".utf8)
         }) { url, arguments in
@@ -179,7 +209,7 @@ struct BridgeTests {
             Thread.sleep(forTimeInterval: 0.01)
             return arguments == ["list"] ? sampleJSON : Data("ok".utf8)
         }
-        let tab = SafariTab(windowID: 1, index: 1, title: "A", url: "https://example.org")
+        let tab = BrowserTab(windowID: 1, index: 1, title: "A", url: "https://example.org")
         var completions = [String]()
         bridge.select(tab) { _ in completions.append("switch") }
         bridge.open(.defaultPage, windowID: 1) { _ in completions.append("new-tab") }
@@ -191,7 +221,7 @@ struct BridgeTests {
         // A slow tab-list read must not hold up an action submitted after it.
         let release = DispatchSemaphore(value: 0)
         let reads = CallRecorder()
-        let parallel = SafariBridge(scriptURL: scriptURL, executor: { url, arguments in
+        let parallel = BrowserBridge(scriptURL: scriptURL, executor: { url, arguments in
             if arguments == ["list"] { release.wait(); reads.append(url: url, arguments: arguments); return sampleJSON }
             return Data("ok".utf8)
         })
@@ -206,11 +236,11 @@ struct BridgeTests {
     }
 
     static func failures() throws {
-        let malformed = SafariBridge(scriptURL: scriptURL, executor: { _, _ in Data("[[1,2,3,4,true]]".utf8) })
+        let malformed = BrowserBridge(scriptURL: scriptURL, executor: { _, _ in Data("[[1,2,3,4,true]]".utf8) })
         expectError(awaitResult { malformed.list(completion: $0) }, matching: .invalidResponse, "Reject malformed tab rows")
-        let unmarked = SafariBridge(scriptURL: scriptURL, executor: { _, _ in Data("[[1,2,\"A\",\"https://example.org\"]]".utf8) })
+        let unmarked = BrowserBridge(scriptURL: scriptURL, executor: { _, _ in Data("[[1,2,\"A\",\"https://example.org\"]]".utf8) })
         expectError(awaitResult { unmarked.list(completion: $0) }, matching: .invalidResponse, "Reject rows without a current-tab marker")
-        let permission = SafariBridge(scriptURL: scriptURL, executor: { _, _ in throw BridgeError.permission })
+        let permission = BrowserBridge(scriptURL: scriptURL, executor: { _, _ in throw BridgeError.permission })
         expectError(awaitResult { permission.list(completion: $0) }, matching: .permission, "Forward bridge permission failures")
 
         expectError(Result { try output(status: 1, errors: "Not authorized (-1743)").validatedData() }, matching: .permission, "Map Safari Automation denial")
@@ -219,7 +249,7 @@ struct BridgeTests {
         expectError(Result { try output(status: 0, timedOut: true).validatedData() }, matching: .timeout, "A deadline cannot appear as a successful action")
         expectError(Result { try output(status: 15, signaled: true).validatedData() }, matching: .timeout, "Map an externally terminated process")
         let changed = try Result { try output(status: 1, errors: "TAB_SCOUT_SNAPSHOT_CHANGED").validatedData() }.errorDescription()
-        expect(changed == "Safari tabs changed while refreshing. Try again.", "Explain an unstable snapshot without returning mixed rows")
+        expect(changed == "Tabs changed while refreshing. Try again.", "Explain an unstable snapshot without returning mixed rows")
         let hidden = try Result { try output(status: 1, errors: "Private URL: https://secret.example").validatedData() }.errorDescription()
         expect(!hidden.contains("secret.example"), "Do not expose raw Safari diagnostics to the UI")
         try expect(output(data: Data("ok".utf8)).validatedData() == Data("ok".utf8), "Pass successful stdout through unchanged")
@@ -227,19 +257,19 @@ struct BridgeTests {
 
     static func processTransport() throws {
         let start = Date()
-        let large = try SafariScriptProcess.run(executableURL: URL(fileURLWithPath: "/usr/bin/awk"), arguments: [
+        let large = try ScriptProcess.run(executableURL: URL(fileURLWithPath: "/usr/bin/awk"), arguments: [
             "BEGIN { for (i=0; i<20000; i++) print \"failure diagnostic line\" > \"/dev/stderr\"; printf \"[]\"; exit 7 }"
         ], timeout: 5)
         expect(large.data == Data("[]".utf8), "Drain stdout while a failed child fills stderr")
         expect(large.errors.count > 400_000 && large.status == 7 && !large.timedOut, "Drain diagnostics larger than the pipe buffer without deadlocking")
         expect(Date().timeIntervalSince(start) < 5, "A large-error process completes before its deadline")
-        let timeout = try SafariScriptProcess.run(executableURL: URL(fileURLWithPath: "/bin/sleep"), arguments: ["5"], timeout: 0.05)
+        let timeout = try ScriptProcess.run(executableURL: URL(fileURLWithPath: "/bin/sleep"), arguments: ["5"], timeout: 0.05)
         expect(timeout.timedOut && timeout.signaled, "Terminate an unresponsive process at the deadline")
         expectError(Result { try timeout.validatedData() }, matching: .timeout, "Report process deadlines as recoverable bridge timeouts")
     }
 
-    static func output(data: Data = Data(), status: Int32 = 0, errors: String = "", signaled: Bool = false, timedOut: Bool = false) -> SafariScriptProcess.Output {
-        SafariScriptProcess.Output(data: data, errors: Data(errors.utf8), status: status, signaled: signaled, timedOut: timedOut)
+    static func output(data: Data = Data(), status: Int32 = 0, errors: String = "", signaled: Bool = false, timedOut: Bool = false) -> ScriptProcess.Output {
+        ScriptProcess.Output(data: data, errors: Data(errors.utf8), status: status, signaled: signaled, timedOut: timedOut)
     }
 
     static func awaitResult<Value>(_ operation: (@escaping (Result<Value, Error>) -> Void) -> Void) -> Result<Value, Error> {

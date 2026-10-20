@@ -7,8 +7,8 @@ struct CacheTests {
         var date = Date(timeIntervalSince1970: 1_000)
         var pending: [(Result<TabInventory, Error>) -> Void] = []
         let store = TabStore(now: { date }) { pending.append($0) }
-        let tab = SafariTab(windowID: 1, index: 1, title: "Original", url: "https://example.com/original")
-        let changed = SafariTab(windowID: 1, index: 1, title: "Changed", url: "https://example.com/changed")
+        let tab = BrowserTab(windowID: 1, index: 1, title: "Original", url: "https://example.com/original")
+        let changed = BrowserTab(windowID: 1, index: 1, title: "Changed", url: "https://example.com/changed")
         var first: [Result<TabSnapshot, Error>] = []
         var second: [Result<TabSnapshot, Error>] = []
         store.load { first.append($0) }
@@ -69,7 +69,7 @@ struct CacheTests {
         date.addTimeInterval(-1)
         expect(store.snapshot == nil, "Clock rollback does not create indefinitely fresh data")
 
-        var observed: [SafariTab?] = []
+        var observed: [BrowserTab?] = []
         let observedStore = TabStore(now: { date }) { pending.append($0) }
         observedStore.onSnapshot = { observed.append($0.active) }
         observedStore.prewarm()
@@ -110,7 +110,7 @@ struct CacheTests {
         coldStore.noteActivation(tab)
         expect(coldStore.snapshot == nil && pending.isEmpty, "Without cached tabs there is nothing to keep")
 
-        let fixtures = (0..<200).map { SafariTab(windowID: $0 / 20, index: $0 % 20 + 1, title: "Zażółć project \($0)", url: "https://example\($0 % 7).com/docs/\($0)") }
+        let fixtures = (0..<200).map { BrowserTab(windowID: $0 / 20, index: $0 % 20 + 1, title: "Zażółć project \($0)", url: "https://example\($0 % 7).com/docs/\($0)") }
         let index = TabSearchIndex(fixtures)
         for query in ["", "zazolc", "PROJECT 12", "example3.com", "docs/5", "missing", "  project   19  "] {
             expect(index.results(query: query) == TabSearch.results(fixtures, query: query), "Indexed search preserves matching and order: \(query)")
@@ -118,12 +118,24 @@ struct CacheTests {
         expect(index.results(query: "project 199").count == 1, "Multi-token index returns expected exact fixture")
         expect(index.results(query: "example3.com") == fixtures.filter { $0.host == "example3.com" }, "Host matching has an independent expected inventory")
         expect(index.results(query: "docs/5") == fixtures.filter { $0.url.contains("docs/5") }, "URL-path matching preserves original order")
-        let exact = SafariTab(windowID: 1, index: 1, title: "GitHub", url: "https://other.example.com")
-        let host = SafariTab(windowID: 1, index: 2, title: "Source code", url: "https://github.com/acme")
-        let prefix = SafariTab(windowID: 1, index: 3, title: "GitHub documentation", url: "https://docs.example.com")
-        let contains = SafariTab(windowID: 1, index: 4, title: "Notes about GitHub", url: "https://notes.example.com")
-        let urlOnly = SafariTab(windowID: 1, index: 5, title: "API", url: "https://api.github.com")
+        let exact = BrowserTab(windowID: 1, index: 1, title: "GitHub", url: "https://other.example.com")
+        let host = BrowserTab(windowID: 1, index: 2, title: "Source code", url: "https://github.com/acme")
+        let prefix = BrowserTab(windowID: 1, index: 3, title: "GitHub documentation", url: "https://docs.example.com")
+        let contains = BrowserTab(windowID: 1, index: 4, title: "Notes about GitHub", url: "https://notes.example.com")
+        let urlOnly = BrowserTab(windowID: 1, index: 5, title: "API", url: "https://api.github.com")
         expect(TabSearchIndex([urlOnly, contains, prefix, host, exact]).results(query: "github") == [exact, host, prefix, contains, urlOnly], "Independent fixture verifies exact-title, host-prefix, title-prefix, title-contains and URL-only ranking")
+        let safariTab = BrowserTab(windowID: 1, index: 1, title: "Safari page", url: "https://safari.example/")
+        let chromeTab = BrowserTab(browser: .chrome, windowID: 1, index: 1, title: "Chrome page", url: "https://chrome.example/")
+        func snapshot(_ tab: BrowserTab) -> TabSnapshot {
+            TabSnapshot(tabs: [tab], active: tab, index: TabSearchIndex([tab]), fetchedAt: date, revision: 0)
+        }
+        let chromeFront = CombinedTabs([.safari: snapshot(safariTab), .chrome: snapshot(chromeTab)], front: .chrome)
+        expect(chromeFront.tabs == [chromeTab, safariTab] && chromeFront.active == chromeTab,
+               "The browser in front lists first and supplies the tab on screen")
+        expect(chromeFront.index.results(query: "page") == [chromeTab, safariTab], "One search covers both browsers")
+        let safariOnly = CombinedTabs([.safari: snapshot(safariTab)], front: .chrome)
+        expect(safariOnly.tabs == [safariTab] && safariOnly.active == nil,
+               "A browser in front without tabs hides no other browser's tab")
         print("Passed \(checks) tab cache and indexed-search checks")
     }
 

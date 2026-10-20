@@ -70,7 +70,7 @@ done
     -o "$WORK_DIR/SafariNativeNewTabTests"
 "$WORK_DIR/SafariNativeNewTabTests"
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" \
-    "$SOURCE_DIR/Sources/SafariBridge.swift" "$SOURCE_DIR/Sources/SafariNativeNewTab.swift" \
+    "$SOURCE_DIR/Sources/BrowserBridge.swift" "$SOURCE_DIR/Sources/SafariNativeNewTab.swift" \
     "$SOURCE_DIR/Tests/BridgeTests.swift" -o "$WORK_DIR/BridgeTests"
 "$WORK_DIR/BridgeTests"
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Favicon.swift" \
@@ -81,4 +81,7 @@ done
 "$WORK_DIR/ResultCellTests"
 /usr/bin/osacompile -o "$WORK_DIR/SafariBridge.scpt" "$SOURCE_DIR/Resources/SafariBridge.applescript"
 /usr/bin/osascript "$SOURCE_DIR/Tests/BridgeSnapshotTests.applescript" "$WORK_DIR/SafariBridge.scpt"
+/usr/bin/osacompile -l JavaScript -o "$WORK_DIR/ChromeBridge.scpt" "$SOURCE_DIR/Resources/ChromeBridge.js"
+# Runs the script against a stand-in for Chrome; no browser is touched.
+/usr/bin/osascript -l JavaScript "$SOURCE_DIR/Tests/ChromeBridgeTests.js" "$SOURCE_DIR/Resources/ChromeBridge.js"
 /usr/bin/plutil -lint "$SOURCE_DIR/Resources/Info.plist" "$SOURCE_DIR/Resources/Entitlements.plist"

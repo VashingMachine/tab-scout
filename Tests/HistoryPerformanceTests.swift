@@ -7,7 +7,7 @@ struct HistoryPerformanceTests {
     static func main() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let tabs = (0..<1_000).map { index in
-            SafariTab(windowID: index / 20 + 1, index: index % 20 + 1,
+            BrowserTab(windowID: index / 20 + 1, index: index % 20 + 1,
                       title: "Project \(index % 100) engineering tab \(index)",
                       url: "https://docs.example\(index % 25).com/page/\(index)")
         }

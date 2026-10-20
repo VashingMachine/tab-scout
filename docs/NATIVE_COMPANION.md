@@ -1,18 +1,18 @@
 # Tab Scout Native App
 
-Search your open Safari tabs with Cmd+T. Switch to a match, or open a new tab when there is no match.
+Search your open Safari and Chrome tabs with Cmd+T. Switch to a match in its own browser, or open a new tab in the browser you were using when there is no match.
 
-Tab Scout is a native macOS menu-bar app, **not a Safari extension**. It uses Safari's local scripting interface and a keyboard hook. Optional Google predictions and local history ranking make the palette more useful without waiting for a network request. There is no subscription or Apple developer account requirement for a local build.
+Tab Scout is a native macOS menu-bar app, **not a browser extension**. It uses Safari's and Chrome's local scripting interfaces and a keyboard hook. Optional Google predictions and local history ranking make the palette more useful without waiting for a network request. There is no subscription or Apple developer account requirement for a local build.
 
 See the [README](../README.md) for the quick start and [restore verification](NATIVE_RESTORE_QA.md) for the latest live Cmd+T check.
 
 ## Requirements
 
 - macOS 13 or later.
-- Safari.
+- Safari, Google Chrome, or both.
 - Xcode or the Xcode Command Line Tools to build from source.
-- Device Control and Data Access / Accessibility permission for the Safari-only Cmd+T hook.
-- Automation permission to read and control Safari tabs.
+- Device Control and Data Access / Accessibility permission for the Cmd+T hook in Safari and Chrome.
+- Automation permission to read and control Safari tabs, and separately Chrome tabs.
 - Optional Full Disk Access to include Safari browsing history. Tab switching, ordinary searches, and Google predictions do not require this permission.
 
 The project uses system frameworks only. It has no package dependencies.
@@ -46,8 +46,8 @@ If you already have a signing certificate, `TAB_SCOUT_SIGN_IDENTITY` can select 
 In Tab Scout's Permissions window:
 
 1. Click **Open Settings** and enable **Tab Scout** under Privacy & Security > Device Control and Data Access (macOS 27+) or Accessibility (earlier macOS). If it is absent, use the + button and choose the installed app.
-2. Click **Allow Access** and allow Tab Scout to control Safari. If previously denied, enable Safari under Privacy & Security > Automation > Tab Scout.
-3. Click **Open Search**, or switch to Safari and press Cmd+T.
+2. Click **Allow Access** next to Safari and allow Tab Scout to control Safari. Do the same next to Google Chrome to include its tabs; this opens Chrome. If previously denied, enable the browser under Privacy & Security > Automation > Tab Scout.
+3. Click **Open Search**, or switch to Safari or Chrome and press Cmd+T.
 
 The shortcut hook starts automatically after permission is granted. Permissions are granted by the user through macOS; the app and tests do not bypass them.
 
@@ -63,7 +63,7 @@ The shortcut hook starts automatically after permission is granted. Permissions 
 - Cmd+Enter always opens the query in a new tab. An empty or whitespace-only query uses Safari's native **New Tab** command and configured new-tab page. With **New tabs open with: Start Page** in Safari Settings > General, it shows the native Start Page with its configured sections and background instead of a forced `about:blank`. The native command also handles opening a tab when Safari has no windows.
 - Escape or Cmd+T closes the search panel without an action.
 - The refresh icon requests updated results. The menu-bar menu provides search, permissions, shortcut capture, **Google Suggestions**, **Use Safari History**, **Clear Tab Scout History**, **Start at Login**, and quit.
-- Cmd+T is captured only while Safari is active. Cmd+Shift+T and shortcuts in other apps retain their normal behavior.
+- Cmd+T is captured only while Safari or Chrome is active. Cmd+Shift+T and shortcuts in other apps retain their normal behavior.
 
 ## Suggestions And History
 
@@ -109,7 +109,20 @@ The favicon cache lives at `~/Library/Caches/local.tabscout.app/Favicons-v1`. It
 
 Safari's scripting inventory does not reliably identify private-browsing tabs. If Safari exposes a private-window tab, Tab Scout may list it and cache its site's favicon too. A successful action can also enter Tab Scout's local accepted-choice history, and opted-in suggestions can send typed text to Google. Do not treat Tab Scout, its local records, or its favicon cache as a private-browsing boundary. Disable suggestions and avoid using Tab Scout for private activity that must not be recorded.
 
-Choosing a web search sends the query through Safari's configured provider, as normal browsing does. Choosing a URL opens it in Safari.
+Choosing a web search sends the query through Safari's configured provider, or Google in Chrome, as normal browsing does. Choosing a URL opens it in the browser you were using.
+
+## Google Chrome
+
+While Chrome is running, its tabs are listed with Safari's. Each browser is read separately and cached on its own, so a slow Chrome, or Chrome waiting for you to answer its Automation prompt, never delays Safari's tabs; Chrome's arrive a moment later. A browser that cannot be read is named in the footer, and the others still work.
+
+- Picking a tab switches to it in its own browser, so Cmd+T, Enter can flip between a Safari tab and a Chrome tab. Window labels name the browser once tabs from both are listed.
+- New tabs, addresses and searches open in the browser most recently in front. In Chrome, **New tab** opens Chrome's own new-tab page, and an empty Chrome new-tab page on screen is reused like Safari's Start Page.
+- Searches in Chrome go to Google: Chrome has no scripting command for its own search engine.
+- Incognito windows are never read, listed or used; a new tab opens in a normal window, which is made when none exists.
+- Every Chrome profile's windows are included. Chrome history is not imported.
+- **Search Page Text** reads Chrome pages only with View > Developer > Allow JavaScript from Apple Events turned on in Chrome. Without it, Chrome refuses, and Tab Scout stops asking until the option is turned on again.
+
+The bridge is `Resources/ChromeBridge.js`, JavaScript for Automation compiled into the app. It needs no Chrome scripting dictionary to build, and takes the browser's bundle identifier, so other Chromium browsers that share Chrome's scripting terms could be added.
 
 ## Tests
 
@@ -141,7 +154,7 @@ Quit preview before launching the normal app. Core live behavior, permissions, r
 
 ## Limitations
 
-- Only tabs Safari exposes in open windows can be searched. Inactive Tab Groups and profiles are not a complete searchable inventory; activate the relevant group first.
+- Only tabs Safari and Chrome expose in open windows can be searched. Inactive Tab Groups and profiles are not a complete searchable inventory; activate the relevant group first.
 - Tab inventory timing depends on Safari responsiveness and session size. Cached results improve repeated opens; a cold start still needs a Safari read.
 - Authenticated-only, cross-origin, unsupported, or unavailable icons fall back to the system icon.
 - Google suggestions may be unavailable or change format without notice. They are not Apple's separate Safari Suggestions and do not reproduce signed-in Google predictions.

@@ -1,10 +1,12 @@
 import Foundation
 import Darwin
 
-final class SafariBridge {
+/// Reads and changes one browser's tabs through its script: SafariBridge.scpt for Safari, ChromeBridge.scpt for Chrome.
+final class BrowserBridge {
     typealias ScriptExecutor = (URL, [String]) throws -> Data
     typealias NewTabExecutor = () throws -> Data
 
+    let browser: Browser
     // Tab-list reads run beside actions, so Enter never waits for a background refresh to finish.
     private let readQueue = DispatchQueue(label: "local.tabscout.safari.read")
     private let actionQueue = DispatchQueue(label: "local.tabscout.safari.action")
@@ -12,23 +14,29 @@ final class SafariBridge {
     private let newTabExecutor: NewTabExecutor
     private let executor: ScriptExecutor
 
-    init(scriptURL: URL, newTabExecutor: @escaping NewTabExecutor = SafariNativeNewTab.open,
-         executor: @escaping ScriptExecutor = SafariScriptProcess.execute) {
+    /// `newTabExecutor` opens Safari's configured new-tab page; Chrome's script opens its own.
+    init(browser: Browser = .safari, scriptURL: URL, newTabExecutor: @escaping NewTabExecutor = SafariNativeNewTab.open,
+         executor: @escaping ScriptExecutor = ScriptProcess.execute) {
+        self.browser = browser
         self.scriptURL = scriptURL
         self.newTabExecutor = newTabExecutor
         self.executor = executor
     }
 
     func list(completion: @escaping (Result<TabInventory, Error>) -> Void) {
-        execute(["list"], on: readQueue) { result in completion(result.flatMap { data in Result { try TabInventory.decode(data) } }) }
+        execute(["list"], on: readQueue) { [browser] result in
+            completion(result.flatMap { data in Result { try TabInventory.decode(data, browser: browser) } })
+        }
     }
 
-    func active(completion: @escaping (Result<SafariTab?, Error>) -> Void) {
-        execute(["active"], on: readQueue) { result in completion(result.flatMap { data in Result { try TabInventory.decodeActive(data) } }) }
+    func active(completion: @escaping (Result<BrowserTab?, Error>) -> Void) {
+        execute(["active"], on: readQueue) { [browser] result in
+            completion(result.flatMap { data in Result { try TabInventory.decodeActive(data, browser: browser) } })
+        }
     }
 
     /// The visible text of `tab`, at most 30,000 characters. Fails as stale when the tab moved or navigated.
-    func text(of tab: SafariTab, completion: @escaping (Result<String, Error>) -> Void) {
+    func text(of tab: BrowserTab, completion: @escaping (Result<String, Error>) -> Void) {
         execute(["text", String(tab.windowID), String(tab.index), tab.url], on: readQueue) { result in
             completion(result.map { data in
                 // osascript ends its output with a newline.
@@ -39,34 +47,40 @@ final class SafariBridge {
         }
     }
 
-    func select(_ tab: SafariTab, completion: @escaping (Result<Data, Error>) -> Void) {
+    func select(_ tab: BrowserTab, completion: @escaping (Result<Data, Error>) -> Void) {
         execute(["switch", String(tab.windowID), String(tab.index), tab.url, tab.title], on: actionQueue, completion: completion)
     }
 
     /// Opens `destination` in a new tab, or in `blank`, an empty tab on screen, so that no empty tab is left behind.
     /// The script still opens a new tab when `blank` has navigated away meanwhile.
-    func open(_ destination: NewTabDestination, windowID: Int, reusing blank: SafariTab? = nil,
+    func open(_ destination: NewTabDestination, windowID: Int, reusing blank: BrowserTab? = nil,
               completion: @escaping (Result<Data, Error>) -> Void) {
         let windowID = String(blank?.windowID ?? windowID)
         let reuse = blank.map { [String($0.index), $0.url] } ?? []
-        switch destination {
-        case .defaultPage:
-            if let blank { return select(blank, completion: completion) }
+        if destination == .defaultPage, let blank { return select(blank, completion: completion) }
+        switch (destination, browser) {
+        case (.defaultPage, .safari):
             execute(["prepare-new-tab", windowID], on: actionQueue, after: newTabExecutor, completion: completion)
-        case .url(let url): execute(["url", windowID, url] + reuse, on: actionQueue, completion: completion)
-        case .search(let query): execute(["search", windowID, query] + reuse, on: actionQueue, completion: completion)
+        case (.defaultPage, .chrome): execute(["new-tab", windowID], on: actionQueue, completion: completion)
+        case (.url(let url), _): execute(["url", windowID, url] + reuse, on: actionQueue, completion: completion)
+        case (.search(let query), .safari): execute(["search", windowID, query] + reuse, on: actionQueue, completion: completion)
+        case (.search(let query), .chrome):
+            execute(["url", windowID, Browser.googleSearch(query)] + reuse, on: actionQueue, completion: completion)
         }
     }
 
     private func execute(_ arguments: [String], on queue: DispatchQueue, after action: NewTabExecutor? = nil,
                          completion: @escaping (Result<Data, Error>) -> Void) {
         let submitted = DispatchTime.now()
+        let step = "\(browser.rawValue) \(arguments[0])"
+        // Chrome's script serves every Chromium browser, picked by bundle identifier.
+        let argv = browser == .safari ? arguments : [browser.bundleID] + arguments
         queue.async { [scriptURL, executor] in
-            Timing.log("safari \(arguments[0]) queued", since: submitted)
+            Timing.log("\(step) queued", since: submitted)
             let started = DispatchTime.now()
-            defer { Timing.log("safari \(arguments[0])", since: started) }
+            defer { Timing.log(step, since: started) }
             let result = Result {
-                let data = try executor(scriptURL, arguments)
+                let data = try executor(scriptURL, argv)
                 guard let action else { return data }
                 guard String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) == "ok" else {
                     throw BridgeError.invalidResponse
@@ -78,7 +92,7 @@ final class SafariBridge {
     }
 }
 
-enum SafariScriptProcess {
+enum ScriptProcess {
     struct Output {
         let data: Data
         let errors: Data
@@ -93,18 +107,22 @@ enum SafariScriptProcess {
                 if message.contains("-1743") { throw BridgeError.permission }
                 if message.contains("TAB_SCOUT_STALE") { throw BridgeError.staleTab }
                 if message.contains("TAB_SCOUT_SNAPSHOT_CHANGED") {
-                    throw BridgeError.script("Safari tabs changed while refreshing. Try again.")
+                    throw BridgeError.script("Tabs changed while refreshing. Try again.")
                 }
                 if message.contains("-1712") || signaled { throw BridgeError.timeout }
-                throw BridgeError.script("Safari could not complete this action. Try refreshing the tab list.")
+                throw BridgeError.script("The browser could not complete this action. Try refreshing the tab list.")
             }
             return data
         }
     }
 
     static func execute(scriptURL: URL, arguments: [String]) throws -> Data {
+        try execute(scriptURL: scriptURL, arguments: arguments, timeout: 60)
+    }
+
+    static func execute(scriptURL: URL, arguments: [String], timeout: TimeInterval) throws -> Data {
         try run(executableURL: URL(fileURLWithPath: "/usr/bin/osascript"),
-                arguments: [scriptURL.path] + arguments).validatedData()
+                arguments: [scriptURL.path] + arguments, timeout: timeout).validatedData()
     }
 
     static func run(executableURL: URL, arguments: [String], timeout: TimeInterval = 60) throws -> Output {

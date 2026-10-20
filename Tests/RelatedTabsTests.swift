@@ -16,8 +16,8 @@ struct RelatedTabsTests {
         if !condition() { fatalError(message) }
     }
 
-    static func tab(_ title: String, _ url: String, index: Int = 1) -> SafariTab {
-        SafariTab(windowID: 1, index: index, title: title, url: url)
+    static func tab(_ title: String, _ url: String, index: Int = 1) -> BrowserTab {
+        BrowserTab(windowID: 1, index: index, title: title, url: url)
     }
 
     static func kinds(_ title: String, _ url: String, _ kind: TabEntity.Kind) -> [String] {

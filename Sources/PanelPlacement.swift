@@ -20,16 +20,16 @@ enum PanelPlacement {
         return valid(converted) ? converted : nil
     }
 
-    static func origin(panelSize: CGSize, safariFrame: CGRect?, screens: [Screen], fallbackScreen: Screen?) -> CGPoint? {
+    static func origin(panelSize: CGSize, browserFrame: CGRect?, screens: [Screen], fallbackScreen: Screen?) -> CGPoint? {
         guard panelSize.width.isFinite, panelSize.height.isFinite,
               panelSize.width > 0, panelSize.height > 0 else { return nil }
         let screens = screens.filter { valid($0.frame) && valid($0.visibleFrame) }
-        let safariFrame = safariFrame.flatMap { valid($0) ? $0 : nil }
+        let browserFrame = browserFrame.flatMap { valid($0) ? $0 : nil }
         var selected: Screen?
         var largestOverlap: CGFloat = 0
-        if let safariFrame {
+        if let browserFrame {
             for screen in screens {
-                let overlap = screen.frame.intersection(safariFrame)
+                let overlap = screen.frame.intersection(browserFrame)
                 let area = overlap.isNull ? 0 : overlap.width * overlap.height
                 if area > largestOverlap { selected = screen; largestOverlap = area }
             }
@@ -39,7 +39,7 @@ enum PanelPlacement {
         }
         guard let screen = selected else { return nil }
         let visible = screen.visibleFrame
-        let target = largestOverlap > 0 ? (safariFrame ?? visible) : visible
+        let target = largestOverlap > 0 ? (browserFrame ?? visible) : visible
         func place(size: CGFloat, midpoint: CGFloat, minimum: CGFloat, maximum: CGFloat) -> CGFloat {
             if size > maximum - minimum { return (minimum + maximum - size) / 2 }
             return min(max(midpoint - size / 2, minimum), maximum - size)
@@ -49,11 +49,11 @@ enum PanelPlacement {
     }
 }
 
-enum SafariWindowFrame {
-    static func current(primaryScreenTop: CGFloat) -> CGRect? {
+enum BrowserWindowFrame {
+    static func current(bundleID: String, primaryScreenTop: CGFloat) -> CGRect? {
         guard AXIsProcessTrusted(),
-              let safari = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Safari").first else { return nil }
-        let application = AXUIElementCreateApplication(safari.processIdentifier)
+              let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first else { return nil }
+        let application = AXUIElementCreateApplication(app.processIdentifier)
         let deadline = ProcessInfo.processInfo.systemUptime + 0.12
         func values(_ element: AXUIElement, _ names: [String]) -> [AnyObject]? {
             let remaining = deadline - ProcessInfo.processInfo.systemUptime
@@ -65,7 +65,7 @@ enum SafariWindowFrame {
             return result
         }
         guard let windows = values(application, [kAXFocusedWindowAttribute, kAXMainWindowAttribute]) else { return nil }
-        // Read only top-level window geometry, never Safari's accessibility webpage tree.
+        // Read only top-level window geometry, never the browser's accessibility webpage tree.
         for value in windows where CFGetTypeID(value) == AXUIElementGetTypeID() {
             let window = value as! AXUIElement
             guard let frame = values(window, [kAXRoleAttribute, kAXMinimizedAttribute, kAXPositionAttribute, kAXSizeAttribute]),

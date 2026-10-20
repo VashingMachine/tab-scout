@@ -3,11 +3,11 @@ import Foundation
 @main
 struct SearchResultsTests {
     static func main() {
-        let selected = SafariTab(windowID: 8, index: 5, title: "Selected", url: "https://example.com/a")
-        let moved = SafariTab(windowID: 8, index: 4, title: "Selected", url: "https://example.com/a")
-        let otherWindow = SafariTab(windowID: 9, index: 4, title: "Selected", url: "https://example.com/a")
-        let another = SafariTab(windowID: 8, index: 3, title: "Other", url: "https://example.com/b")
-        let duplicate = SafariTab(windowID: 8, index: 6, title: "Selected", url: "https://example.com/a")
+        let selected = BrowserTab(windowID: 8, index: 5, title: "Selected", url: "https://example.com/a")
+        let moved = BrowserTab(windowID: 8, index: 4, title: "Selected", url: "https://example.com/a")
+        let otherWindow = BrowserTab(windowID: 9, index: 4, title: "Selected", url: "https://example.com/a")
+        let another = BrowserTab(windowID: 8, index: 3, title: "Other", url: "https://example.com/b")
+        let duplicate = BrowserTab(windowID: 8, index: 6, title: "Selected", url: "https://example.com/a")
         let command = SearchRow.newTab(.search("example"))
         precondition(SearchRow.retainedSelection(of: .tab(selected), in: [.tab(another), .tab(moved), command]) == 1, "A moved tab retains selection after background refresh")
         precondition(SearchRow.retainedSelection(of: .tab(selected), in: [.tab(otherWindow), .tab(moved)]) == 1, "Matching tabs in other windows cannot steal selection")

@@ -80,11 +80,11 @@ enum RelatedTabs {
     }
 
     /// How closely each other open tab relates to `active`, with the strongest identifier they share.
-    static func relations(to active: SafariTab?, in tabs: [SafariTab]) -> [SafariTab: (strength: Double, shared: TabEntity)] {
+    static func relations(to active: BrowserTab?, in tabs: [BrowserTab]) -> [BrowserTab: (strength: Double, shared: TabEntity)] {
         guard let active else { return [:] }
         let anchor = entities(title: active.title, url: active.url)
         guard !anchor.isEmpty else { return [:] }
-        var result: [SafariTab: (strength: Double, shared: TabEntity)] = [:]
+        var result: [BrowserTab: (strength: Double, shared: TabEntity)] = [:]
         for tab in tabs where tab != active {
             let shared = entities(title: tab.title, url: tab.url).intersection(anchor)
             guard let strongest = shared.max(by: { ($0.strength, $1.value) < ($1.strength, $0.value) }) else { continue }

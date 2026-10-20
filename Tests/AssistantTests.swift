@@ -23,8 +23,8 @@ struct AssistantTests {
         if !condition() { fatalError(message) }
     }
 
-    static func tab(_ title: String, _ url: String, index: Int = 1) -> SafariTab {
-        SafariTab(windowID: 1, index: index, title: title, url: url)
+    static func tab(_ title: String, _ url: String, index: Int = 1) -> BrowserTab {
+        BrowserTab(windowID: 1, index: index, title: title, url: url)
     }
 
     static let mail = tab("Inbox (3) - Gmail", "https://mail.google.com/mail/u/0/", index: 1)
@@ -39,7 +39,7 @@ struct AssistantTests {
     }
 
     static func prompts() {
-        let seen: [SafariTab: Date] = [pull: now.addingTimeInterval(-3 * 3_600), flights: now.addingTimeInterval(-50 * 3_600),
+        let seen: [BrowserTab: Date] = [pull: now.addingTimeInterval(-3 * 3_600), flights: now.addingTimeInterval(-50 * 3_600),
                                        recipe: now.addingTimeInterval(-30)]
         let prompt = AssistantPrompt.prompt(question: "the PR I was reviewing", tabs: [mail, pull, flights, recipe],
                                             recent: [mail, recipe, pull], active: mail, lastSeen: { seen[$0] }, now: now,
@@ -92,7 +92,7 @@ struct AssistantTests {
         let prompt = AssistantPrompt.prompt(question: "the pull request I was reviewing", tabs: [mail, pull, flights, recipe],
                                             recent: [], active: nil, lastSeen: { _ in nil }, now: now, calendar: calendar)
         let assistant = TabAssistant()
-        var answer: Result<[SafariTab], Error>?
+        var answer: Result<[BrowserTab], Error>?
         assistant.pick(prompt) { answer = $0 }
         let deadline = Date().addingTimeInterval(60)
         while answer == nil && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }

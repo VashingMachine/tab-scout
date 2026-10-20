@@ -47,29 +47,29 @@ struct RankingWeights: Equatable {
 
 struct RankingContext {
     /// Open tabs in the order they were last on screen, most recent first.
-    var focusOrder: [SafariTab] = []
-    var activeTab: SafariTab?
+    var focusOrder: [BrowserTab] = []
+    var activeTab: BrowserTab?
     /// How strongly the typed text led to each normalized URL before, from `QueryAffinity`.
     var affinity: [String: Double] = [:]
     /// How long each open tab was read, from `Engagement`.
-    var dwell: [SafariTab: Double] = [:]
+    var dwell: [BrowserTab: Double] = [:]
     /// How closely each open tab relates to the one on screen, from `RelatedTabs`.
-    var related: [SafariTab: Double] = [:]
+    var related: [BrowserTab: Double] = [:]
     /// How likely each open tab's site follows the site on screen, from `Habits`.
-    var transition: [SafariTab: Double] = [:]
+    var transition: [BrowserTab: Double] = [:]
     /// How much each open tab's site belongs to this hour of the week, from `Habits`.
-    var timeOfDay: [SafariTab: Double] = [:]
+    var timeOfDay: [BrowserTab: Double] = [:]
     /// Tabs found by meaning rather than text, from `SemanticSearch`. They rank below every text match.
-    var semantic: [SafariTab: Double] = [:]
+    var semantic: [BrowserTab: Double] = [:]
     /// Tabs whose page text contains the typed words, from `PageTextIndex`. They also rank below text matches.
-    var content: [SafariTab: Double] = [:]
+    var content: [BrowserTab: Double] = [:]
     /// Tabs the on-device model picked for a "?" request, from `TabAssistant`: 1 for its first pick, less after.
-    var assistant: [SafariTab: Double] = [:]
+    var assistant: [BrowserTab: Double] = [:]
     var weights = RankingWeights.standard
 }
 
 struct RankedTab: Equatable {
-    let tab: SafariTab
+    let tab: BrowserTab
     let features: RankingFeatures
     let score: Double
 }
@@ -115,9 +115,9 @@ enum TabRanker {
     /// A tab viewed `rank` switches ago; the previous tab has rank 0.
     static func recency(rank: Int) -> Double { exp(-Double(rank) / 4) }
 
-    static func rank(typed: Bool, matches: [TabSearchIndex.Match], allTabs: [SafariTab] = [],
+    static func rank(typed: Bool, matches: [TabSearchIndex.Match], allTabs: [BrowserTab] = [],
                      history: HistorySearchIndex, context: RankingContext, now: Date) -> [RankedTab] {
-        var recencyRank: [SafariTab: Int] = [:]
+        var recencyRank: [BrowserTab: Int] = [:]
         for tab in context.focusOrder where tab != context.activeTab && recencyRank[tab] == nil {
             recencyRank[tab] = recencyRank.count
         }

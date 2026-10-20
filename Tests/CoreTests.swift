@@ -4,9 +4,9 @@ import Foundation
 struct CoreTests {
     static var checks = 0
     static func main() throws {
-        let a = SafariTab(windowID: 9, index: 1, title: "GitHub - Code", url: "https://github.com/acme/code")
-        let b = SafariTab(windowID: 10, index: 2, title: "GitHub documentation", url: "https://docs.example.org/github")
-        let c = SafariTab(windowID: 10, index: 3, title: "Zażółć gęślą", url: "https://example.org/polish")
+        let a = BrowserTab(windowID: 9, index: 1, title: "GitHub - Code", url: "https://github.com/acme/code")
+        let b = BrowserTab(windowID: 10, index: 2, title: "GitHub documentation", url: "https://docs.example.org/github")
+        let c = BrowserTab(windowID: 10, index: 3, title: "Zażółć gęślą", url: "https://example.org/polish")
         let tabs = [b, a, c]
         expect(TabSearch.results(tabs, query: "github").first == a, "Prefer a matching site host")
         expect(TabSearch.results(tabs, query: "  GITHUB  code ") == [a], "Case-insensitive multiword matching")
@@ -39,15 +39,16 @@ struct CoreTests {
         expect(decoded.tabs[0].windowID == 9, "Preserve Safari window IDs")
         expect(decoded.active == decoded.tabs[0], "Decode the current tab marker")
         let windows = try TabInventory.decode(Data("[[1,1,\"A\",\"a\",false],[1,2,\"B\",\"b\",true],[2,1,\"C\",\"c\",true]]".utf8))
-        expect(windows.active == SafariTab(windowID: 1, index: 2, title: "B", url: "b"), "The first window's current tab is active")
+        expect(windows.active == BrowserTab(windowID: 1, index: 2, title: "B", url: "b"), "The first window's current tab is active")
         try expect(TabInventory.decode(Data("[[1,1,\"A\",\"a\",false]]".utf8)).active == nil, "No marked tab means no active tab")
         for invalid in ["[[1,2,3,4,true]]", "[[1,2,\"A\",\"a\"]]", "[[1,2,\"A\",\"a\",1]]", "[[1,2,\"A\",\"a\",\"true\"]]", "[[true,2,\"A\",\"a\",true]]"] {
             do { _ = try TabInventory.decode(Data(invalid.utf8)); fatalError("Invalid rows must fail: \(invalid)") } catch { }
         }
         try expect(TabInventory.decode(Data("[]".utf8)) == TabInventory(tabs: []), "Empty Safari session")
 
+        try browsers()
         expect(capture(), "Capture Safari Cmd+T")
-        expect(!capture(safari: false), "Leave other apps' Cmd+T alone")
+        expect(!capture(browser: false), "Leave other apps' Cmd+T alone")
         expect(!capture(shift: true), "Preserve Safari reopen-tab shortcut")
         expect(!capture(option: true), "Preserve modified shortcuts")
         expect(!capture(enabled: false), "Pause restores normal Cmd+T")
@@ -55,11 +56,36 @@ struct CoreTests {
         print("Passed \(checks) core checks")
     }
 
-    static func tab(_ title: String, _ url: String) -> SafariTab {
-        SafariTab(windowID: 1, index: 1, title: title, url: url)
+    static func browsers() throws {
+        expect(Browser(bundleID: "com.google.Chrome") == .chrome && Browser(bundleID: "com.apple.Safari") == .safari
+               && Browser(bundleID: "com.tinyspeck.slackmacgap") == nil && Browser(bundleID: nil) == nil,
+               "Recognize the supported browsers by bundle identifier")
+        let chrome = try TabInventory.decode(Data("[[7,2,\"Mail\",\"https://mail.example/\",true]]".utf8), browser: .chrome)
+        let mail = BrowserTab(browser: .chrome, windowID: 7, index: 2, title: "Mail", url: "https://mail.example/")
+        expect(chrome.tabs == [mail] && chrome.active == mail, "Chrome's rows decode as Chrome tabs")
+        expect(mail != BrowserTab(windowID: 7, index: 2, title: "Mail", url: "https://mail.example/"),
+               "The same window and tab numbers in two browsers are different tabs")
+        try expect(TabInventory.decodeActive(Data("[7,2,\"Mail\",\"m\"]".utf8), browser: .chrome)?.browser == .chrome,
+                   "The Chrome tab on screen is a Chrome tab")
+        expect(tab("New Tab", "chrome://newtab/").isBlank, "Chrome's new-tab page is a blank tab")
+        expect(Browser.googleSearch("C++ & rust") == "https://www.google.com/search?q=C%2B%2B%20%26%20rust",
+               "Encode a Chrome search so plus signs and ampersands survive")
+        expect(Browser.googleSearch("zażółć") == "https://www.google.com/search?q=za%C5%BC%C3%B3%C5%82%C4%87",
+               "Encode non-ASCII search text as UTF-8")
+        expect(BridgeError.permission.message(for: .chrome) == "Allow Chrome access in System Settings > Privacy & Security > Automation."
+               && BridgeError.timeout.message(for: .chrome) == "Chrome took too long to respond. Try again.",
+               "Errors name the browser they came from")
+        let docs = tab("Docs", "https://docs.example/")
+        let merged = TabSearchIndex(merging: [TabSearchIndex([docs]), TabSearchIndex([mail])])
+        expect(merged.results(query: "") == [docs, mail] && merged.results(query: "mail") == [mail],
+               "A merged index searches every browser's tabs in order")
     }
 
-    static func relevance(_ query: String, _ tab: SafariTab) -> Int? {
+    static func tab(_ title: String, _ url: String) -> BrowserTab {
+        BrowserTab(windowID: 1, index: 1, title: title, url: url)
+    }
+
+    static func relevance(_ query: String, _ tab: BrowserTab) -> Int? {
         TabSearchIndex([tab]).matches(query: query).first?.relevance
     }
 
@@ -107,8 +133,8 @@ struct CoreTests {
         expect(TextMatch.initialsSkipping("aaaaaaab", in: manyWords) == nil, "Repetitive titles cannot make initials slow")
     }
 
-    static func capture(code: Int64 = 17, shift: Bool = false, option: Bool = false, safari: Bool = true, enabled: Bool = true) -> Bool {
-        ShortcutDecision.shouldCapture(keyCode: code, command: true, shift: shift, control: false, option: option, safariActive: safari, enabled: enabled)
+    static func capture(code: Int64 = 17, shift: Bool = false, option: Bool = false, browser: Bool = true, enabled: Bool = true) -> Bool {
+        ShortcutDecision.shouldCapture(keyCode: code, command: true, shift: shift, control: false, option: option, browserActive: browser, enabled: enabled)
     }
 
     static func expect(_ condition: @autoclosure () throws -> Bool, _ message: String) rethrows {

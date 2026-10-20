@@ -1,12 +1,12 @@
 import Foundation
 
-/// One stretch of time a tab stayed on screen while Safari was in front.
+/// One stretch of time a tab stayed on screen while its browser was in front.
 struct FocusVisit: Equatable {
-    let tab: SafariTab
+    let tab: BrowserTab
     let start: Date
     let duration: TimeInterval
-    /// The tab that came on screen next, or nil when Safari went to the background.
-    let next: SafariTab?
+    /// The tab that came on screen next, or nil when the browser went to the background.
+    let next: BrowserTab?
 }
 
 /// Turns observations of the tab on screen into completed visits. A tab is the same while it keeps
@@ -14,12 +14,12 @@ struct FocusVisit: Equatable {
 struct FocusTracker {
     /// Longer stretches are capped: the person probably walked away.
     static let longestVisit: TimeInterval = 10 * 60
-    private(set) var current: SafariTab?
+    private(set) var current: BrowserTab?
     private var since: Date?
 
     /// Records the tab now on screen and returns the visit that just ended, if the tab changed.
-    mutating func observe(_ tab: SafariTab?, at date: Date) -> FocusVisit? {
-        if let tab, let current, tab.windowID == current.windowID, tab.url == current.url {
+    mutating func observe(_ tab: BrowserTab?, at date: Date) -> FocusVisit? {
+        if let tab, let current, tab.browser == current.browser, tab.windowID == current.windowID, tab.url == current.url {
             self.current = tab
             if since == nil { since = date }
             return nil
@@ -30,14 +30,14 @@ struct FocusTracker {
         return ended
     }
 
-    /// Safari went to the background: the visit ends, and the next observation starts a new one.
+    /// The browser went to the background: the visit ends, and the next observation starts a new one.
     mutating func pause(at date: Date) -> FocusVisit? {
         let ended = finish(at: date, next: nil)
         since = nil
         return ended
     }
 
-    private func finish(at date: Date, next: SafariTab?) -> FocusVisit? {
+    private func finish(at date: Date, next: BrowserTab?) -> FocusVisit? {
         guard let current, let since else { return nil }
         return FocusVisit(tab: current, start: since,
                           duration: min(Self.longestVisit, max(0, date.timeIntervalSince(since))), next: next)

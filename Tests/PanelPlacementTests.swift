@@ -95,10 +95,10 @@ struct PanelPlacementTests {
         expectPoint(origin(CGRect(x: 1440, y: 0, width: 1, height: 1)),
                     CGPoint(x: 1440, y: 24), "Touching a neighboring display does not count as an overlap")
         let tied = CGRect(x: -500, y: 100, width: 1000, height: 600)
-        expectPoint(PanelPlacement.origin(panelSize: panel, safariFrame: tied,
+        expectPoint(PanelPlacement.origin(panelSize: panel, browserFrame: tied,
                                           screens: [primary, left], fallbackScreen: right),
                     CGPoint(x: 0, y: 180), "Equal-overlap ties retain the first display instead of using fallback")
-        expectPoint(PanelPlacement.origin(panelSize: panel, safariFrame: tied,
+        expectPoint(PanelPlacement.origin(panelSize: panel, browserFrame: tied,
                                           screens: [left, primary], fallbackScreen: right),
                     CGPoint(x: -660, y: 180), "Equal-overlap tie selection remains stable in display order")
     }
@@ -139,16 +139,16 @@ struct PanelPlacementTests {
                      CGSize(width: CGFloat.nan, height: 440), CGSize(width: 660, height: CGFloat.infinity)] {
             expect(origin(primary.frame, size: size) == nil, "Invalid panel dimensions cannot produce placement")
         }
-        expect(PanelPlacement.origin(panelSize: panel, safariFrame: nil, screens: [], fallbackScreen: nil) == nil,
+        expect(PanelPlacement.origin(panelSize: panel, browserFrame: nil, screens: [], fallbackScreen: nil) == nil,
                "No valid screen returns no placement")
         let invalid = PanelPlacement.Screen(frame: .zero, visibleFrame: .zero)
-        expect(PanelPlacement.origin(panelSize: panel, safariFrame: primary.frame,
+        expect(PanelPlacement.origin(panelSize: panel, browserFrame: primary.frame,
                                      screens: [invalid], fallbackScreen: invalid) == nil,
                "Unusable display geometry returns no placement")
-        expectPoint(PanelPlacement.origin(panelSize: panel, safariFrame: primary.frame,
+        expectPoint(PanelPlacement.origin(panelSize: panel, browserFrame: primary.frame,
                                           screens: [invalid, primary], fallbackScreen: invalid),
                     CGPoint(x: 390, y: 230), "An invalid display does not hide valid Safari screen geometry")
-        expectPoint(PanelPlacement.origin(panelSize: panel, safariFrame: nil,
+        expectPoint(PanelPlacement.origin(panelSize: panel, browserFrame: nil,
                                           screens: [], fallbackScreen: primary),
                     CGPoint(x: 390, y: 233), "A valid fallback alone is sufficient for no-window placement")
     }
@@ -164,7 +164,7 @@ struct PanelPlacementTests {
                                              y: screen.frame.minY + screen.frame.height * fractionY)
                         let safari = CGRect(x: center.x - size.width / 2, y: center.y - size.height / 2,
                                             width: size.width, height: size.height)
-                        guard let point = PanelPlacement.origin(panelSize: panel, safariFrame: safari,
+                        guard let point = PanelPlacement.origin(panelSize: panel, browserFrame: safari,
                                                                screens: [screen], fallbackScreen: screen) else {
                             preconditionFailure("Valid fixture must have placement")
                         }
@@ -182,9 +182,9 @@ struct PanelPlacementTests {
         }
     }
 
-    static func origin(_ safariFrame: CGRect?, size: CGSize = panel,
+    static func origin(_ browserFrame: CGRect?, size: CGSize = panel,
                        fallback: PanelPlacement.Screen? = primary) -> CGPoint? {
-        PanelPlacement.origin(panelSize: size, safariFrame: safariFrame,
+        PanelPlacement.origin(panelSize: size, browserFrame: browserFrame,
                               screens: [primary, left, above, right], fallbackScreen: fallback)
     }
 

@@ -30,8 +30,8 @@ struct HistoryRankingTests {
 
     static func date(daysAgo: Double) -> Date { now.addingTimeInterval(-daysAgo * 86_400) }
 
-    static func tab(_ title: String, _ url: String, window: Int = 1, index: Int = 1) -> SafariTab {
-        SafariTab(windowID: window, index: index, title: title, url: url)
+    static func tab(_ title: String, _ url: String, window: Int = 1, index: Int = 1) -> BrowserTab {
+        BrowserTab(windowID: window, index: index, title: title, url: url)
     }
 
     static func visit(_ title: String, _ url: String, days: Double = 0, count: Int = 1) -> HistoryVisit {
@@ -42,9 +42,9 @@ struct HistoryRankingTests {
         PastSearch(query: query, lastUsed: date(daysAgo: days), useCount: count)
     }
 
-    static func rows(_ query: String, tabs: [SafariTab] = [], visits: [HistoryVisit] = [],
-                     searches: [PastSearch] = [], suggestions: [String] = [], previous: SafariTab? = nil,
-                     active: SafariTab? = nil, context: RankingContext = RankingContext()) -> [SearchRow] {
+    static func rows(_ query: String, tabs: [BrowserTab] = [], visits: [HistoryVisit] = [],
+                     searches: [PastSearch] = [], suggestions: [String] = [], previous: BrowserTab? = nil,
+                     active: BrowserTab? = nil, context: RankingContext = RankingContext()) -> [SearchRow] {
         SearchResultBuilder.rows(query: query, matches: TabSearchIndex(tabs).matches(query: query),
                                  allTabs: tabs,
                                  history: HistorySearchIndex(HistorySnapshot(visits: visits, searches: searches)),
@@ -52,7 +52,7 @@ struct HistoryRankingTests {
                                  context: context)
     }
 
-    static func displayedTabs(_ rows: [SearchRow]) -> [SafariTab] {
+    static func displayedTabs(_ rows: [SearchRow]) -> [BrowserTab] {
         rows.compactMap { if case .tab(let item) = $0 { return item }; return nil }
     }
 
@@ -387,7 +387,7 @@ struct HistoryRankingTests {
         let notes = tab("Standup notes", "https://docs.example.com/standup", index: 2)
         let other = tab("Weather", "https://weather.example.com/", index: 3)
         let inventory = [meet, notes, other]
-        func learned(_ picks: Int, _ target: SafariTab = meet, input: String = "standup") -> RankingContext {
+        func learned(_ picks: Int, _ target: BrowserTab = meet, input: String = "standup") -> RankingContext {
             var affinity = QueryAffinity()
             for _ in 0..<picks { affinity.record(input: input, target: HistoryIdentity.url(target.url)!, at: now) }
             return RankingContext(affinity: affinity.strengths(for: "standup", now: now))

@@ -1,10 +1,10 @@
 import ApplicationServices
 import Foundation
 
-/// Calls `onChange` soon after Safari's tab on screen may have changed: a Safari window title changes with
+/// Calls `onChange` soon after a browser's tab on screen may have changed: a browser window title changes with
 /// its current tab, and focus moves between windows. Uses the accessibility permission that the Cmd+T hook
 /// already needs. Several notifications in quick succession produce one call.
-final class SafariFocusObserver {
+final class BrowserFocusObserver {
     private static let notifications = [kAXTitleChangedNotification, kAXFocusedWindowChangedNotification,
                                         kAXMainWindowChangedNotification, kAXWindowCreatedNotification]
     private let delay: TimeInterval
@@ -18,7 +18,7 @@ final class SafariFocusObserver {
 
     var isObserving: Bool { observer != nil }
 
-    /// Returns whether Safari's notifications are now observed.
+    /// Returns whether the browser's notifications are now observed.
     @discardableResult
     func start(processID: pid_t) -> Bool {
         if observer != nil && self.processID == processID { return true }
@@ -26,7 +26,7 @@ final class SafariFocusObserver {
         var created: AXObserver?
         let callback: AXObserverCallback = { _, element, notification, context in
             guard let context else { return }
-            let owner = Unmanaged<SafariFocusObserver>.fromOpaque(context).takeUnretainedValue()
+            let owner = Unmanaged<BrowserFocusObserver>.fromOpaque(context).takeUnretainedValue()
             // A new window reports its own title changes only once observed.
             if notification as String == kAXWindowCreatedNotification { owner.watch(element) }
             owner.changed()

@@ -1,11 +1,26 @@
 import Foundation
 
 struct TabSnapshot {
-    let tabs: [SafariTab]
-    let active: SafariTab?
+    let tabs: [BrowserTab]
+    let active: BrowserTab?
     let index: TabSearchIndex
     let fetchedAt: Date
     let revision: Int
+}
+
+/// Every browser's latest tabs as one list. Each browser is read separately, so a slow or refused one never
+/// holds up the others; the browser in front comes first and supplies the tab on screen.
+struct CombinedTabs {
+    let tabs: [BrowserTab]
+    let active: BrowserTab?
+    let index: TabSearchIndex
+
+    init(_ snapshots: [Browser: TabSnapshot], front: Browser) {
+        let parts = ([front] + Browser.allCases.filter { $0 != front }).compactMap { snapshots[$0] }
+        tabs = parts.flatMap(\.tabs)
+        active = snapshots[front]?.active
+        index = TabSearchIndex(merging: parts.map(\.index))
+    }
 }
 
 // Main-thread owned. A stale snapshot can be displayed while one shared refresh runs.
@@ -56,7 +71,7 @@ final class TabStore {
     /// Records a change Tab Scout made itself. Reads already in flight may predate it and are discarded,
     /// but the cached tabs stay usable with the new on-screen tab (nil when unknown, such as a new tab),
     /// so reopening right away needs no Safari read. The next prewarm still refreshes them.
-    func noteActivation(_ active: SafariTab?) {
+    func noteActivation(_ active: BrowserTab?) {
         guard let snapshot else { return invalidate() }
         generation += 1
         waiters.removeAll()

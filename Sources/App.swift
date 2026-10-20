@@ -13,26 +13,31 @@ private final class SearchPanel: NSPanel {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSWindowDelegate {
     private let preview = CommandLine.arguments.contains("--preview")
-    private var bridge: SafariBridge!
-    private var tabStore: TabStore!
+    private var bridges: [Browser: BrowserBridge] = [:]
+    private var stores: [Browser: TabStore] = [:]
+    /// Each browser's latest tabs while the palette is open, merged into `tabs`.
+    private var snapshots: [Browser: TabSnapshot] = [:]
+    /// Browsers asked for their tabs whose answer has not arrived yet.
+    private var waiting: Set<Browser> = []
+    private var browserErrors: [Browser: Error] = [:]
     private lazy var favicons = FaviconStore()
     private lazy var historyStore = HistoryStore()
     private lazy var learning = LearningStore(directory: preview ? nil : LearningStore.defaultDirectory)
     private lazy var wordNeighbors = WordNeighbors()
-    private var similarWords: [SafariTab: String] = [:]
+    private var similarWords: [BrowserTab: String] = [:]
     private var pageText = PageTextIndex()
-    private var pageTextQueue: [SafariTab] = []
+    private var pageTextQueue: [BrowserTab] = []
     private var pageTextReading = false
     private var pageTextItems: [NSMenuItem] = []
-    private var mentions: [SafariTab: String] = [:]
+    private var mentions: [BrowserTab: String] = [:]
     private var pageTextEnabled: Bool { UserDefaults.standard.bool(forKey: "PageTextEnabled") }
     private let assistant = TabAssistant()
     private var assistantQuestion: String?
-    private var assistantPicks: [SafariTab] = []
+    private var assistantPicks: [BrowserTab] = []
     private var assistantStatus: String?
     private var assistantWork: DispatchWorkItem?
     private var lastSeen: [PageTextIndex.Key: Date] = [:]
-    private var shownFeatures: [SafariTab: RankingFeatures] = [:]
+    private var shownFeatures: [BrowserTab: RankingFeatures] = [:]
     private var rankingItem: NSMenuItem?
     private var training = false
     private lazy var googleSuggestions = GoogleSuggestionsService()
@@ -55,14 +60,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var googleEnabled: Bool { UserDefaults.standard.bool(forKey: "GoogleSuggestionsEnabled") }
     private var safariHistoryEnabled: Bool { UserDefaults.standard.bool(forKey: "SafariHistoryEnabled") }
     private var searchIndex = TabSearchIndex([])
-    private var windowNumbers: [Int: Int] = [:]
+    private var windowNumbers: [Browser: [Int: Int]] = [:]
     private var statusItem: NSStatusItem!
     private var pauseItem: NSMenuItem!
     private var loginItem: NSMenuItem!
     private var eventTap: CFMachPort?
     private var tapSource: CFRunLoopSource?
     private var capturedT = false
-    private var safariActive = false
+    /// The browser in front, nil while another app is.
+    private var frontBrowser: Browser?
+    /// The browser most recently in front: new tabs open there, and the palette centers on its window.
+    private var lastBrowser: Browser = .safari
     private var enabled = true
     private var workspaceObserver: NSObjectProtocol?
     private var terminationObserver: NSObjectProtocol?
@@ -75,20 +83,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var footer: NSTextField!
     private var emptyLabel: NSTextField!
     private var retryButton: NSButton!
-    private var tabs: [SafariTab] = []
+    private var tabs: [BrowserTab] = []
     private var focusHistory = TabFocusHistory()
     private var focusTracker = FocusTracker()
-    private let focusObserver = SafariFocusObserver()
+    private var focusObservers: [Browser: BrowserFocusObserver] = [:]
     private var activeReadInFlight = false
     private var activeReadAgain = false
     private var launchObserver: NSObjectProtocol?
-    private var tabDwell: [SafariTab: Double] = [:]
-    private var relatedTabs: [SafariTab: (strength: Double, shared: TabEntity)] = [:]
-    private var tabTransition: [SafariTab: Double] = [:]
-    private var tabTimeOfDay: [SafariTab: Double] = [:]
-    private var activeTab: SafariTab?
-    private var previousTab: SafariTab?
-    private var focusOrder: [SafariTab] = []
+    private var tabDwell: [BrowserTab: Double] = [:]
+    private var relatedTabs: [BrowserTab: (strength: Double, shared: TabEntity)] = [:]
+    private var tabTransition: [BrowserTab: Double] = [:]
+    private var tabTimeOfDay: [BrowserTab: Double] = [:]
+    private var activeTab: BrowserTab?
+    private var previousTab: BrowserTab?
+    private var focusOrder: [BrowserTab] = []
     private var rows: [SearchRow] = []
     private var requestID = 0
     private var loading = false
@@ -98,9 +106,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var returnApp: NSRunningApplication?
     private var setupWindow: NSWindow?
     private var accessibilityState: NSTextField?
-    private var safariState: NSTextField?
+    private var browserStates: [Browser: NSTextField] = [:]
     private var setupStatus: NSTextField?
-    private var safariAllowed = false
+    private var allowedBrowsers: Set<Browser> = []
+    private var deniedBrowsers: Set<Browser> = []
+    /// Browsers whose page text could not be read; Chrome needs Allow JavaScript from Apple Events.
+    private var pageTextUnavailable: Set<Browser> = []
     private var versionText: String {
         let info = Bundle.main.infoDictionary ?? [:]
         let version = "Version \(info["CFBundleShortVersionString"] as? String ?? "unknown")"
@@ -117,50 +128,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             return
         }
         NSApp.setActivationPolicy(.accessory)
-        guard let script = Bundle.main.url(forResource: "SafariBridge", withExtension: "scpt") else {
+        let scripts = ["SafariBridge", "ChromeBridge"].compactMap { Bundle.main.url(forResource: $0, withExtension: "scpt") }
+        guard scripts.count == 2 else {
             let alert = NSAlert()
             alert.messageText = "Tab Scout could not start"
-            alert.informativeText = "SafariBridge.scpt is missing. Rebuild the app using build.sh."
+            alert.informativeText = "SafariBridge.scpt or ChromeBridge.scpt is missing. Rebuild the app using build.sh."
             alert.runModal()
             NSApp.terminate(nil)
             return
         }
-        bridge = SafariBridge(scriptURL: script)
-        tabStore = TabStore { [weak self] completion in self?.bridge.list(completion: completion) }
-        tabStore.onPermissionDenied = { [weak self] in
-            self?.safariAllowed = false
-            self?.updatePermissionLabels()
+        bridges = [.safari: BrowserBridge(scriptURL: scripts[0]),
+                   // Chrome may be launching or asking for permission; Safari's tabs never wait for it anyway.
+                   .chrome: BrowserBridge(browser: .chrome, scriptURL: scripts[1],
+                                          executor: { try ScriptProcess.execute(scriptURL: $0, arguments: $1, timeout: 20) })]
+        for browser in Browser.allCases {
+            let store = TabStore { [weak self] completion in self?.bridges[browser]?.list(completion: completion) }
+            store.onPermissionDenied = { [weak self] in
+                self?.allowedBrowsers.remove(browser)
+                self?.deniedBrowsers.insert(browser)
+                self?.updatePermissionLabels()
+            }
+            // Every read of the browser last in front, including background prewarms, notes which tab is on screen.
+            store.onSnapshot = { [weak self] snapshot in
+                guard let self, browser == self.lastBrowser, let active = snapshot.active else { return }
+                self.observeFocus(active)
+            }
+            stores[browser] = store
+            let observer = BrowserFocusObserver()
+            observer.onChange = { [weak self] in if self?.frontBrowser == browser { self?.readActiveTab() } }
+            focusObservers[browser] = observer
         }
-        // Every read, including background prewarms, notes which tab is on screen.
-        tabStore.onSnapshot = { [weak self] snapshot in
-            if let active = snapshot.active { self?.observeFocus(active) }
-        }
-        focusObserver.onChange = { [weak self] in self?.readActiveTab() }
         buildMenu()
         buildPanel()
         reloadHistory()
-        safariActive = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.Safari"
+        frontBrowser = Browser(bundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+        lastBrowser = frontBrowser ?? (!isRunning(.safari) && isRunning(.chrome) ? .chrome : .safari)
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
             guard let self, let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-            let wasActive = self.safariActive
-            self.safariActive = app.bundleIdentifier == "com.apple.Safari"
-            if !self.preview && self.safariActive && self.safariAllowed { self.tabStore.prewarm(); self.readActiveTab() }
-            if wasActive && !self.safariActive { self.pauseFocus() }
+            let was = self.frontBrowser
+            self.frontBrowser = Browser(bundleID: app.bundleIdentifier)
+            if was != nil && self.frontBrowser != was { self.pauseFocus() }
+            guard let browser = self.frontBrowser else { return }
+            self.lastBrowser = browser
+            if !self.preview && self.allowedBrowsers.contains(browser) { self.stores[browser]?.prewarm(); self.readActiveTab() }
         }
         launchObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] note in
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-                  app.bundleIdentifier == "com.apple.Safari" else { return }
-            self?.startFocusObserver()
+                  Browser(bundleID: app.bundleIdentifier) != nil else { return }
+            self?.startFocusObservers()
         }
         terminationObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] note in
-            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-                  app.bundleIdentifier == "com.apple.Safari", self?.preview == false else { return }
-            self?.tabStore.invalidate()
-            self?.pauseFocus()
-            self?.focusObserver.stop()
-            self?.focusHistory = TabFocusHistory()
-            self?.clearResults()
-            if self?.panel.isVisible == true { self?.loadTabs(force: true) }
+            guard let self, !self.preview, let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  let browser = Browser(bundleID: app.bundleIdentifier) else { return }
+            self.stores[browser]?.invalidate()
+            if self.focusTracker.current?.browser == browser { self.pauseFocus() }
+            self.focusObservers[browser]?.stop()
+            self.focusHistory.forget(browser)
+            self.snapshots[browser] = nil
+            // New tabs go to a browser still open; with none open, to the one just quit.
+            if self.lastBrowser == browser, let other = Browser.allCases.first(where: { $0 != browser && self.isRunning($0) }) {
+                self.lastBrowser = other
+            }
+            if self.panel.isVisible { self.loadTabs(force: true) }
         }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
@@ -172,17 +201,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             showSearch(nil)
         } else {
             installTapIfAllowed()
-            startFocusObserver()
+            startFocusObservers()
             permissionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
                 self?.installTapIfAllowed()
-                self?.startFocusObserver()
+                self?.startFocusObservers()
                 self?.updatePermissionLabels()
             }
             cacheTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
                 guard let self else { return }
-                if self.tabStore.snapshot == nil { self.clearResults() }
+                if self.stores.values.allSatisfy({ $0.snapshot == nil }) { self.clearResults() }
                 if self.panel.isVisible && !self.acting && !self.loading { self.loadTabs() }
-                else if self.safariActive && self.safariAllowed { self.tabStore.prewarm() }
+                else if let browser = self.frontBrowser, self.allowedBrowsers.contains(browser) { self.stores[browser]?.prewarm() }
             }
             if eventTap == nil { showPermissions(nil) }
         }
@@ -200,7 +229,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         if let workspaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver) }
         if let terminationObserver { NSWorkspace.shared.notificationCenter.removeObserver(terminationObserver) }
         if let launchObserver { NSWorkspace.shared.notificationCenter.removeObserver(launchObserver) }
-        focusObserver.stop()
+        focusObservers.values.forEach { $0.stop() }
         pauseFocus()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         permissionTimer?.invalidate()
@@ -231,10 +260,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         statusItem.button?.image = symbol("rectangle.on.rectangle")
         statusItem.button?.toolTip = "Tab Scout"
         let menu = NSMenu()
-        let search = menu.addItem(withTitle: "Search Safari Tabs", action: #selector(showSearch(_:)), keyEquivalent: "")
+        let search = menu.addItem(withTitle: "Search Tabs", action: #selector(showSearch(_:)), keyEquivalent: "")
         search.target = self
         menu.addItem(.separator())
-        pauseItem = menu.addItem(withTitle: "Capture Cmd+T in Safari", action: #selector(toggleCapture(_:)), keyEquivalent: "")
+        pauseItem = menu.addItem(withTitle: "Capture Cmd+T in Safari and Chrome", action: #selector(toggleCapture(_:)), keyEquivalent: "")
         pauseItem.target = self
         pauseItem.state = .on
         let permissions = menu.addItem(withTitle: "Permissions...", action: #selector(showPermissions(_:)), keyEquivalent: "")
@@ -287,7 +316,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             }
             guard type == .keyDown else { return Unmanaged.passUnretained(event) }
             let flags = event.flags
-            if ShortcutDecision.shouldCapture(keyCode: code, command: flags.contains(.maskCommand), shift: flags.contains(.maskShift), control: flags.contains(.maskControl), option: flags.contains(.maskAlternate), safariActive: owner.safariActive, enabled: owner.enabled) {
+            if ShortcutDecision.shouldCapture(keyCode: code, command: flags.contains(.maskCommand), shift: flags.contains(.maskShift), control: flags.contains(.maskControl), option: flags.contains(.maskAlternate), browserActive: owner.frontBrowser != nil, enabled: owner.enabled) {
                 owner.capturedT = true
                 if event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
                     DispatchQueue.main.async { owner.showSearch(nil) }
@@ -303,20 +332,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     /// Follows tab switches as they happen, so recency and reading time stay exact between Cmd+T presses.
-    private func startFocusObserver() {
-        guard !preview, !focusObserver.isObserving, AXIsProcessTrusted(),
-              let safari = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Safari").first else { return }
-        if focusObserver.start(processID: safari.processIdentifier) && safariActive { readActiveTab() }
+    private func startFocusObservers() {
+        guard !preview, AXIsProcessTrusted() else { return }
+        for (browser, observer) in focusObservers where !observer.isObserving {
+            guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: browser.bundleID).first else { continue }
+            if observer.start(processID: app.processIdentifier) && frontBrowser == browser { readActiveTab() }
+        }
+    }
+
+    private func isRunning(_ browser: Browser) -> Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: browser.bundleID).isEmpty
+    }
+
+    private func bridge(_ browser: Browser) -> BrowserBridge { bridges[browser]! }
+
+    private func describe(_ error: Error, _ browser: Browser) -> String {
+        (error as? BridgeError)?.message(for: browser) ?? error.localizedDescription
     }
 
     /// Reads the tab on screen, at most one read at a time with a pause after each, however busy the page title.
     private func readActiveTab() {
-        guard !preview, safariActive, safariAllowed else { return }
+        guard !preview, let browser = frontBrowser, allowedBrowsers.contains(browser) else { return }
         if activeReadInFlight { activeReadAgain = true; return }
         activeReadInFlight = true
-        bridge.active { [weak self] result in
+        bridge(browser).active { [weak self] result in
             guard let self else { return }
-            if case .success(let tab) = result, self.safariActive, let tab { self.observeFocus(tab) }
+            if case .success(let tab) = result, self.frontBrowser == browser, let tab { self.observeFocus(tab) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
                 self.activeReadInFlight = false
                 if self.activeReadAgain { self.activeReadAgain = false; self.readActiveTab() }
@@ -324,14 +365,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
     }
 
-    /// Reading time counts only while Safari is in front.
-    private func observeFocus(_ tab: SafariTab) {
+    /// Reading time counts only while the tab's browser is in front.
+    private func observeFocus(_ tab: BrowserTab) {
         focusHistory.focus(tab)
         lastSeen[PageTextIndex.Key(tab)] = Date()
         if lastSeen.count > 500 { lastSeen = lastSeen.filter { $0.value > Date().addingTimeInterval(-7 * 86_400) } }
-        if safariActive, let visit = focusTracker.observe(tab, at: Date()) { recordVisit(visit) }
+        if frontBrowser == tab.browser, let visit = focusTracker.observe(tab, at: Date()) { recordVisit(visit) }
         // A page looked at for a few seconds has loaded; reading only viewed pages never wakes sleeping tabs.
-        guard pageTextEnabled, !preview else { return }
+        guard pageTextEnabled, !preview, !pageTextUnavailable.contains(tab.browser) else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             guard let self, let current = self.focusTracker.current,
                   current.windowID == tab.windowID, current.url == tab.url else { return }
@@ -339,7 +380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
     }
 
-    private func readPageText(_ tab: SafariTab) {
+    private func readPageText(_ tab: BrowserTab) {
         guard pageText.needsReading(tab, now: Date()), !pageTextQueue.contains(where: { PageTextIndex.Key($0) == PageTextIndex.Key(tab) }) else { return }
         pageTextQueue.append(tab)
         readNextPageText()
@@ -349,9 +390,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         guard pageTextEnabled, !pageTextReading, !pageTextQueue.isEmpty else { return }
         let tab = pageTextQueue.removeFirst()
         pageTextReading = true
-        bridge.text(of: tab) { [weak self] result in
+        bridge(tab.browser).text(of: tab) { [weak self] result in
             guard let self else { return }
-            if self.pageTextEnabled, case .success(let text) = result { self.pageText.store(text, for: tab, at: Date()) }
+            switch result {
+            case .success(let text): if self.pageTextEnabled { self.pageText.store(text, for: tab, at: Date()) }
+            // Chrome refuses page scripts until Allow JavaScript from Apple Events is on. Its pages are not asked
+            // again until Search Page Text is turned on again.
+            case .failure(let error): if tab.browser == .chrome && error as? BridgeError != .staleTab { self.pageTextUnavailable.insert(.chrome) }
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 self.pageTextReading = false
                 self.readNextPageText()
@@ -505,15 +551,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let mouse = NSEvent.mouseLocation
         let screens = NSScreen.screens
         let fallback = screens.first(where: { $0.frame.contains(mouse) }) ?? screens.first
-        let safariFrame = screens.first.flatMap { preview ? nil : SafariWindowFrame.current(primaryScreenTop: $0.frame.maxY) }
-        if let origin = PanelPlacement.origin(panelSize: panel.frame.size, safariFrame: safariFrame,
+        let browserFrame = screens.first.flatMap { preview ? nil : BrowserWindowFrame.current(bundleID: lastBrowser.bundleID, primaryScreenTop: $0.frame.maxY) }
+        if let origin = PanelPlacement.origin(panelSize: panel.frame.size, browserFrame: browserFrame,
                                               screens: screens.map { .init(frame: $0.frame, visibleFrame: $0.visibleFrame) },
                                               fallbackScreen: fallback.map { .init(frame: $0.frame, visibleFrame: $0.visibleFrame) }) {
             panel.setFrameOrigin(origin)
         }
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(searchField)
-        // Cached tabs appear at once; the forced read catches tab switches made in Safari since the last one.
+        // Cached tabs appear at once; the forced read catches tab switches made in the browser since the last one.
         loadTabs(force: true)
         reloadHistory()
         DispatchQueue.main.async { Timing.log("open", since: opened) }
@@ -546,7 +592,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private func loadTabs(force: Bool = false) {
         requestID += 1
         let token = requestID
-        loading = true
         if !ready {
             clearResults()
             footer.stringValue = "Loading tabs..."
@@ -554,73 +599,112 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         emptyLabel.stringValue = ""
         retryButton.isEnabled = false
         if preview {
-            let samples = [
-                SafariTab(windowID: 1, index: 1, title: "GitHub - Projects", url: "https://github.com/"),
-                SafariTab(windowID: 1, index: 2, title: "Apple Developer Documentation", url: "https://developer.apple.com/documentation/"),
-                SafariTab(windowID: 2, index: 1, title: "Wikipedia", url: "https://en.wikipedia.org/")
+            let safari = [
+                BrowserTab(windowID: 1, index: 1, title: "GitHub - Projects", url: "https://github.com/"),
+                BrowserTab(windowID: 1, index: 2, title: "Apple Developer Documentation", url: "https://developer.apple.com/documentation/"),
+                BrowserTab(windowID: 2, index: 1, title: "Wikipedia", url: "https://en.wikipedia.org/")
             ]
-            focusHistory.focus(samples[1])
-            focusHistory.focus(samples[0])
-            didLoad(.success(TabSnapshot(tabs: samples, active: samples[0], index: TabSearchIndex(samples), fetchedAt: Date(), revision: 0)), token: token)
-        } else {
-            tabStore.load(force: force) { [weak self] result in self?.didLoad(result, token: token) }
+            let chrome = [BrowserTab(browser: .chrome, windowID: 5, index: 1, title: "Swift Forums", url: "https://forums.swift.org/")]
+            focusHistory.focus(safari[1])
+            focusHistory.focus(safari[0])
+            waiting = [.safari, .chrome]
+            loading = true
+            for (browser, samples) in [(Browser.safari, safari), (.chrome, chrome)] {
+                didLoad(browser, .success(TabSnapshot(tabs: samples, active: samples[0], index: TabSearchIndex(samples),
+                                                      fetchedAt: Date(), revision: 0)), token: token)
+            }
+            return
+        }
+        // Chrome is asked only while it runs; Safari's script answers at once when Safari is closed.
+        let browsers = Browser.allCases.filter { $0 == .safari || isRunning($0) }
+        snapshots = snapshots.filter { browsers.contains($0.key) }
+        browserErrors = browserErrors.filter { browsers.contains($0.key) }
+        waiting = Set(browsers)
+        loading = true
+        for browser in browsers {
+            stores[browser]?.load(force: force) { [weak self] result in self?.didLoad(browser, result, token: token) }
         }
     }
 
-    private func didLoad(_ result: Result<TabSnapshot, Error>, token: Int) {
+    /// A browser asked for tabs that has not answered once, so its tabs are missing rather than stale.
+    private var awaitingTabs: Bool { waiting.contains { snapshots[$0] == nil } }
+
+    private func didLoad(_ browser: Browser, _ result: Result<TabSnapshot, Error>, token: Int) {
         guard token == requestID, panel.isVisible else { return }
-        loading = false
-        retryButton.isEnabled = true
+        waiting.remove(browser)
+        loading = !waiting.isEmpty
         switch result {
         case .success(let snapshot):
-            let hadResults = ready
-            self.tabs = snapshot.tabs
-            searchIndex = snapshot.index
-            openTabs = OpenTabLookup(snapshot.tabs)
-            activeTab = snapshot.active
-            previousTab = focusHistory.previous(active: snapshot.active, in: snapshot.tabs)
-            focusOrder = focusHistory.order(in: snapshot.tabs)
-            let now = Date()
-            tabDwell = Dictionary(snapshot.tabs.compactMap { tab -> (SafariTab, Double)? in
-                guard let url = HistoryIdentity.url(tab.url) else { return nil }
-                let strength = learning.state.engagement.strength(url: url, now: now)
-                return strength > 0 ? (tab, strength) : nil
-            }, uniquingKeysWith: max)
-            relatedTabs = RelatedTabs.relations(to: snapshot.active, in: snapshot.tabs)
-            pageText.retain(snapshot.tabs)
-            let habits = learning.state.habits
-            let from = snapshot.active.flatMap { Habits.site($0.url) }
-            tabTransition = [:]
-            tabTimeOfDay = [:]
-            for tab in snapshot.tabs {
-                guard let site = Habits.site(tab.url) else { continue }
-                if let from { tabTransition[tab] = habits.transition(from: from, to: site, now: now) }
-                tabTimeOfDay[tab] = habits.timeOfDay(site: site, at: now, calendar: .current, now: now)
-            }
-            windowNumbers = [:]
-            for tab in tabs where windowNumbers[tab.windowID] == nil { windowNumbers[tab.windowID] = windowNumbers.count + 1 }
-            ready = true
-            if !tabs.isEmpty || NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Safari").count > 0 { safariAllowed = true }
-            updateRows(preserveSelection: hadResults)
-            updatePermissionLabels()
-            if let forceNew = pendingActivation {
-                pendingActivation = nil
-                activate(forceNew: forceNew)
+            snapshots[browser] = snapshot
+            browserErrors[browser] = nil
+            // Safari's script answers without asking Safari when it is closed, which proves nothing about access.
+            if !snapshot.tabs.isEmpty || isRunning(browser) {
+                allowedBrowsers.insert(browser)
+                deniedBrowsers.remove(browser)
             }
         case .failure(let error):
-            pendingActivation = nil
-            if !preview && tabStore.snapshot == nil {
-                clearResults()
-            }
+            // Tabs already shown from the cache stay; a refused browser's tabs go.
+            browserErrors[browser] = error
             if case BridgeError.permission = error {
-                safariAllowed = false
-                clearResults()
+                allowedBrowsers.remove(browser)
+                deniedBrowsers.insert(browser)
+                snapshots[browser] = nil
             }
-            footer.stringValue = ready ? "Cached tabs | Refresh unavailable" : "Safari access unavailable"
-            footer.toolTip = error.localizedDescription
-            emptyLabel.stringValue = ready ? "" : error.localizedDescription
-            updatePermissionLabels()
         }
+        retryButton.isEnabled = true
+        guard !snapshots.isEmpty else {
+            // Nothing to show: wait for the other browsers, then explain the failure.
+            if loading { return }
+            pendingActivation = nil
+            let failure = browserErrors[lastBrowser].map { (lastBrowser, $0) } ?? browserErrors.first.map { ($0.key, $0.value) }
+            clearResults()
+            footer.stringValue = "\(failure?.0.name ?? "Browser") access unavailable"
+            footer.toolTip = failure.map { describe($0.1, $0.0) }
+            emptyLabel.stringValue = footer.toolTip ?? ""
+            updatePermissionLabels()
+            return
+        }
+        show(CombinedTabs(snapshots, front: lastBrowser))
+        if !awaitingTabs, let forceNew = pendingActivation {
+            pendingActivation = nil
+            activate(forceNew: forceNew)
+        }
+    }
+
+    /// Lists the merged tabs, again each time another browser's tabs arrive.
+    private func show(_ combined: CombinedTabs) {
+        let hadResults = ready
+        tabs = combined.tabs
+        searchIndex = combined.index
+        openTabs = OpenTabLookup(combined.tabs)
+        activeTab = combined.active
+        previousTab = focusHistory.previous(active: combined.active, in: combined.tabs)
+        focusOrder = focusHistory.order(in: combined.tabs)
+        let now = Date()
+        tabDwell = Dictionary(combined.tabs.compactMap { tab -> (BrowserTab, Double)? in
+            guard let url = HistoryIdentity.url(tab.url) else { return nil }
+            let strength = learning.state.engagement.strength(url: url, now: now)
+            return strength > 0 ? (tab, strength) : nil
+        }, uniquingKeysWith: max)
+        relatedTabs = RelatedTabs.relations(to: combined.active, in: combined.tabs)
+        // Until every browser has answered, the text of a missing browser's pages is kept.
+        if !awaitingTabs { pageText.retain(combined.tabs) }
+        let habits = learning.state.habits
+        let from = combined.active.flatMap { Habits.site($0.url) }
+        tabTransition = [:]
+        tabTimeOfDay = [:]
+        for tab in combined.tabs {
+            guard let site = Habits.site(tab.url) else { continue }
+            if let from { tabTransition[tab] = habits.transition(from: from, to: site, now: now) }
+            tabTimeOfDay[tab] = habits.timeOfDay(site: site, at: now, calendar: .current, now: now)
+        }
+        windowNumbers = [:]
+        for tab in tabs where windowNumbers[tab.browser]?[tab.windowID] == nil {
+            windowNumbers[tab.browser, default: [:]][tab.windowID] = (windowNumbers[tab.browser]?.count ?? 0) + 1
+        }
+        ready = true
+        updateRows(preserveSelection: hadResults)
+        updatePermissionLabels()
     }
 
     func controlTextDidChange(_ obj: Notification) {
@@ -764,7 +848,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             table.scrollRowToVisible(row)
         }
         emptyLabel.stringValue = ""
-        let windows = Set(tabs.map(\.windowID)).count
+        let windows = windowNumbers.values.reduce(0) { $0 + $1.count }
         let tabCount = "\(tabs.count) \(tabs.count == 1 ? "tab" : "tabs")"
         let windowCount = "\(windows) \(windows == 1 ? "window" : "windows")"
         let localCount = rows.filter { row in
@@ -772,8 +856,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }.count
         let suggestionCount = rows.filter { if case .suggestion = $0 { return true }; return false }.count
         footer.stringValue = query.isEmpty ? "\(tabCount) in \(windowCount)" : "\(localCount) local \(localCount == 1 ? "result" : "results")" + (suggestionCount > 0 ? " | \(suggestionCount) Google suggestions" : "")
+        // A browser that could not be read is named, so its missing tabs are explained.
+        let failed = Browser.allCases.filter { browserErrors[$0] != nil }
+        if !failed.isEmpty { footer.stringValue += " | " + failed.map(\.name).joined(separator: ", ") + " unavailable" }
         if question != nil { footer.stringValue = assistantStatus ?? "Type a request for Apple Intelligence" }
-        footer.toolTip = preview ? nil : historyStore.localStorageError?.localizedDescription
+        let problems = [preview ? nil : historyStore.localStorageError?.localizedDescription]
+            + failed.map { browser in browserErrors[browser].map { describe($0, browser) } }
+        footer.toolTip = problems.compactMap { $0 }.isEmpty ? nil : problems.compactMap { $0 }.joined(separator: "\n")
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
@@ -798,7 +887,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         switch rows[row] {
         case .previousTab(let tab), .tab(let tab):
             let image = preview ? nil : favicons.imageFor(url: tab.url)
-            var location = (tab.url.isEmpty ? "Start Page" : tab.url) + " | Window \(windowNumbers[tab.windowID] ?? 1)"
+            var location = (tab.url.isEmpty ? "Start Page" : tab.url) + " | " + windowLabel(tab)
             if assistantPicks.contains(tab), AssistantPrompt.question(in: searchField.stringValue) == assistantQuestion {
                 location = "Picked by Apple Intelligence | " + location
             } else if let snippet = mentions[tab] {
@@ -819,14 +908,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         case .newTab(let destination):
             switch destination {
             case .defaultPage:
-                cell.configure(title: "New tab", detail: "Safari's new-tab page", url: nil,
+                cell.configure(title: "New tab", detail: "\(lastBrowser.name)'s new-tab page", url: nil,
                                image: symbol("plus.square"), tint: .systemBlue)
             case .url(let url):
                 cell.configure(title: url == "about:blank" ? "New tab" : "Open \(url)",
-                               detail: blankActiveTab == nil ? "New Safari tab" : "This empty tab", url: nil,
+                               detail: blankActiveTab == nil ? "New \(lastBrowser.name) tab" : "This empty tab", url: nil,
                                image: symbol("plus.square"), tint: .systemBlue)
             case .search(let query):
-                cell.configure(title: "Search for \(query)", detail: "Safari's default search engine", url: nil,
+                cell.configure(title: "Search for \(query)", detail: lastBrowser.searchEngine, url: nil,
                                image: symbol("magnifyingglass"), tint: .systemBlue)
             }
         case .recentSearch(let search):
@@ -845,6 +934,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         case .section: return nil
         }
         return cell
+    }
+
+    /// "Window 2", or "Chrome window 2" once tabs from more than one browser are listed.
+    private func windowLabel(_ tab: BrowserTab) -> String {
+        let number = windowNumbers[tab.browser]?[tab.windowID] ?? 1
+        return windowNumbers.count > 1 ? "\(tab.browser.name) window \(number)" : "Window \(number)"
     }
 
     private func handleKey(_ event: NSEvent) -> NSEvent? {
@@ -875,11 +970,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     private func activate(forceNew: Bool) {
         guard !acting else { return }
-        // Enter pressed while the tab list is still loading runs once it arrives.
-        guard ready else { if loading { pendingActivation = forceNew }; return }
+        // Enter pressed while the tab list is still loading runs once every browser's tabs have arrived.
+        guard ready, !awaitingTabs else { if loading { pendingActivation = forceNew }; return }
         let typed = searchField.stringValue
         let offeredTabs = rows.contains { if case .tab = $0 { return true }; return false }
-        let shownTabs = rows.compactMap { row -> SafariTab? in
+        let shownTabs = rows.compactMap { row -> BrowserTab? in
             switch row { case .previousTab(let tab), .tab(let tab): return tab; default: return nil }
         }
         let shown = shownTabs.map { shownFeatures[$0] ?? RankingFeatures() }
@@ -891,11 +986,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
         guard row.isSelectable else { return }
         if preview { footer.stringValue = "Preview only"; return }
+        // A tab is switched to in its own browser; anything new opens in the browser last in front.
+        let target: Browser = switch row {
+        case .previousTab(let tab), .tab(let tab): tab.browser
+        default: lastBrowser
+        }
         acting = true
         searchField.isEnabled = false
         retryButton.isEnabled = false
         footer.stringValue = "Opening..."
-        // Hide at once and let Safari finish in the background; a failure brings the palette back.
+        // Hide at once and let the browser finish in the background; a failure brings the palette back.
         panel.orderOut(nil)
         let started = DispatchTime.now()
         let completion: (Result<Data, Error>) -> Void = { [weak self] result in
@@ -912,35 +1012,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                     if let chosen = shownTabs.firstIndex(of: tab) { self.learnRanking(typed: typed, shown: shown, chosen: chosen) }
                 default: break
                 }
-                // Keep the tab list warm so an immediate Cmd+T needs no Safari read.
+                // Keep the tab list warm so an immediate Cmd+T needs no browser read.
                 switch row {
                 case .previousTab(let tab), .tab(let tab):
                     self.observeFocus(tab)
-                    self.tabStore.noteActivation(tab)
-                default: self.tabStore.noteActivation(nil)
+                    self.stores[target]?.noteActivation(tab)
+                default: self.stores[target]?.noteActivation(nil)
                 }
                 self.dismiss(restoreFocus: false)
-                self.tabStore.prewarm()
+                self.stores[target]?.prewarm()
             case .failure(let error):
                 self.emptyLabel.stringValue = ""
-                self.footer.stringValue = error.localizedDescription
-                self.footer.toolTip = error.localizedDescription
+                self.footer.stringValue = self.describe(error, target)
+                self.footer.toolTip = self.footer.stringValue
                 self.panel.makeKeyAndOrderFront(nil)
                 self.panel.makeFirstResponder(self.searchField)
                 if case BridgeError.staleTab = error { self.loadTabs(force: true) }
             }
         }
         switch row {
-        case .previousTab(let tab), .tab(let tab): bridge.select(tab, completion: completion)
+        case .previousTab(let tab), .tab(let tab): bridge(target).select(tab, completion: completion)
         default:
             if let destination = row.destination {
-                bridge.open(destination, windowID: tabs.first?.windowID ?? 0, reusing: blankActiveTab, completion: completion)
+                // Tabs are listed front window first, so this is the browser's front window.
+                bridge(target).open(destination, windowID: tabs.first { $0.browser == target }?.windowID ?? 0,
+                                    reusing: blankActiveTab, completion: completion)
             }
         }
     }
 
     /// The tab on screen when it is empty, such as the Start Page; pages chosen in the palette open there.
-    private var blankActiveTab: SafariTab? { activeTab?.isBlank == true ? activeTab : nil }
+    private var blankActiveTab: BrowserTab? {
+        activeTab.flatMap { $0.isBlank && $0.browser == lastBrowser ? $0 : nil }
+    }
 
     /// Logs which of the listed tabs was picked and, every few picks, relearns the ranking weights in the
     /// background. Learned weights are adopted only when they rank recent picks at least as well as the standard ones.
@@ -1028,6 +1132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         rows = []
         searchIndex = TabSearchIndex([])
         openTabs = OpenTabLookup([])
+        snapshots = [:]
         windowNumbers = [:]
         ready = false
         table?.reloadData()
@@ -1086,7 +1191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         if enable {
             let alert = NSAlert()
             alert.messageText = "Search Page Text?"
-            alert.informativeText = "Tab Scout will read the visible text of Safari pages after you have looked at them for a few seconds, so typing finds tabs that mention your words. The text stays in memory on this Mac: it is never saved or sent, and is dropped when a tab closes or this option is turned off. Pages you have not viewed are not read."
+            alert.informativeText = "Tab Scout will read the visible text of Safari and Chrome pages after you have looked at them for a few seconds, so typing finds tabs that mention your words. The text stays in memory on this Mac: it is never saved or sent, and is dropped when a tab closes or this option is turned off. Pages you have not viewed are not read. Chrome pages are read only once View > Developer > Allow JavaScript from Apple Events is on in Chrome."
             alert.addButton(withTitle: "Enable")
             alert.addButton(withTitle: "Cancel")
             NSApp.activate(ignoringOtherApps: true)
@@ -1095,6 +1200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         UserDefaults.standard.set(enable, forKey: "PageTextEnabled")
         pageTextItems.forEach { $0.state = enable ? .on : .off }
         if enable {
+            pageTextUnavailable = []
             if let current = focusTracker.current { readPageText(current) }
         } else {
             pageText.removeAll()
@@ -1146,14 +1252,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     private func buildPermissions() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 382), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 449), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Tab Scout"
         window.isReleasedWhenClosed = false
         setupWindow = window
         guard let content = window.contentView else { return }
         let heading = NSTextField(labelWithString: "Permissions")
         heading.font = .systemFont(ofSize: 22, weight: .semibold)
-        heading.frame = NSRect(x: 28, y: 327, width: 200, height: 28)
+        heading.frame = NSRect(x: 28, y: 394, width: 200, height: 28)
         content.addSubview(heading)
         let version = NSTextField(labelWithString: versionText)
         version.font = .systemFont(ofSize: 11)
@@ -1161,34 +1267,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         version.alignment = .right
         version.lineBreakMode = .byTruncatingMiddle
         version.isSelectable = true
-        version.frame = NSRect(x: 232, y: 333, width: 220, height: 16)
+        version.frame = NSRect(x: 232, y: 400, width: 220, height: 16)
         content.addSubview(version)
         let axTitle = NSTextField(labelWithString: controlPermissionName)
         axTitle.font = .systemFont(ofSize: 15, weight: .medium)
-        axTitle.frame = NSRect(x: 28, y: 281, width: 260, height: 22)
+        axTitle.frame = NSRect(x: 28, y: 348, width: 260, height: 22)
         content.addSubview(axTitle)
         accessibilityState = NSTextField(labelWithString: "")
         accessibilityState?.font = .systemFont(ofSize: 12)
         accessibilityState?.textColor = .secondaryLabelColor
-        accessibilityState?.frame = NSRect(x: 28, y: 256, width: 280, height: 20)
+        accessibilityState?.frame = NSRect(x: 28, y: 323, width: 280, height: 20)
         content.addSubview(accessibilityState!)
         let ax = NSButton(title: "Open Settings", target: self, action: #selector(openAccessibility(_:)))
         ax.bezelStyle = .rounded
-        ax.frame = NSRect(x: 322, y: 265, width: 132, height: 32)
+        ax.frame = NSRect(x: 322, y: 332, width: 132, height: 32)
         content.addSubview(ax)
-        let safariTitle = NSTextField(labelWithString: "Safari")
-        safariTitle.font = .systemFont(ofSize: 15, weight: .medium)
-        safariTitle.frame = NSRect(x: 28, y: 214, width: 260, height: 22)
-        content.addSubview(safariTitle)
-        safariState = NSTextField(labelWithString: "")
-        safariState?.font = .systemFont(ofSize: 12)
-        safariState?.textColor = .secondaryLabelColor
-        safariState?.frame = NSRect(x: 28, y: 189, width: 280, height: 20)
-        content.addSubview(safariState!)
-        let safari = NSButton(title: "Allow Access", target: self, action: #selector(requestSafari(_:)))
-        safari.bezelStyle = .rounded
-        safari.frame = NSRect(x: 322, y: 198, width: 132, height: 32)
-        content.addSubview(safari)
+        for (offset, browser) in Browser.allCases.enumerated() {
+            let top = 281 - CGFloat(offset) * 67
+            let title = NSTextField(labelWithString: browser == .chrome ? "Google Chrome" : browser.name)
+            title.font = .systemFont(ofSize: 15, weight: .medium)
+            title.frame = NSRect(x: 28, y: top, width: 260, height: 22)
+            content.addSubview(title)
+            let state = NSTextField(labelWithString: "")
+            state.font = .systemFont(ofSize: 12)
+            state.textColor = .secondaryLabelColor
+            state.frame = NSRect(x: 28, y: top - 25, width: 280, height: 20)
+            content.addSubview(state)
+            browserStates[browser] = state
+            let allow = NSButton(title: "Allow Access", target: self, action: #selector(requestAccess(_:)))
+            allow.tag = offset
+            allow.bezelStyle = .rounded
+            allow.frame = NSRect(x: 322, y: top - 16, width: 132, height: 32)
+            content.addSubview(allow)
+        }
         let historyTitle = NSTextField(labelWithString: "Safari History (Optional)")
         historyTitle.font = .systemFont(ofSize: 15, weight: .medium)
         historyTitle.frame = NSRect(x: 28, y: 124, width: 280, height: 22)
@@ -1223,10 +1334,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         guard !preview else { return }
         let trusted = AXIsProcessTrusted()
         accessibilityState?.stringValue = trusted ? (eventTap == nil ? "Access granted; shortcut unavailable" : "Allowed") : "Required for Cmd+T"
-        safariState?.stringValue = safariAllowed ? "Allowed" : "Required for tab access"
+        for (browser, state) in browserStates { state.stringValue = accessState(browser) }
         historyState?.stringValue = !safariHistoryEnabled ? "Off" : !historyLoaded ? "Checking..." : historyError == nil ? "Allowed" : "Unavailable; local choices still work"
         historyState?.toolTip = historyError?.localizedDescription
-        setupStatus?.stringValue = trusted && safariAllowed && eventTap != nil ? "Ready" : "Permissions needed"
+        setupStatus?.stringValue = trusted && !allowedBrowsers.isEmpty && eventTap != nil ? "Ready" : "Permissions needed"
+    }
+
+    private func accessState(_ browser: Browser) -> String {
+        if allowedBrowsers.contains(browser) { return "Allowed" }
+        if deniedBrowsers.contains(browser) { return "Not allowed; check Automation settings" }
+        if NSWorkspace.shared.urlForApplication(withBundleIdentifier: browser.bundleID) == nil { return "Not installed" }
+        return "Needed for \(browser.name) tabs"
     }
 
     @objc private func openAccessibility(_ sender: Any?) {
@@ -1245,22 +1363,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
     }
 
-    @objc private func requestSafari(_ sender: NSButton) {
+    /// Opens the browser and reads its tabs, which makes macOS ask for Automation access the first time.
+    @objc private func requestAccess(_ sender: NSButton) {
+        let browser = Browser.allCases[sender.tag]
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: browser.bundleID) else {
+            browserStates[browser]?.stringValue = "Not installed"
+            return
+        }
         sender.isEnabled = false
-        safariState?.stringValue = "Requesting access..."
-        NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: "/Applications/Safari.app"), configuration: NSWorkspace.OpenConfiguration()) { [weak self] app, error in
+        browserStates[browser]?.stringValue = "Requesting access..."
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, error in
             DispatchQueue.main.async {
                 guard let self else { return }
-                guard error == nil else { sender.isEnabled = true; self.safariState?.stringValue = "Could not open Safari"; return }
-                self.bridge.list { [weak self] result in
+                guard error == nil else {
+                    sender.isEnabled = true
+                    self.browserStates[browser]?.stringValue = "Could not open \(browser.name)"
+                    return
+                }
+                self.bridge(browser).list { [weak self] result in
                     guard let self else { return }
                     sender.isEnabled = true
                     switch result {
                     case .success:
-                        self.safariAllowed = true
-                        self.tabStore.prewarm()
+                        self.allowedBrowsers.insert(browser)
+                        self.deniedBrowsers.remove(browser)
+                        self.stores[browser]?.prewarm()
                         self.updatePermissionLabels()
-                    case .failure(let error): self.safariState?.stringValue = "Access unavailable"; self.setupStatus?.stringValue = "Check Automation settings"; self.setupStatus?.toolTip = error.localizedDescription
+                    case .failure(let error):
+                        if case BridgeError.permission = error { self.deniedBrowsers.insert(browser) }
+                        self.browserStates[browser]?.stringValue = "Access unavailable"
+                        self.setupStatus?.stringValue = "Check Automation settings"
+                        self.setupStatus?.toolTip = self.describe(error, browser)
                     }
                     NSApp.activate(ignoringOtherApps: true)
                     self.setupWindow?.makeKeyAndOrderFront(nil)

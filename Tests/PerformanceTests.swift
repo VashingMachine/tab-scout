@@ -3,7 +3,7 @@ import Foundation
 @main
 struct PerformanceTests {
     static func main() {
-        let tabs = (0..<1_000).map { SafariTab(windowID: $0 / 20, index: $0 % 20 + 1, title: "Project documentation \($0)", url: "https://example.com/projects/\($0)") }
+        let tabs = (0..<1_000).map { BrowserTab(windowID: $0 / 20, index: $0 % 20 + 1, title: "Project documentation \($0)", url: "https://example.com/projects/\($0)") }
         let index = TabSearchIndex(tabs)
         let start = ProcessInfo.processInfo.systemUptime
         var count = 0

@@ -12,36 +12,83 @@ enum Timing {
     }
 }
 
-struct SafariTab: Hashable {
+/// A browser whose tabs Tab Scout searches. Chrome joins Safari only while it runs.
+enum Browser: String, CaseIterable {
+    case safari, chrome
+
+    init?(bundleID: String?) {
+        guard let browser = Self.allCases.first(where: { $0.bundleID == bundleID }) else { return nil }
+        self = browser
+    }
+
+    var bundleID: String {
+        switch self {
+        case .safari: return "com.apple.Safari"
+        case .chrome: return "com.google.Chrome"
+        }
+    }
+
+    var name: String {
+        switch self {
+        case .safari: return "Safari"
+        case .chrome: return "Chrome"
+        }
+    }
+
+    /// Where a typed search goes. Chrome offers no scripting command for its own search engine, so searches there use Google.
+    var searchEngine: String {
+        switch self {
+        case .safari: return "Safari's default search engine"
+        case .chrome: return "Google in Chrome"
+        }
+    }
+
+    static func googleSearch(_ query: String) -> String {
+        // Unlike URLComponents, this also encodes "+" and "&", which Google would read as a space and a new parameter.
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        return "https://www.google.com/search?q=" + (query.addingPercentEncoding(withAllowedCharacters: allowed) ?? query)
+    }
+}
+
+struct BrowserTab: Hashable {
+    let browser: Browser
     let windowID: Int
     let index: Int
     let title: String
     let url: String
 
+    init(browser: Browser = .safari, windowID: Int, index: Int, title: String, url: String) {
+        self.browser = browser
+        self.windowID = windowID
+        self.index = index
+        self.title = title
+        self.url = url
+    }
+
     var displayTitle: String { title.isEmpty ? (url.isEmpty ? "Untitled tab" : url) : title }
     var host: String { URL(string: url)?.host ?? url }
-    /// A fresh tab showing the Start Page, Favorites or an empty page, which a new page can replace.
-    var isBlank: Bool { ["", "about:blank", "favorites://", "topsites://"].contains(url) }
+    /// A fresh tab showing the Start Page, Favorites, Chrome's new-tab page or an empty page, which a new page can replace.
+    var isBlank: Bool { ["", "about:blank", "favorites://", "topsites://", "chrome://newtab/", "chrome://new-tab-page/"].contains(url) }
 }
 
 struct TabInventory: Equatable {
-    let tabs: [SafariTab]
-    /// The current tab of the frontmost Safari window.
-    let active: SafariTab?
+    let tabs: [BrowserTab]
+    /// The current tab of the browser's frontmost window.
+    let active: BrowserTab?
 
-    init(tabs: [SafariTab], active: SafariTab? = nil) {
+    init(tabs: [BrowserTab], active: BrowserTab? = nil) {
         self.tabs = tabs
         self.active = active
     }
 
-    static func decode(_ data: Data) throws -> TabInventory {
+    static func decode(_ data: Data, browser: Browser = .safari) throws -> TabInventory {
         let rows = try JSONDecoder().decode([[TabValue]].self, from: data)
-        var active: SafariTab?
-        let tabs = try rows.map { row -> SafariTab in
+        var active: BrowserTab?
+        let tabs = try rows.map { row -> BrowserTab in
             guard row.count == 5, case .number(let window) = row[0],
                   case .number(let index) = row[1], case .text(let title) = row[2],
                   case .text(let url) = row[3], case .flag(let current) = row[4] else { throw BridgeError.invalidResponse }
-            let tab = SafariTab(windowID: window, index: index, title: title, url: url)
+            let tab = BrowserTab(browser: browser, windowID: window, index: index, title: title, url: url)
             // Windows arrive front to back, so the first current tab is the one on screen.
             if current && active == nil { active = tab }
             return tab
@@ -49,13 +96,13 @@ struct TabInventory: Equatable {
         return TabInventory(tabs: tabs, active: active)
     }
 
-    /// The tab on screen from the bridge's `active` command, or nil when Safari has no window.
-    static func decodeActive(_ data: Data) throws -> SafariTab? {
+    /// The tab on screen from the bridge's `active` command, or nil when the browser has no window.
+    static func decodeActive(_ data: Data, browser: Browser = .safari) throws -> BrowserTab? {
         let row = try JSONDecoder().decode([TabValue].self, from: data)
         if row.isEmpty { return nil }
         guard row.count == 4, case .number(let window) = row[0], case .number(let index) = row[1],
               case .text(let title) = row[2], case .text(let url) = row[3] else { throw BridgeError.invalidResponse }
-        return SafariTab(windowID: window, index: index, title: title, url: url)
+        return BrowserTab(browser: browser, windowID: window, index: index, title: title, url: url)
     }
 }
 
@@ -72,7 +119,7 @@ private enum TabValue: Decodable {
     }
 }
 
-enum BridgeError: LocalizedError {
+enum BridgeError: LocalizedError, Equatable {
     case invalidResponse
     case unavailable
     case permission
@@ -80,13 +127,17 @@ enum BridgeError: LocalizedError {
     case timeout
     case script(String)
 
-    var errorDescription: String? {
+    var errorDescription: String? { message(for: nil) }
+
+    /// The description naming `browser`, or "the browser" when it is unknown.
+    func message(for browser: Browser?) -> String {
+        let name = browser?.name ?? "The browser"
         switch self {
-        case .invalidResponse: return "Safari returned an unreadable tab list. Try again."
-        case .unavailable: return "Safari is not running."
-        case .permission: return "Allow Safari access in System Settings > Privacy & Security > Automation."
+        case .invalidResponse: return "\(name) returned an unreadable tab list. Try again."
+        case .unavailable: return "\(name) is not running."
+        case .permission: return "Allow \(browser?.name ?? "browser") access in System Settings > Privacy & Security > Automation."
         case .staleTab: return "That tab was closed or moved. Refresh the tab list."
-        case .timeout: return "Safari took too long to respond. Try again."
+        case .timeout: return "\(name) took too long to respond. Try again."
         case .script(let message): return message
         }
     }
@@ -98,34 +149,39 @@ enum TabSearch {
         return folded.applyingTransform(StringTransform("Latin-ASCII"), reverse: false) ?? folded
     }
 
-    static func results(_ tabs: [SafariTab], query: String) -> [SafariTab] {
+    static func results(_ tabs: [BrowserTab], query: String) -> [BrowserTab] {
         TabSearchIndex(tabs).results(query: query)
     }
 }
 
 struct TabSearchIndex {
     struct Match {
-        let tab: SafariTab
+        let tab: BrowserTab
         let relevance: Int
     }
     private struct Entry {
-        let tab: SafariTab
+        let tab: BrowserTab
         let fields: TextFields
     }
     private let entries: [Entry]
 
-    init(_ tabs: [SafariTab]) {
+    init(_ tabs: [BrowserTab]) {
         entries = tabs.map { Entry(tab: $0, fields: TextFields(title: $0.displayTitle, url: $0.url)) }
     }
 
+    /// The tabs of several indexes in order, without preparing their text again.
+    init(merging indexes: [TabSearchIndex]) {
+        entries = indexes.flatMap(\.entries)
+    }
+
     struct SemanticMatch: Equatable {
-        let tab: SafariTab
+        let tab: BrowserTab
         let strength: Double
         /// The title word that made the connection.
         let word: String
     }
 
-    func results(query: String) -> [SafariTab] {
+    func results(query: String) -> [BrowserTab] {
         matches(query: query).map(\.tab)
     }
 
@@ -157,7 +213,7 @@ struct TabSearchIndex {
         let query = TabSearch.normalized(query.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !query.isEmpty else { return entries.map { Match(tab: $0.tab, relevance: 0) } }
         let prepared = TextQuery(normalized: query)
-        return entries.enumerated().compactMap { offset, entry -> (Int, Int, SafariTab)? in
+        return entries.enumerated().compactMap { offset, entry -> (Int, Int, BrowserTab)? in
             guard let score = entry.fields.relevance(prepared, fuzzy: true) else { return nil }
             return (score, offset, entry.tab)
         }.sorted { $0.0 == $1.0 ? $0.1 < $1.1 : $0.0 > $1.0 }.map { Match(tab: $0.2, relevance: $0.0) }
@@ -365,7 +421,7 @@ enum NewTabDestination: Equatable {
 
 enum ShortcutDecision {
     static func shouldCapture(keyCode: Int64, command: Bool, shift: Bool, control: Bool,
-                              option: Bool, safariActive: Bool, enabled: Bool) -> Bool {
-        enabled && safariActive && keyCode == 17 && command && !shift && !control && !option
+                              option: Bool, browserActive: Bool, enabled: Bool) -> Bool {
+        enabled && browserActive && keyCode == 17 && command && !shift && !control && !option
     }
 }

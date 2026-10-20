@@ -35,7 +35,7 @@ struct HistorySearchIndex {
         })
     }
 
-    func rankTabs(_ matches: [TabSearchIndex.Match], now: Date) -> [SafariTab] {
+    func rankTabs(_ matches: [TabSearchIndex.Match], now: Date) -> [BrowserTab] {
         TabRanker.rank(typed: matches.contains { $0.relevance > 0 }, matches: matches,
                        history: self, context: RankingContext(), now: now).map(\.tab)
     }
@@ -77,37 +77,37 @@ struct HistorySearchIndex {
 }
 
 struct OpenTabLookup {
-    private let tabs: [String: SafariTab]
+    private let tabs: [String: BrowserTab]
 
-    init(_ tabs: [SafariTab]) {
-        self.tabs = Dictionary(tabs.compactMap { tab -> (String, SafariTab)? in
+    init(_ tabs: [BrowserTab]) {
+        self.tabs = Dictionary(tabs.compactMap { tab -> (String, BrowserTab)? in
             guard let key = HistoryIdentity.url(tab.url) else { return nil }
             return (key, tab)
         }, uniquingKeysWith: { first, _ in first })
     }
 
-    func tab(for key: String) -> SafariTab? { tabs[key] }
+    func tab(for key: String) -> BrowserTab? { tabs[key] }
 }
 
 struct SearchResults {
     let rows: [SearchRow]
     /// The signals behind each listed open tab, for learning from the pick.
-    let features: [SafariTab: RankingFeatures]
+    let features: [BrowserTab: RankingFeatures]
 }
 
 enum SearchResultBuilder {
-    static func rows(query: String, matches: [TabSearchIndex.Match], allTabs: [SafariTab],
+    static func rows(query: String, matches: [TabSearchIndex.Match], allTabs: [BrowserTab],
                      history: HistorySearchIndex, suggestions: [String], now: Date,
-                     openTabs: OpenTabLookup? = nil, previousTab: SafariTab? = nil,
-                     activeTab: SafariTab? = nil, context: RankingContext = RankingContext()) -> [SearchRow] {
+                     openTabs: OpenTabLookup? = nil, previousTab: BrowserTab? = nil,
+                     activeTab: BrowserTab? = nil, context: RankingContext = RankingContext()) -> [SearchRow] {
         build(query: query, matches: matches, allTabs: allTabs, history: history, suggestions: suggestions, now: now,
               openTabs: openTabs, previousTab: previousTab, activeTab: activeTab, context: context).rows
     }
 
-    static func build(query: String, matches: [TabSearchIndex.Match], allTabs: [SafariTab],
+    static func build(query: String, matches: [TabSearchIndex.Match], allTabs: [BrowserTab],
                       history: HistorySearchIndex, suggestions: [String], now: Date,
-                      openTabs: OpenTabLookup? = nil, previousTab: SafariTab? = nil,
-                      activeTab: SafariTab? = nil, context: RankingContext = RankingContext()) -> SearchResults {
+                      openTabs: OpenTabLookup? = nil, previousTab: BrowserTab? = nil,
+                      activeTab: BrowserTab? = nil, context: RankingContext = RankingContext()) -> SearchResults {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         var rows: [SearchRow] = []
         // The tab on screen is never a destination. With empty input, Enter returns to the previously

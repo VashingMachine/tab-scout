@@ -17,8 +17,8 @@ struct PageTextTests {
         if !condition() { fatalError(message) }
     }
 
-    static func tab(_ title: String, _ url: String, window: Int = 1, index: Int = 1) -> SafariTab {
-        SafariTab(windowID: window, index: index, title: title, url: url)
+    static func tab(_ title: String, _ url: String, window: Int = 1, index: Int = 1) -> BrowserTab {
+        BrowserTab(windowID: window, index: index, title: title, url: url)
     }
 
     static let article = tab("Designing resilient services", "https://blog.example.com/resilience")

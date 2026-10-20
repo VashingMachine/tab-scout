@@ -10,6 +10,7 @@ struct TabFocusHistoryTests {
         changingTabs()
         bounds()
         ordering()
+        browsers()
         print("Passed \(checks) tab focus history checks")
     }
 
@@ -18,8 +19,20 @@ struct TabFocusHistoryTests {
         precondition(condition(), message)
     }
 
-    static func tab(_ title: String, _ url: String, window: Int = 1, index: Int = 1) -> SafariTab {
-        SafariTab(windowID: window, index: index, title: title, url: url)
+    static func tab(_ title: String, _ url: String, window: Int = 1, index: Int = 1) -> BrowserTab {
+        BrowserTab(windowID: window, index: index, title: title, url: url)
+    }
+
+    static func browsers() {
+        let safari = tab("Docs", "https://docs.example/")
+        let chrome = BrowserTab(browser: .chrome, windowID: 1, index: 1, title: "Docs", url: "https://docs.example/")
+        var history = TabFocusHistory()
+        history.focus(safari)
+        history.focus(chrome)
+        expect(history.tabs == [chrome, safari], "The same page in two browsers is two tabs")
+        expect(history.previous(active: chrome, in: [safari, chrome]) == safari, "Cmd+T, Enter flips between browsers")
+        history.forget(.chrome)
+        expect(history.tabs == [safari], "A browser that quit is forgotten")
     }
 
     static func toggling() {

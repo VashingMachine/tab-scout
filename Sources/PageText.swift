@@ -5,10 +5,12 @@ import Foundation
 /// Kept in memory only: it is never saved or sent, and closing a tab or turning the option off drops it.
 struct PageTextIndex {
     struct Key: Hashable {
+        let browser: Browser
         let windowID: Int
         let url: String
 
-        init(_ tab: SafariTab) {
+        init(_ tab: BrowserTab) {
+            browser = tab.browser
             windowID = tab.windowID
             url = tab.url
         }
@@ -31,12 +33,12 @@ struct PageTextIndex {
 
     var count: Int { pages.count }
 
-    func needsReading(_ tab: SafariTab, now: Date) -> Bool {
+    func needsReading(_ tab: BrowserTab, now: Date) -> Bool {
         guard tab.url.hasPrefix("http"), let page = pages[Key(tab)] else { return tab.url.hasPrefix("http") }
         return now.timeIntervalSince(page.indexed) >= Self.freshFor
     }
 
-    mutating func store(_ text: String, for tab: SafariTab, at now: Date) {
+    mutating func store(_ text: String, for tab: BrowserTab, at now: Date) {
         let words = TabSearch.normalized(String(text.prefix(Self.pageLimit))).split(whereSeparator: \.isWhitespace)
         pages[Key(tab)] = (Array(words.joined(separator: " ").utf8), now)
         if pages.count > Self.tabLimit, let oldest = pages.min(by: { $0.value.indexed < $1.value.indexed })?.key {
@@ -45,7 +47,7 @@ struct PageTextIndex {
     }
 
     /// Forgets pages whose tab closed or navigated elsewhere.
-    mutating func retain(_ tabs: [SafariTab]) {
+    mutating func retain(_ tabs: [BrowserTab]) {
         let open = Set(tabs.map(Key.init))
         pages = pages.filter { open.contains($0.key) }
     }
@@ -54,13 +56,13 @@ struct PageTextIndex {
 
     /// Open tabs whose page text contains every typed word. Three letters at least, so single letters
     /// do not match every page.
-    func matches(_ query: String, in tabs: [SafariTab]) -> [SafariTab: Match] {
+    func matches(_ query: String, in tabs: [BrowserTab]) -> [BrowserTab: Match] {
         let text = TabSearch.normalized(query.trimmingCharacters(in: .whitespacesAndNewlines))
         let prepared = TextQuery(normalized: text)
         guard text.count >= 3, !pages.isEmpty else { return [:] }
         let tokens = prepared.tokens.map { Array($0.utf8) }
         let joined = Array(prepared.tokens.joined(separator: " ").utf8)
-        var found: [SafariTab: Match] = [:]
+        var found: [BrowserTab: Match] = [:]
         for tab in tabs {
             guard let page = pages[Key(tab)]?.bytes, let first = Self.find(tokens[0], in: page),
                   tokens.dropFirst().allSatisfy({ Self.find($0, in: page) != nil }) else { continue }

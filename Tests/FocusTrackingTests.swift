@@ -21,8 +21,8 @@ struct FocusTrackingTests {
 
     static func at(_ seconds: TimeInterval) -> Date { now.addingTimeInterval(seconds) }
 
-    static func tab(_ title: String, _ url: String, window: Int = 1, index: Int = 1) -> SafariTab {
-        SafariTab(windowID: window, index: index, title: title, url: url)
+    static func tab(_ title: String, _ url: String, window: Int = 1, index: Int = 1) -> BrowserTab {
+        BrowserTab(windowID: window, index: index, title: title, url: url)
     }
 
     static func visits() {

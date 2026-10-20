@@ -1,8 +1,8 @@
 import Foundation
 
 enum SearchRow: Equatable {
-    case previousTab(SafariTab)
-    case tab(SafariTab)
+    case previousTab(BrowserTab)
+    case tab(BrowserTab)
     case newTab(NewTabDestination)
     case recentSearch(PastSearch)
     case history(HistoryVisit)
@@ -29,7 +29,7 @@ enum SearchRow: Equatable {
         let candidates = rows.indices.filter { index in
             switch (previous, rows[index]) {
             case (.tab(let selected), .tab(let tab)):
-                return tab.windowID == selected.windowID && tab.title == selected.title && tab.url == selected.url
+                return tab.browser == selected.browser && tab.windowID == selected.windowID && tab.title == selected.title && tab.url == selected.url
             case (.recentSearch(let selected), .recentSearch(let item)):
                 return HistoryIdentity.query(selected.query) == HistoryIdentity.query(item.query)
             case (.history(let selected), .history(let item)):
