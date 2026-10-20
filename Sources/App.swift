@@ -11,7 +11,7 @@ private final class SearchPanel: NSPanel {
     override var canBecomeMain: Bool { true }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSWindowDelegate {
     private let preview = CommandLine.arguments.contains("--preview")
     private var bridge: SafariBridge!
     private var tabStore: TabStore!
@@ -70,7 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var permissionTimer: Timer?
     private var cacheTimer: Timer?
     private var panel: SearchPanel!
-    private var searchField: NSSearchField!
+    private var searchField: NSTextField!
     private var table: NSTableView!
     private var footer: NSTextField!
     private var emptyLabel: NSTextField!
@@ -393,11 +393,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         background.state = .active
         panel.contentView = background
 
-        searchField = NSSearchField()
+        // A launcher-style bar: the system search field keeps its magnifier at 13 pt whatever its font,
+        // so the symbol is drawn beside a plain field at the text's own size.
+        let searchFont = NSFont.systemFont(ofSize: 22)
+        let glass = NSImageView(image: symbol("magnifyingglass") ?? NSImage())
+        glass.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: searchFont.pointSize, weight: .regular)
+        glass.contentTintColor = .secondaryLabelColor
+        glass.translatesAutoresizingMaskIntoConstraints = false
+        background.addSubview(glass)
+        searchField = NSTextField()
         searchField.placeholderString = "Search tabs or enter an address"
-        searchField.font = .systemFont(ofSize: 18)
+        searchField.font = searchFont
+        searchField.isBezeled = false
+        searchField.drawsBackground = false
         searchField.focusRingType = .none
-        searchField.sendsSearchStringImmediately = true
+        searchField.usesSingleLineMode = true
+        searchField.cell?.isScrollable = true
+        searchField.cell?.wraps = false
+        searchField.setAccessibilityLabel("Search tabs or enter an address")
         searchField.delegate = self
         searchField.translatesAutoresizingMaskIntoConstraints = false
         background.addSubview(searchField)
@@ -428,7 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         background.addSubview(scroll)
 
         emptyLabel = NSTextField(wrappingLabelWithString: "")
-        emptyLabel.font = .systemFont(ofSize: 14)
+        emptyLabel.font = .systemFont(ofSize: 13)
         emptyLabel.textColor = .secondaryLabelColor
         emptyLabel.alignment = .center
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -444,11 +457,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         background.addSubview(retryButton)
         background.addSubview(settings)
         NSLayoutConstraint.activate([
-            searchField.topAnchor.constraint(equalTo: background.topAnchor, constant: 12),
-            searchField.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 12),
-            searchField.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -12),
-            searchField.heightAnchor.constraint(equalToConstant: 32),
-            line.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 10),
+            // The magnifier and typed text line up with the result icons and titles below.
+            glass.centerXAnchor.constraint(equalTo: background.leadingAnchor, constant: 36),
+            glass.centerYAnchor.constraint(equalTo: searchField.centerYAnchor),
+            searchField.topAnchor.constraint(equalTo: background.topAnchor, constant: 16),
+            searchField.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 56),
+            searchField.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -20),
+            line.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 14),
             line.leadingAnchor.constraint(equalTo: background.leadingAnchor),
             line.trailingAnchor.constraint(equalTo: background.trailingAnchor),
             scroll.topAnchor.constraint(equalTo: line.bottomAnchor, constant: 4),
@@ -767,24 +782,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         rows.indices.contains(row) && rows[row].isSelectable
     }
 
-    func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool {
-        rows.indices.contains(row) && !rows[row].isSelectable
-    }
-
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        rows.indices.contains(row) && !rows[row].isSelectable ? 22 : 44
+        rows.indices.contains(row) && !rows[row].isSelectable ? SectionHeaderCell.height : 44
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard rows.indices.contains(row) else { return nil }
         if case .section(let section) = rows[row] {
-            let label = tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("section"), owner: self) as? NSTextField
-                ?? NSTextField(labelWithString: "")
-            label.identifier = NSUserInterfaceItemIdentifier("section")
-            label.stringValue = section.rawValue
-            label.font = .systemFont(ofSize: 11, weight: .semibold)
-            label.textColor = .secondaryLabelColor
-            return label
+            let header = tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("section"), owner: self) as? SectionHeaderCell
+                ?? SectionHeaderCell()
+            header.title = section.rawValue
+            return header
         }
         let cell = tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("resultCell"), owner: self) as? ResultCell ?? ResultCell()
         switch rows[row] {

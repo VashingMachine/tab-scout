@@ -64,6 +64,36 @@ final class ResultCell: NSTableCellView {
     }
 }
 
+/// A section heading, set on the left edge of the result icons and close to the results it introduces.
+/// Headings are ordinary rows: as group rows, the inset table style adds a large gap above each one and floats the first.
+final class SectionHeaderCell: NSTableCellView {
+    static let height: CGFloat = 26
+    private let label = NSTextField(labelWithString: "")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        identifier = NSUserInterfaceItemIdentifier("section")
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.textColor = .secondaryLabelColor
+        label.lineBreakMode = .byTruncatingTail
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        textField = label
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3)
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    var title: String {
+        get { label.stringValue }
+        set { label.stringValue = newValue }
+    }
+}
+
 private final class FaviconImageView: NSImageView {
     // SF Symbol alignment insets must not resize the fixed favicon container.
     override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsets() }
