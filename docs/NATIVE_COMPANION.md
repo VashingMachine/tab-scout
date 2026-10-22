@@ -2,7 +2,7 @@
 
 Search your open Safari and Chrome tabs with Cmd+T. Switch to a match in its own browser, or open a new tab in the browser you were using when there is no match.
 
-Tab Scout is a native macOS menu-bar app, **not a browser extension**. It uses Safari's and Chrome's local scripting interfaces and a keyboard hook. Optional Google predictions and local history ranking make the palette more useful without waiting for a network request. There is no subscription or Apple developer account requirement for a local build.
+Tab Scout is a native macOS menu-bar app, **not a browser extension**. It uses Safari's and Chrome's local scripting interfaces and a keyboard hook. The one exception is grouping Chrome tabs: Chrome lets only extensions make tab groups, so the `group` command uses a small optional extension (see [Chrome Grouping](#chrome-grouping)). Optional Google predictions and local history ranking make the palette more useful without waiting for a network request. There is no subscription or Apple developer account requirement for a local build.
 
 See the [README](../README.md) for the quick start.
 
@@ -126,6 +126,23 @@ While Chrome is running, its tabs are listed with Safari's. Each browser is read
 
 The bridge is `Resources/ChromeBridge.js`, JavaScript for Automation compiled into the app. It needs no Chrome scripting dictionary to build, and takes the browser's bundle identifier, so other Chromium browsers that share Chrome's scripting terms could be added.
 
+## Commands
+
+Typing `` ` `` first lists commands instead of tabs; the text after it filters them by name, then by description. Each command names the browsers it works in, and only those of the browser the palette opened over are listed. Enter or Cmd+Enter runs the selected command. Commands are never sent to Google or remembered as searches.
+
+## Chrome Grouping
+
+`` `group `` sorts the loose tabs of the front Chrome window into named tab groups. Pinned tabs, tabs already in a group and empty new-tab pages stay where they are. Apple's on-device model is given the numbered titles and sites of at most 50 tabs and answers with topics, checked like `?` answers: made-up numbers and tabs it placed twice are ignored, and a topic needs two tabs. Greedy sampling makes the same tabs group the same way each time. Without Apple Intelligence, or when the model fails or finds nothing, tabs about the same ticket, pull request, Google document or repository are grouped, then tabs of the same site.
+
+Safari has no such command: its scripting dictionary, its web extension API and its Shortcuts actions offer no way to make tab groups, and doing it through Safari's menus would flash them on screen. Safari's own **Organize Tabs** setting groups tabs with Apple Intelligence.
+
+Chrome lets only extensions make tab groups, so the command goes through Tab Scout's extension:
+
+1. Choose **Set Up Chrome Grouping...** in the menu, or run `` `group `` before the extension is added. Tab Scout installs `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/local.tabscout.chrome.json`, which lets Chrome start `TabScoutChromeHost` for the extension `dofcmbpicogclehjjkobakjbghefaglp` only.
+2. **Show Extension** reveals `Tab Scout.app/Contents/Resources/ChromeExtension` in Finder and opens Chrome's Extensions page. Turn on **Developer mode**, then drag the folder onto the page or click **Load unpacked** and choose it. Repeat in each Chrome profile that should group tabs.
+
+The extension asks for `tabs`, `tabGroups`, `nativeMessaging` and `alarms`. It keeps a connection to the helper, which Chrome keeps running alongside it. The helper connects to Tab Scout's socket, `~/Library/Application Support/TabScout/chrome.sock` (only your user can open it), and tries again every second while Tab Scout is not running. Each side checks the other's designated code requirement, so another program cannot pose as either. When Tab Scout is rebuilt with another signature, it turns the old helper away; the helper quits and the extension starts the new one. For `group`, Tab Scout asks every connected profile for the front window's tabs. Only the profile that has the window answers, and that profile makes the groups. Chrome assigns their colors. Tab Scout logs connections under the `chrome` category of `local.tabscout.app` in Console.
+
 ## Tests
 
 ```sh
@@ -152,6 +169,8 @@ Preview takes keyboard focus. To check the layout without that, render the previ
 "$PWD/.build/native-output/Tab Scout.app/Contents/MacOS/TabScout" --preview --snapshot /tmp/tab-scout.png
 ```
 
+Add `--query` with text to type, and `--browser chrome` or `--browser safari` to open the palette over that browser, for example `--browser chrome --query '`'` for Chrome's commands.
+
 Quit preview before launching the normal app. Core live behavior, permissions, rendering, and cold/warm performance checks are documented in [Tests/MANUAL_TESTS.md](../Tests/MANUAL_TESTS.md). The suggestions/history acceptance checklist is in [docs/MANUAL_QA.md](MANUAL_QA.md).
 
 ## Limitations
@@ -165,4 +184,4 @@ Quit preview before launching the normal app. Core live behavior, permissions, r
 
 ## Remove
 
-Use **Clear Tab Scout History**, disable **Start at Login**, quit Tab Scout, and remove the app. Remove its device-control / Accessibility, Automation, and optional Full Disk Access entries in System Settings if desired. In-memory tab snapshots, Google predictions, and imported Safari history are discarded on quit. Remove `~/Library/Caches/local.tabscout.app/Favicons-v1` to clear the persistent favicon cache and `~/Library/Application Support/TabScout/History` to remove any remaining local history files.
+Use **Clear Tab Scout History**, disable **Start at Login**, quit Tab Scout, and remove the app. Remove its device-control / Accessibility, Automation, and optional Full Disk Access entries in System Settings if desired. In-memory tab snapshots, Google predictions, and imported Safari history are discarded on quit. Remove `~/Library/Caches/local.tabscout.app/Favicons-v1` to clear the persistent favicon cache and `~/Library/Application Support/TabScout/History` to remove any remaining local history files. To remove Chrome grouping, remove the Tab Scout extension on Chrome's Extensions page and delete `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/local.tabscout.chrome.json`.

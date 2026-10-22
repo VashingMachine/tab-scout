@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Tab Scout",
+  "version": "1.0",
+  "description": "Lets the Tab Scout app on this Mac group a window's tabs by topic when you ask it to.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqLuQogVEL2cmrgZnoO36V4oQReVvc0ZgvQbXZXQ4bAOQOxPVI7PTDMjmA4ojGf+oNu67eo7auaI1vcp5tIkqwk1kV+T23+qcKLB8pfIp7VYSwpC08bmqYfkaXnh6d5ZdePFPzx6CIQFLn7gqQ7Y+7c4YI9YMkuF8wQTS3NLBNVWQJiJGzkOwiRFuLRDybS/XpW52S/yCvVNjAfTmvfE2iaRoiOffHH4BtEim/iGYG4tWOhof13yGj48CIHA2tTpVQ3dunAJ+bHv4F475oSajo9d9JjW59KhUXNkr1b8CWDcPjdNlgFwXXgF/DU53Nzkclvv90vlgea6bs4VKN2mo+wIDAQAB",
+  "minimum_chrome_version": "105",
+  "permissions": ["tabs", "tabGroups", "nativeMessaging", "alarms"],
+  "background": {"service_worker": "background.js"}
+}

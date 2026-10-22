@@ -68,7 +68,11 @@ struct BrowserTab: Hashable {
     var displayTitle: String { title.isEmpty ? (url.isEmpty ? "Untitled tab" : url) : title }
     var host: String { URL(string: url)?.host ?? url }
     /// A fresh tab showing the Start Page, Favorites, Chrome's new-tab page or an empty page, which a new page can replace.
-    var isBlank: Bool { ["", "about:blank", "favorites://", "topsites://", "chrome://newtab/", "chrome://new-tab-page/"].contains(url) }
+    var isBlank: Bool { Self.isBlank(url) }
+
+    static func isBlank(_ url: String) -> Bool {
+        ["", "about:blank", "favorites://", "topsites://", "chrome://newtab/", "chrome://new-tab-page/"].contains(url)
+    }
 }
 
 struct TabInventory: Equatable {

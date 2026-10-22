@@ -5,6 +5,7 @@ WORK_DIR="${TAB_SCOUT_WORK_DIR:-$SOURCE_DIR/.build}/tests"
 mkdir -p "$WORK_DIR"
 # Everything that decides which results appear and in what order.
 RANKING=("$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/History.swift" "$SOURCE_DIR/Sources/SearchResults.swift"
+    "$SOURCE_DIR/Sources/Commands.swift"
     "$SOURCE_DIR/Sources/HistoryRanking.swift" "$SOURCE_DIR/Sources/TabRanking.swift"
     "$SOURCE_DIR/Sources/QueryAffinity.swift" "$SOURCE_DIR/Sources/FocusTracking.swift"
     "$SOURCE_DIR/Sources/RelatedTabs.swift" "$SOURCE_DIR/Sources/Habits.swift" "$SOURCE_DIR/Sources/SemanticSearch.swift"
@@ -18,9 +19,21 @@ for SUITE in Cache Performance; do
     "$WORK_DIR/${SUITE}Tests"
 done
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" \
-    "$SOURCE_DIR/Sources/History.swift" "$SOURCE_DIR/Sources/SearchResults.swift" \
+    "$SOURCE_DIR/Sources/History.swift" "$SOURCE_DIR/Sources/SearchResults.swift" "$SOURCE_DIR/Sources/Commands.swift" \
     "$SOURCE_DIR/Tests/SearchResultsTests.swift" -lsqlite3 -o "$WORK_DIR/SearchResultsTests"
 "$WORK_DIR/SearchResultsTests"
+/usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/Commands.swift" \
+    "$SOURCE_DIR/Tests/CommandTests.swift" -o "$WORK_DIR/CommandTests"
+"$WORK_DIR/CommandTests"
+GROUPING=("$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/RelatedTabs.swift" "$SOURCE_DIR/Sources/TabGrouping.swift")
+/usr/bin/xcrun swiftc -swift-version 5 "${GROUPING[@]}" "$SOURCE_DIR/Tests/TabGroupingTests.swift" -o "$WORK_DIR/TabGroupingTests"
+"$WORK_DIR/TabGroupingTests"
+/usr/bin/xcrun swiftc -swift-version 5 "${GROUPING[@]}" "$SOURCE_DIR/Sources/NativeMessaging.swift" \
+    "$SOURCE_DIR/Sources/ChromeExtensionLink.swift" "$SOURCE_DIR/Tests/ChromeLinkTests.swift" -o "$WORK_DIR/ChromeLinkTests"
+"$WORK_DIR/ChromeLinkTests" "$SOURCE_DIR/Resources/ChromeExtension/manifest.json"
+# The Chrome helper only passes messages on, so it is just built here; ChromeLinkTests covers its framing.
+/usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/ChromeHost/main.swift" "$SOURCE_DIR/Sources/NativeMessaging.swift" \
+    -o "$WORK_DIR/TabScoutChromeHost"
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/History.swift" \
     "$SOURCE_DIR/Tests/HistoryTests.swift" -lsqlite3 -o "$WORK_DIR/HistoryTests"
 "$WORK_DIR/HistoryTests"
@@ -87,4 +100,5 @@ done
 /usr/bin/osacompile -l JavaScript -o "$WORK_DIR/ChromeBridge.scpt" "$SOURCE_DIR/Resources/ChromeBridge.js"
 # Runs the script against a stand-in for Chrome; no browser is touched.
 /usr/bin/osascript -l JavaScript "$SOURCE_DIR/Tests/ChromeBridgeTests.js" "$SOURCE_DIR/Resources/ChromeBridge.js"
+/usr/bin/osascript -l JavaScript "$SOURCE_DIR/Tests/ChromeExtensionTests.js" "$SOURCE_DIR/Resources/ChromeExtension"
 /usr/bin/plutil -lint "$SOURCE_DIR/Resources/Info.plist" "$SOURCE_DIR/Resources/Entitlements.plist"

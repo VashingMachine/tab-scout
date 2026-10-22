@@ -47,6 +47,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var assistantPicks: [BrowserTab] = []
     private var assistantStatus: String?
     private var assistantWork: DispatchWorkItem?
+    private let chromeLink = ChromeExtensionLink()
+    private let grouper = TabGrouper()
     private var lastSeen: [PageTextIndex.Key: Date] = [:]
     private var shownFeatures: [BrowserTab: RankingFeatures] = [:]
     private var rankingItem: NSMenuItem?
@@ -178,6 +180,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         reloadHistory()
         frontBrowser = Browser(bundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
         lastBrowser = frontBrowser ?? (!isRunning(.safari) && isRunning(.chrome) ? .chrome : .safari)
+        // A preview can show the palette as it opens over a given browser: --browser chrome.
+        if preview, let index = CommandLine.arguments.firstIndex(of: "--browser"), index + 1 < CommandLine.arguments.count,
+           let browser = Browser(rawValue: CommandLine.arguments[index + 1]) {
+            lastBrowser = browser
+        }
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
             guard let self, let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
             let was = self.frontBrowser
@@ -217,6 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         } else {
             installTapIfAllowed()
             startFocusObservers()
+            chromeLink.start()
             permissionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
                 self?.installTapIfAllowed()
                 self?.startFocusObservers()
@@ -249,7 +257,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         permissionTimer?.invalidate()
         cacheTimer?.invalidate()
-        if !preview { googleSuggestions.cancel() }
+        if !preview {
+            googleSuggestions.cancel()
+            chromeLink.stop()
+        }
         learning.flush()
     }
 
@@ -283,6 +294,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         pauseItem.state = .on
         let permissions = menu.addItem(withTitle: "Permissions...", action: #selector(showPermissions(_:)), keyEquivalent: "")
         permissions.target = self
+        let chromeGrouping = menu.addItem(withTitle: "Set Up Chrome Grouping...", action: #selector(setUpChromeExtension(_:)), keyEquivalent: "")
+        chromeGrouping.target = self
         menu.addItem(.separator())
         addSearchPreferences(to: menu)
         menu.addItem(.separator())
@@ -783,8 +796,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     private func requestSuggestions() {
         let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Requests for the on-device model are personal; they are never sent to Google.
-        guard AssistantPrompt.question(in: query) == nil else { googleSuggestions.cancel(); return }
+        // Requests for the on-device model are personal and commands are not searches; neither is sent to Google.
+        guard AssistantPrompt.question(in: query) == nil, PaletteCommand.query(in: query) == nil else {
+            googleSuggestions.cancel()
+            return
+        }
         if preview {
             remoteSuggestions = ["swift programming", "swift documentation", "swift concurrency"].filter {
                 !query.isEmpty && $0.hasPrefix(query.lowercased())
@@ -838,6 +854,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let navigated = rows.indices.contains(table.selectedRow) && table.selectedRow != ResultNavigation.first(in: rows)
         let selected = preserveSelection && navigated ? rows[table.selectedRow] : nil
         let typed = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let command = PaletteCommand.query(in: typed) { return showCommands(matching: command, keeping: selected) }
         // A "?" request is also matched as ordinary text while the on-device model answers.
         let question = AssistantPrompt.question(in: typed)
         let query = question ?? typed
@@ -881,6 +898,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let problems = [preview ? nil : historyStore.localStorageError?.localizedDescription]
             + failed.map { browser in browserErrors[browser].map { describe($0, browser) } }
         footer.toolTip = problems.compactMap { $0 }.isEmpty ? nil : problems.compactMap { $0 }.joined(separator: "\n")
+    }
+
+    /// Lists the commands of the browser the palette opened over instead of tabs and pages.
+    private func showCommands(matching text: String, keeping selected: SearchRow?) {
+        rows = PaletteCommand.matches(text, in: lastBrowser).map(SearchRow.command)
+        shownFeatures = [:]
+        table.reloadData()
+        if let row = selected.flatMap({ rows.firstIndex(of: $0) }) ?? ResultNavigation.first(in: rows) {
+            table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            table.scrollRowToVisible(row)
+        }
+        let offered = PaletteCommand.matches("", in: lastBrowser)
+        emptyLabel.stringValue = !rows.isEmpty ? "" : offered.isEmpty ? "\(lastBrowser.name) has no commands yet" : "No matching command"
+        footer.stringValue = offered.isEmpty ? "Commands" : "Commands for \(lastBrowser.name)"
+        footer.toolTip = nil
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
@@ -941,6 +973,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                            url: nil, image: symbol("clock"), tint: .secondaryLabelColor)
         case .suggestion(let query):
             cell.configure(title: query, detail: "Google", url: nil, image: symbol("magnifyingglass"), tint: .secondaryLabelColor)
+        case .command(let command):
+            cell.configure(title: command.name, detail: command.summary, url: nil, image: symbol("rectangle.3.group"), tint: .systemBlue)
         case .history(let visit):
             let image = preview ? nil : favicons.imageFor(url: visit.url)
             cell.configure(title: visit.title.isEmpty ? visit.url : visit.title,
@@ -991,6 +1025,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         // Enter pressed while the tab list is still loading runs once every browser's tabs have arrived.
         guard ready, !awaitingTabs else { if loading { pendingActivation = forceNew }; return }
         let typed = searchField.stringValue
+        // Enter and Cmd+Enter both run the selected command; the "`" text never opens as a page.
+        if PaletteCommand.query(in: typed) != nil {
+            if rows.indices.contains(table.selectedRow), case .command(let command) = rows[table.selectedRow] { run(command) }
+            return
+        }
         let offeredTabs = rows.contains { if case .tab = $0 { return true }; return false }
         let shownTabs = rows.compactMap { row -> BrowserTab? in
             switch row { case .previousTab(let tab), .tab(let tab): return tab; default: return nil }
@@ -1057,6 +1096,106 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                                     reusing: blankActiveTab, completion: completion)
             }
         }
+    }
+
+    private func run(_ command: PaletteCommand) {
+        if preview { footer.stringValue = "Preview only"; return }
+        switch command {
+        case .group: groupTabs()
+        }
+    }
+
+    /// Sorts the front Chrome window's loose tabs into named groups: Apple Intelligence picks the topics on this Mac,
+    /// and Tab Scout's extension makes the groups, since Chrome lets only extensions do that.
+    private func groupTabs() {
+        // Tabs are listed front window first.
+        guard let windowID = tabs.first(where: { $0.browser == .chrome })?.windowID else {
+            footer.stringValue = "Open a Chrome window to group its tabs"
+            return
+        }
+        acting = true
+        searchField.isEnabled = false
+        retryButton.isEnabled = false
+        footer.stringValue = "Grouping tabs..."
+        // Hidden at once like any action; grouping takes a few seconds, and a failure brings the palette back.
+        panel.orderOut(nil)
+        let started = DispatchTime.now()
+        let finish: (Result<Int, Error>) -> Void = { [weak self] result in
+            guard let self else { return }
+            Timing.log("group", since: started)
+            self.acting = false
+            self.searchField.isEnabled = true
+            self.retryButton.isEnabled = true
+            let reopen = { (message: String) in
+                self.emptyLabel.stringValue = ""
+                self.footer.stringValue = message
+                self.footer.toolTip = message
+                self.panel.makeKeyAndOrderFront(nil)
+                self.panel.makeFirstResponder(self.searchField)
+            }
+            switch result {
+            case .success(let made) where made > 0:
+                // Grouping moves tabs, so the listed positions are out of date.
+                self.stores[.chrome]?.invalidate()
+                self.dismiss(restoreFocus: false)
+                self.stores[.chrome]?.prewarm()
+            case .success: reopen("No tabs in this window belong together")
+            case .failure(ChromeExtensionLink.LinkError.notConnected), .failure(ChromeExtensionLink.LinkError.windowNotFound):
+                self.dismiss(restoreFocus: false)
+                self.setUpChromeExtension(nil)
+            case .failure(let error): reopen(error.localizedDescription)
+            }
+        }
+        chromeLink.tabs(inWindow: windowID) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .failure(let error): finish(.failure(error))
+            case .success(let window):
+                self.grouper.plan(window.tabs) { groups in
+                    guard !groups.isEmpty else { return finish(.success(0)) }
+                    self.chromeLink.group(groups, in: window, completion: finish)
+                }
+            }
+        }
+    }
+
+    /// Chrome lets only extensions make tab groups, so grouping needs Tab Scout's own, added once to each profile.
+    @objc private func setUpChromeExtension(_ sender: Any?) {
+        guard !preview else { footer.stringValue = "Preview only"; return }
+        if panel?.isVisible == true { dismiss(restoreFocus: false) }
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        guard let helper = Bundle.main.url(forAuxiliaryExecutable: "TabScoutChromeHost"),
+              let folder = Bundle.main.url(forResource: "ChromeExtension", withExtension: nil) else {
+            alert.messageText = "Chrome grouping is missing from this copy of Tab Scout"
+            alert.informativeText = "Rebuild the app using build.sh."
+            alert.runModal()
+            return
+        }
+        do {
+            try ChromeHostManifest.install(helper: helper)
+        } catch {
+            alert.messageText = "Tab Scout could not set up Chrome grouping"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+            return
+        }
+        alert.messageText = "Group Chrome Tabs"
+        alert.informativeText = """
+        Chrome lets only extensions make tab groups, so Tab Scout groups tabs through its own extension. It lists \
+        and groups the tabs of a window only when you ask Tab Scout to, and talks to nothing but Tab Scout.
+
+        To add it to a Chrome profile:
+        1. On Chrome's Extensions page, turn on Developer mode.
+        2. Drag the ChromeExtension folder shown in Finder onto the page, or click Load unpacked and choose it.
+
+        Then press Cmd+T in Chrome and type `group.
+        """
+        alert.addButton(withTitle: "Show Extension")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([folder])
+        bridge(.chrome).open(.url("chrome://extensions/"), windowID: tabs.first { $0.browser == .chrome }?.windowID ?? 0) { _ in }
     }
 
     /// The tab on screen when it is empty, such as the Start Page; pages chosen in the palette open there.

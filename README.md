@@ -2,7 +2,7 @@
 
 Find an open Safari or Chrome tab before opening another one.
 
-Tab Scout is a **native macOS menu-bar app**. Press **Cmd+T in Safari or Google Chrome** to open a focused search palette over the current page. It searches the tabs of both browsers at once: picking a tab switches to it in its own browser, and when nothing matches a new tab opens in the browser you were using. No browser extension is required.
+Tab Scout is a **native macOS menu-bar app**. Press **Cmd+T in Safari or Google Chrome** to open a focused search palette over the current page. It searches the tabs of both browsers at once: picking a tab switches to it in its own browser, and when nothing matches a new tab opens in the browser you were using. No browser extension is required; an optional one adds grouping of Chrome tabs.
 
 ## Features
 
@@ -21,6 +21,7 @@ Tab Scout is a **native macOS menu-bar app**. Press **Cmd+T in Safari or Google 
 - Find tabs by meaning when few match the typed text: each typed English word is widened to similar words with the system's on-device word embedding, so "email" finds an inbox and "cooking" a recipe. These guesses are labeled with the connecting word and listed below text matches; Enter keeps searching the typed text.
 - Optionally search page text (off by default): pages you have viewed for a few seconds are read through the browser's scripting interface, so typing finds tabs that mention your words, with a snippet. Chrome allows this only with View > Developer > Allow JavaScript from Apple Events turned on. Pages you have not viewed are not read, so sleeping tabs stay asleep.
 - Ask in plain language by starting with `?`, such as `?the pull request I was reviewing before lunch`. On Macs with Apple Intelligence, the on-device model picks tabs from their titles, sites and when you last viewed them; picks come first and are labeled. Requests are never sent to Google or anywhere else.
+- Run commands by starting with `` ` ``: the palette lists the commands of the browser it opened over instead of tabs. `group` sorts the front Chrome window's loose tabs into named tab groups by topic. Apple Intelligence picks the topics on this Mac; without it, tabs about the same ticket, pull request, repository or site are grouped. Chrome lets only extensions make tab groups, so this uses Tab Scout's small Chrome extension. Safari lets no other app make tab groups, so it has no commands yet.
 - Learn how you pick: Tab Scout logs the signals behind each picked tab, as numbers only, and relearns its ranking weights every ten picks. Learned weights are used only when they rank your recent picks better than the standard ones. The menu shows how often your pick was ranked first.
 - Learn habits: which site usually follows the one on screen, and which sites belong to this hour of a weekday or weekend. Habits nudge empty-input order and break ties between equally good matches; glances while flicking through tabs do not count.
 - Center the native palette on the focused window of the browser in front when its geometry is available, with a screen-based fallback.
@@ -64,6 +65,7 @@ Tab Scout runs in the menu bar rather than the Dock. Its Permissions window prov
 1. Allow **Device Control and Data Access** on macOS 27+, or **Accessibility** on earlier versions, for the Cmd+T keyboard hook in Safari and Chrome.
 2. Allow **Automation** for Safari and for Google Chrome so Tab Scout can read, select, and open their tabs. Each browser asks separately, the first time Tab Scout reads it or when you press its **Allow Access** button; a browser you do not allow is left out without hiding the other.
 3. Optionally allow **Full Disk Access** to read Safari and Chrome history. This is a broad permission; tab search, local choices, and Google suggestions work without it.
+4. Optionally choose **Set Up Chrome Grouping...** in the menu to add Tab Scout's extension to Chrome for the `group` command: turn on Developer mode on Chrome's Extensions page and load the `ChromeExtension` folder Tab Scout shows. Running `group` before that shows the same steps.
 
 Use the menu-bar menu to check **Capture Cmd+T in Safari and Chrome**, enable **Google Suggestions** or **Use Browser History**, choose profiles under **History Profiles**, and optionally enable **Start at Login**. Google suggestions and history import are off on a fresh installation; an existing installation retains its preferences.
 
@@ -80,6 +82,7 @@ The app must remain running for Cmd+T search. The shortcut is captured only whil
 - The tab you are on is never listed. When it is the only match, Enter opens a new tab with your query.
 - On an empty tab, such as the Start Page, an address, search, history page or suggestion opens in that tab instead of a second one beside it, and the New tab action keeps it.
 - Start with `?` to ask Apple Intelligence for a tab in your own words. While it answers, the request is also matched as ordinary text, and Enter on the search row searches it without the `?`.
+- Start with `` ` `` to list commands instead of tabs, and type to filter them; Enter runs the selected one. Only commands the browser you opened the palette over supports are listed.
 - Escape or Cmd+T dismisses the palette without changing tabs.
 - The refresh button updates results. Preferences and permission checks are available from the menu bar.
 
@@ -93,17 +96,20 @@ Enabling Google Suggestions sends eligible typed search text to Google's public 
 
 History import is optional and read-only. It reads every Safari and Chrome profile, each of which can be left out under **History Profiles**; synced history from other devices is not guaranteed to be represented. Chrome's history and icons are read from a private copy that is deleted right away, because Chrome locks them while it runs. **Clear Tab Scout History** removes accepted Tab Scout choices, not browser history or Google Account activity.
 
+Tab Scout's optional Chrome extension may read the titles and addresses of its profile's tabs, which Chrome describes as reading your browsing history. It uses them only when Tab Scout asks for one window's tabs to group them, and it talks only to `TabScoutChromeHost`, the helper inside Tab Scout.app that Chrome starts for it. The helper talks only to the running Tab Scout, through a socket only your user can open, and each checks the other's code signature. Topics are picked by Apple's on-device model; nothing is sent anywhere else.
+
 The native scripting interface does not reliably identify private-browsing tabs. **Do not treat this app or its caches as a private-browsing boundary.** Avoid using it for activity that must not be recorded, and disable suggestions when typed text must remain local.
 
 See [Native App Details](docs/NATIVE_COMPANION.md) for permissions, cache bounds, data locations, and removal instructions.
 
 ## Verification
 
-`bash test.sh` covers search, ranking, previous-tab tracking, Safari and Chrome history fixtures (including a locked Chrome database), keyboard decisions, palette placement, cache races, Google response handling, favicons, Safari bridge fixtures, and the Chrome script against a stand-in for Chrome. Tests do not request permissions, touch a real browser, or read the user's real Safari history. Physical shortcut behavior needs a live check in Safari and Chrome.
+`bash test.sh` covers search, ranking, previous-tab tracking, Safari and Chrome history fixtures (including a locked Chrome database), keyboard decisions, palette placement, cache races, Google response handling, favicons, Safari bridge fixtures, the Chrome script against a stand-in for Chrome, commands, tab grouping, and the link to the Chrome extension against stand-in extensions. With Apple Intelligence available, one grouping check asks the on-device model. Tests do not request permissions, touch a real browser, or read the user's real Safari history. Physical shortcut behavior needs a live check in Safari and Chrome.
 
 ## Repository Layout
 
 - `Sources/` and `Resources/`: native app and the Safari (AppleScript) and Chrome (JavaScript for Automation) scripting bridges.
+- `Resources/ChromeExtension/` and `Sources/ChromeHost/`: the optional Chrome extension for grouping tabs and the helper Chrome starts for it.
 - `Tests/`: automated suites and manual test notes.
 - `build.sh` and `test.sh`: build and test entry points.
 - `docs/`: native app details, manual QA checklists, and Safari search research.

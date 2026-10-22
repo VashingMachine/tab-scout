@@ -8,6 +8,7 @@ enum SearchRow: Equatable {
     case history(HistoryVisit)
     case suggestion(String)
     case section(SearchSection)
+    case command(PaletteCommand)
 
     var isSelectable: Bool {
         if case .section = self { return false }
@@ -16,7 +17,7 @@ enum SearchRow: Equatable {
 
     var destination: NewTabDestination? {
         switch self {
-        case .previousTab, .tab, .section: return nil
+        case .previousTab, .tab, .section, .command: return nil
         case .newTab(let destination): return destination
         case .recentSearch(let item): return .search(item.query)
         case .history(let item): return .url(item.url)
