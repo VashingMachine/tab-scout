@@ -7,7 +7,7 @@ Use a throwaway Safari window and public fixture pages. Record the macOS/Safari 
 ## Setup And Permissions
 
 1. Run `bash test.sh` and `bash build.sh`. Install the app in a stable location and launch one copy.
-2. Before granting permissions, verify that the menu and Permissions window remain usable and show the missing access. A failed Safari read should offer a useful error without hanging the UI.
+2. Before granting permissions, verify that the menu and Set Up Tab Scout window remain usable and show the missing access. Grant each permission in System Settings and confirm its step ticks itself off within two seconds, without clicking in the window. Relaunch with Safari and Chrome running and confirm both show Allowed at once, without a prompt. In a throwaway Chrome profile, click **Add to Chrome**, add the extension and confirm the step ticks off and the window comes back; with it already added, **Add to Profile** keeps the check mark. A failed Safari read should offer a useful error without hanging the UI.
 3. Grant device-control / Accessibility and Safari Automation access. On macOS 27+, confirm that setup refers to Device Control and Data Access; on older systems, Accessibility.
 4. Open search and confirm that real Safari tabs load. Check that preview mode does not ask for permission, contact sites, or change Safari.
 5. Disable Safari Automation access and try a refresh. Confirm that an error is shown and unavailable data is not treated as a successful empty session. Restore permission.

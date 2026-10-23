@@ -43,14 +43,15 @@ To update: `cd ~/projects/tabs-scout && git pull && bash deploy.sh`
 
 ## Setup
 
-Tab Scout runs in the menu bar rather than the Dock. Its Permissions window asks for:
+Tab Scout runs in the menu bar rather than the Dock. Its **Set Up Tab Scout** window opens on first launch, or from the menu, and ticks off each step once it is done:
 
 1. **Device Control and Data Access** (**Accessibility** before macOS 27), for the Cmd+T keyboard hook. Required.
 2. **Automation** for Safari and for Google Chrome, to read, select, and open their tabs. Each browser asks separately; a browser you do not allow is left out.
-3. Optionally **Full Disk Access**, to rank with Safari and Chrome history.
-4. Optionally the Chrome extension for the `group` command: choose **Set Up Chrome Grouping...** in the menu.
+3. Optionally the Chrome extension for the `group` command. **Add to Chrome** opens Chrome's Extensions page and shows the extension's folder in Finder: turn on Developer mode and drag the folder onto the page.
+4. Optionally browser history, which needs **Full Disk Access**, to rank with Safari and Chrome history.
+5. Optionally **Start Tab Scout at login**.
 
-The menu-bar menu also has **Start at Login**, **Google Suggestions**, **Use Browser History** and **History Profiles**; suggestions and history are off on a fresh installation. The app must keep running for Cmd+T, which it captures only while Safari or Chrome is active.
+The menu-bar menu also has **Google Suggestions**, **Use Browser History** and **History Profiles**; suggestions and history are off on a fresh installation. The app must keep running for Cmd+T, which it captures only while Safari or Chrome is active.
 
 If Cmd+T stops working after an update although its switch looks on, remove Tab Scout from Device Control and Data Access, add `/Applications/Tab Scout.app` again and relaunch it. [Native App Details](docs/NATIVE_COMPANION.md) has every setup step, the build options, and how to remove the app.
 

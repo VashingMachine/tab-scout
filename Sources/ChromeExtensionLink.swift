@@ -73,6 +73,9 @@ final class ChromeExtensionLink {
         }
     }
 
+    /// How many Chrome profiles' extensions are connected now. Each connects while Chrome runs.
+    var connectedProfiles: Int { queue.sync { connections.count } }
+
     func stop() {
         queue.sync {
             listener?.cancel()

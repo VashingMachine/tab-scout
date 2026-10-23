@@ -140,6 +140,7 @@ struct ChromeLinkTests {
         let refused = NativeMessage.connect(to: url)
         expect(refused >= 0 && NativeMessage.read(from: refused) == nil, "A process that is not the helper is turned away without a greeting")
         close(refused)
+        expect(link.connectedProfiles == 0, "A process turned away is not counted as a profile")
         allow = true
 
         let tabList: [[String: Any]] = [["id": 41, "title": "Kayak", "url": "https://kayak.com/", "pinned": false, "grouped": false],
@@ -153,6 +154,7 @@ struct ChromeLinkTests {
                   default: return nil
                   }
               }) else { fatalError("The stand-in extensions could not connect") }
+        expect(link.connectedProfiles == 2, "Each connected profile is counted, which the setup window shows")
 
         let listed = tabs(link, window: 7)
         guard case .success(let window) = listed else { fatalError("The profile with the window did not list it: \(listed)") }
@@ -184,6 +186,7 @@ struct ChromeLinkTests {
         } else {
             fatalError("Grouping through a closed connection succeeded")
         }
+        expect(wait { link.connectedProfiles == 2 ? true : nil }, "A profile that went away is no longer counted")
 
         link.stop()
         expect(!FileManager.default.fileExists(atPath: url.path) && NativeMessage.connect(to: url) < 0, "Stopping removes the socket")
