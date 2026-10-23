@@ -10,7 +10,7 @@ See the [README](../README.md) for the quick start.
 
 - macOS 13 or later.
 - Safari, Google Chrome, or both.
-- Xcode or the Xcode Command Line Tools to build from source.
+- Xcode 26 or later, or its Command Line Tools, to build from source; the build needs the macOS 26 SDK.
 - Device Control and Data Access / Accessibility permission for the Cmd+T hook in Safari and Chrome.
 - Automation permission to read and control Safari tabs, and separately Chrome tabs.
 - Optional Full Disk Access to include Safari and Chrome browsing history and Chrome's site icons. Tab switching, ordinary searches, and Google predictions do not require this permission.
@@ -19,27 +19,16 @@ The project uses system frameworks only. It has no package dependencies.
 
 ## Build And Install
 
-Clone the repository and run the tests and build:
+Follow [Install](../README.md#install) in the README. Its `deploy.sh` builds, signs and installs `/Applications/Tab Scout.app`, or `TAB_SCOUT_INSTALL_APP` when set; later deploys reuse the last location, and a running copy elsewhere is moved to the Trash. It signs with the installed copy's certificate when the keychain has it, otherwise the first Apple Development certificate, otherwise ad hoc; `TAB_SCOUT_SIGN_IDENTITY` overrides the choice. `task deploy` runs the tests first, `task deploy:quick` does not, and `task deploy:plan` only prints the install location and signing.
 
-```sh
-git clone https://github.com/VashingMachine/tab-scout.git ~/projects/tabs-scout
-cd ~/projects/tabs-scout
-bash test.sh
-bash build.sh
-```
-
-The app is written to `../Tab Scout.app`; temporary compiler and test output stays in `.build/build` and `.build/tests`. Move the app to `/Applications` before granting permissions, then open it. The app runs in the menu bar rather than the Dock.
-
-Build and test locations can be overridden, which is useful for CI and isolated builds:
+`bash build.sh` on its own writes the app to `../Tab Scout.app`; temporary compiler and test output stays in `.build/build` and `.build/tests`. Build and test locations can be overridden, which is useful for CI and isolated builds:
 
 ```sh
 TAB_SCOUT_OUTPUT_DIR="$PWD/build" TAB_SCOUT_WORK_DIR="$PWD/work" bash build.sh
 TAB_SCOUT_WORK_DIR="$PWD/work" bash test.sh
 ```
 
-Local builds are ad-hoc signed, not notarized. Moving or rebuilding the executable can invalidate macOS's stored permission even when its switch still looks enabled. Quit Tab Scout, remove its existing device-control / Accessibility entry, add the current app, enable it, and relaunch. Use a stable install location; do not run multiple copies.
-
-If you already have a signing certificate, `TAB_SCOUT_SIGN_IDENTITY` can select its identity instead of the default ad-hoc signature. The build does not provision certificates or notarize the app.
+Local builds are not notarized, and `build.sh` signs ad hoc unless `TAB_SCOUT_SIGN_IDENTITY` names a certificate. Moving or rebuilding the executable can invalidate macOS's stored permission even when its switch still looks enabled. Quit Tab Scout, remove its existing device-control / Accessibility entry, add the current app, enable it, and relaunch. Use a stable install location; do not run multiple copies.
 
 ## First Run
 

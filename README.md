@@ -4,6 +4,21 @@ Find an open Safari or Chrome tab before opening another one.
 
 Tab Scout is a **native macOS menu-bar app**. Press **Cmd+T in Safari or Google Chrome** to open a focused search palette over the current page. It searches the tabs of both browsers at once: picking a tab switches to it in its own browser, and when nothing matches a new tab opens in the browser you were using. No browser extension is required; an optional one adds grouping of Chrome tabs.
 
+## Install
+
+```sh
+git clone https://github.com/VashingMachine/tab-scout.git ~/projects/tabs-scout && bash ~/projects/tabs-scout/deploy.sh
+```
+
+This builds Tab Scout, installs it in `/Applications` and opens it. Grant the permissions its window asks for, then press Cmd+T in Safari or Chrome.
+
+Requirements:
+
+- Xcode 26 or later, or its Command Line Tools (`xcode-select --install`).
+- Recommended: a free Apple Development certificate, so macOS keeps the permissions across updates. In Xcode, open **Settings > Accounts**, add your Apple Account, then **Manage Certificates... > + > Apple Development**.
+
+To update: `cd ~/projects/tabs-scout && git pull && bash deploy.sh`
+
 ## Features
 
 - Search tab titles and URLs with case-insensitive, diacritic-insensitive multiword matching. Matches at the start of a word rank first; the initials of title words (`gh` for GitHub, `pr` for a pull request) and one typo in longer words also find tabs.
@@ -26,50 +41,20 @@ Tab Scout is a **native macOS menu-bar app**. Press **Cmd+T in Safari or Google 
 - Learn habits: which site usually follows the one on screen, and which sites belong to this hour of a weekday or weekend. Habits nudge empty-input order and break ties between equally good matches; glances while flicking through tabs do not count.
 - Center the native palette on the focused window of the browser in front when its geometry is available, with a screen-based fallback.
 
-## Build And Run
-
-Requires macOS 13 or later, Safari or Google Chrome, and Xcode or the Xcode Command Line Tools. The native app uses system frameworks and has no package dependencies; Node.js is not required.
-
-```sh
-git clone https://github.com/VashingMachine/tab-scout.git ~/projects/tabs-scout
-cd ~/projects/tabs-scout
-bash test.sh
-bash build.sh
-open "../Tab Scout.app"
-```
-
-The default build writes `Tab Scout.app` beside the repository. Choose a stable install location before granting macOS permissions. If an existing signed installation already works, keep using it in its approved location rather than rebuilding or moving it unnecessarily. Run only one native copy at a time.
-
-Build paths and signing can be selected explicitly:
-
-```sh
-TAB_SCOUT_OUTPUT_DIR="$PWD/.build/native-output" \
-  TAB_SCOUT_WORK_DIR="$PWD/.build/native-work" \
-  bash build.sh
-```
-
-`TAB_SCOUT_SIGN_IDENTITY` selects an existing signing identity. The default build is ad-hoc signed; the script does not provision certificates or notarize the app. This is not an App Store release.
-
-### Deploy Locally
-
-With [Task](https://taskfile.dev) installed (`brew install go-task`), `task deploy` runs the tests, builds, quits the running Tab Scout, replaces the installed copy and relaunches it. `task deploy:quick` skips the tests, and `task deploy:plan` only prints what a deploy would do. Run `task` to list every task.
-
-The deploy installs to `/Applications/Tab Scout.app`, or to `TAB_SCOUT_INSTALL_APP` when set; later deploys reuse the last location. A running copy elsewhere is moved to the Trash, so only one installation remains. The build is signed with the installed copy's certificate when the keychain has it; an ad-hoc signed deploy needs permissions granted again every time. Even with the same certificate, macOS can stop honoring the keyboard permission after a rebuild while its switch still looks on. If Cmd+T does nothing after a deploy, remove Tab Scout from Device Control and Data Access (Accessibility before macOS 27), add the installed copy again and relaunch it.
-
-The menu-bar menu and the Permissions window show the installed version, commit and build time.
-
 ## Setup
 
-Tab Scout runs in the menu bar rather than the Dock. Its Permissions window provides these checks:
+Tab Scout runs in the menu bar rather than the Dock. Its Permissions window asks for:
 
-1. Allow **Device Control and Data Access** on macOS 27+, or **Accessibility** on earlier versions, for the Cmd+T keyboard hook in Safari and Chrome.
-2. Allow **Automation** for Safari and for Google Chrome so Tab Scout can read, select, and open their tabs. Each browser asks separately, the first time Tab Scout reads it or when you press its **Allow Access** button; a browser you do not allow is left out without hiding the other.
-3. Optionally allow **Full Disk Access** to read Safari and Chrome history. This is a broad permission; tab search, local choices, and Google suggestions work without it.
-4. Optionally choose **Set Up Chrome Grouping...** in the menu to add Tab Scout's extension to Chrome for the `group` command: turn on Developer mode on Chrome's Extensions page and load the `ChromeExtension` folder Tab Scout shows. Running `group` before that shows the same steps.
+1. **Device Control and Data Access** (**Accessibility** before macOS 27), for the Cmd+T keyboard hook. Required.
+2. **Automation** for Safari and for Google Chrome, to read, select, and open their tabs. Each browser asks separately; a browser you do not allow is left out.
+3. Optionally **Full Disk Access**, to rank with Safari and Chrome history.
+4. Optionally the Chrome extension for the `group` command: choose **Set Up Chrome Grouping...** in the menu.
 
-Use the menu-bar menu to check **Capture Cmd+T in Safari and Chrome**, enable **Google Suggestions** or **Use Browser History**, choose profiles under **History Profiles**, and optionally enable **Start at Login**. Google suggestions and history import are off on a fresh installation; an existing installation retains its preferences.
+The menu-bar menu also has **Start at Login**, **Google Suggestions**, **Use Browser History** and **History Profiles**; suggestions and history are off on a fresh installation. The app must keep running for Cmd+T, which it captures only while Safari or Chrome is active.
 
-The app must remain running for Cmd+T search. The shortcut is captured only while Safari or Chrome is active; other apps and Cmd+Shift+T keep their normal behavior.
+If Cmd+T stops working after an update although its switch looks on, remove Tab Scout from Device Control and Data Access, add `/Applications/Tab Scout.app` again and relaunch it. [Native App Details](docs/NATIVE_COMPANION.md) has every setup step, the build options, and how to remove the app.
+
+With [Task](https://taskfile.dev) installed, `task deploy` runs the tests before deploying, `task deploy:plan` shows where it installs and which certificate signs it, and `task` lists the rest.
 
 ## Usage
 
