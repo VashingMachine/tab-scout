@@ -22,7 +22,7 @@ Use a throwaway Safari window and public fixture pages. Record the macOS/Safari 
 5. Confirm that selecting an existing tab changes Safari's active tab/window without increasing the tab count.
 6. Enter a unique no-match query. Confirm a single new tab opens with Safari's configured search provider, not a hard-coded engine.
 7. Enter `https://example.com/`, a bare hostname, and an empty query's **New tab** row. Confirm respectively a URL tab, an HTTPS URL tab, and one native tab using Safari's **New tabs open with** setting. With Start Page configured, its sections and background should render instead of a forced `about:blank`. Repeat with whitespace-only input and Cmd+Enter. In a throwaway setup, test another new-tab preference and restore it afterward.
-8. Use Cmd+Enter while matching tabs exist. Confirm one additional tab opens rather than switching to a match.
+8. Use Cmd+Enter while matching tabs exist. Confirm one additional tab opens rather than switching to a match. Repeat with Shift+Enter. Hold Shift: the query's open or search row must move to the top at once, selected, and return to its place on release.
 9. Confirm Cmd+Shift+T still reopens Safari's last closed tab. In another app, confirm Cmd+T retains that app's normal behavior.
 10. Disable **Capture Cmd+T in Safari**. Confirm Safari's normal new-tab command returns; re-enable it and repeat the physical-key test.
 11. Test a minimized Safari window and a fullscreen Safari window. The selected tab's window should become usable and the panel should not remain stranded behind it.

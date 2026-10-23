@@ -25,6 +25,11 @@ enum SearchRow: Equatable {
         }
     }
 
+    /// The rows listed while Shift is held: the typed text opening in a new tab comes first, moved from its usual place.
+    static func newTabFirst(_ destination: NewTabDestination, in rows: [SearchRow]) -> [SearchRow] {
+        [.newTab(destination)] + rows.filter { $0 != .newTab(destination) }
+    }
+
     static func retainedSelection(of previous: SearchRow, in rows: [SearchRow]) -> Int? {
         if let exact = rows.firstIndex(of: previous) { return exact }
         let candidates = rows.indices.filter { index in

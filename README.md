@@ -61,7 +61,7 @@ With [Task](https://taskfile.dev) installed, `task deploy` runs the tests before
 - Type a tab title, URL, or search phrase. The search field is focused when the palette opens.
 - Use Up/Down to select a result, then Enter to activate it. Clicking an actionable result works too.
 - With empty input, the first result is the tab you viewed before the current one. Cmd+T, Enter switches to it; Cmd+T, Enter again returns to where you started.
-- Cmd+Enter opens the query in a new tab even when an existing tab matches. Doing that, or choosing the search row, teaches Enter to prefer a new tab for that text.
+- Cmd+Enter or Shift+Enter opens the query in a new tab even when an existing tab matches, or in the tab on screen when it is empty. Holding Shift lists that row first, so you see what Enter will open. Doing that, or choosing the search row, teaches Enter to prefer a new tab for that text.
 - Questions and phrases of four or more words search by default unless a tab title holds the whole phrase. Guesses from typos or initials are listed below the typed search, which stays the default.
 - With empty input, the other open tabs follow the previous tab and the New tab action comes after them; Cmd+Enter also opens a new tab. In Safari it uses the native new-tab command and configured page, not a forced `about:blank` URL; in Chrome, Chrome's own new-tab page.
 - The tab you are on is never listed. When it is the only match, Enter opens a new tab with your query.

@@ -24,5 +24,13 @@ struct SearchResultsTests {
         precondition(SearchRow.retainedSelection(of: defaultPage, in: [.newTab(.search("changed"))]) == nil, "Typing a search does not retain the native new-tab action")
         precondition(SearchRow.retainedSelection(of: command, in: [defaultPage]) == nil, "Clearing a query does not retain the old search action")
         print("Passed 13 selection-retention checks")
+        let listed: [SearchRow] = [.tab(selected), .tab(another), .section(.history), command, .section(.google), .suggestion("examples")]
+        precondition(SearchRow.newTabFirst(.search("example"), in: listed) == [command, .tab(selected), .tab(another), .section(.history), .section(.google), .suggestion("examples")],
+                     "Holding Shift moves the typed text's new-tab row to the top without listing it twice")
+        precondition(SearchRow.newTabFirst(.url("https://example.com/"), in: [.tab(selected)]) == [.newTab(.url("https://example.com/")), .tab(selected)],
+                     "Holding Shift lists a typed address first even where tabs alone matched")
+        precondition(SearchRow.newTabFirst(.defaultPage, in: [.previousTab(another), .tab(selected), defaultPage]) == [defaultPage, .previousTab(another), .tab(selected)],
+                     "With empty input, holding Shift lists the new-tab page before the previous tab")
+        print("Passed 3 new-tab-first checks")
     }
 }

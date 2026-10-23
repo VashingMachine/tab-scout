@@ -120,6 +120,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var acting = false
     private var ready = false
     private var pendingActivation: Bool?
+    /// While Shift is held, the typed text opening in a new tab is listed first, as Shift+Enter does.
+    private var newTabFirst = false
     private var returnApp: NSRunningApplication?
     private var setupWindow: NSWindow?
     private var accessibilityState: NSTextField?
@@ -213,7 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             }
             if self.panel.isVisible { self.loadTabs(force: true) }
         }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
             guard let self else { return event }
             return self.handleKey(event)
         }
@@ -851,8 +853,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     private func updateRows(preserveSelection: Bool = false) {
         // A selection still on the top row follows the top row, so Enter keeps meaning the default result.
+        // While Shift is held, the new tab listed first is selected.
         let navigated = rows.indices.contains(table.selectedRow) && table.selectedRow != ResultNavigation.first(in: rows)
-        let selected = preserveSelection && navigated ? rows[table.selectedRow] : nil
+        let selected = preserveSelection && navigated && !newTabFirst ? rows[table.selectedRow] : nil
         let typed = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if let command = PaletteCommand.query(in: typed) { return showCommands(matching: command, keeping: selected) }
         // A "?" request is also matched as ordinary text while the on-device model answers.
@@ -875,7 +878,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let results = SearchResultBuilder.build(query: query, matches: matches, allTabs: tabs, history: historyIndex,
                                                 suggestions: remoteSuggestions, now: now, openTabs: openTabs,
                                                 previousTab: previousTab, activeTab: activeTab, context: context)
-        rows = results.rows
+        rows = newTabFirst ? SearchRow.newTabFirst(NewTabDestination.from(query), in: results.rows) : results.rows
         shownFeatures = results.features
         table.reloadData()
         if let row = selected.flatMap({ SearchRow.retainedSelection(of: $0, in: rows) }) ?? ResultNavigation.first(in: rows) {
@@ -997,10 +1000,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private func handleKey(_ event: NSEvent) -> NSEvent? {
         guard panel?.isKeyWindow == true else { return event }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if event.type == .flagsChanged { holdShift(ResultKeyboard.holdsShiftAlone(flags)); return event }
         if event.keyCode == 53 { if !acting { dismiss(restoreFocus: true) }; return nil }
         if event.keyCode == 17 && flags == .command { if !acting { dismiss(restoreFocus: true) }; return nil }
         if event.keyCode == 36 || event.keyCode == 76 {
-            activate(forceNew: flags.contains(.command))
+            activate(forceNew: ResultKeyboard.forcesNewTab(flags))
             return nil
         }
         if let step = ResultKeyboard.navigationStep(for: event) {
@@ -1011,6 +1015,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             return nil
         }
         return event
+    }
+
+    /// Lists the typed text as a new tab first while Shift is held.
+    private func holdShift(_ held: Bool) {
+        guard held != newTabFirst else { return }
+        newTabFirst = held
+        if ready { updateRows(preserveSelection: true) }
     }
 
     @objc private func activateSelection(_ sender: Any?) {
@@ -1263,6 +1274,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private func dismiss(restoreFocus: Bool) {
         requestID += 1
         pendingActivation = nil
+        newTabFirst = false
         if !preview { googleSuggestions.cancel() }
         remoteSuggestions = []
         resetAssistant()
@@ -1293,6 +1305,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         windowNumbers = [:]
         ready = false
         table?.reloadData()
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        // Shift may have been let go while the palette was hidden, such as after Shift+Enter failed.
+        guard notification.object as? NSWindow === panel else { return }
+        holdShift(ResultKeyboard.holdsShiftAlone(NSEvent.modifierFlags))
     }
 
     func windowDidResignKey(_ notification: Notification) {

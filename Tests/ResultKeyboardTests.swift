@@ -34,6 +34,20 @@ struct ResultKeyboardTests {
             }
         }
 
+        for accessory in accessoryFlags {
+            for combination in 0..<16 {
+                var flags = accessory
+                for (bit, modifier) in shortcutFlags.enumerated() where combination & (1 << bit) != 0 {
+                    flags.formUnion(modifier)
+                }
+                let command = combination & 1 != 0, shift = combination & 8 != 0
+                expect(ResultKeyboard.forcesNewTab(flags) == (command || shift),
+                       "Enter opens a new tab exactly when Command or Shift is held \(flags.rawValue)")
+                expect(ResultKeyboard.holdsShiftAlone(flags) == (combination == 8),
+                       "Only Shift without other shortcut modifiers lists the new tab first \(flags.rawValue)")
+            }
+        }
+
         let standardArrow = event(keyCode: 125, flags: [.numericPad, .function])
         expect(!standardArrow.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty,
                "Regression fixture reproduces the nonempty flags carried by standard AppKit arrows")
