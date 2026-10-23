@@ -153,9 +153,14 @@ final class TabGrouper {
                 var groups: [PlannedGroup] = []
                 do {
                     let session = LanguageModelSession(instructions: TabGrouping.instructions)
-                    // Greedy sampling sorts the same tabs the same way each time.
-                    let response = try await session.respond(to: prompt.text, generating: GroupingAnswer.self,
-                                                             options: GenerationOptions(samplingMode: .greedy))
+                    // Greedy sampling sorts the same tabs the same way each time. The macOS 27 SDK, which comes
+                    // with Swift 6.4, renamed `sampling:` and deprecated the old name; the macOS 26 SDK has only that.
+                    #if compiler(>=6.4)
+                    let options = GenerationOptions(samplingMode: .greedy)
+                    #else
+                    let options = GenerationOptions(sampling: .greedy)
+                    #endif
+                    let response = try await session.respond(to: prompt.text, generating: GroupingAnswer.self, options: options)
                     groups = TabGrouping.plan(response.content.groups.map { ($0.name, $0.tabs) }, from: prompt)
                 } catch {}
                 guard !Task.isCancelled else { return }
