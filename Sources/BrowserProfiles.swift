@@ -191,6 +191,17 @@ enum ProfileMenu {
     }
 }
 
+/// Tells the Chrome windows of one profile from another's by which profile's extension can see each window.
+enum ProfileWindows {
+    /// The windows of the profile `front` belongs to, among `windows`: those whose owner is the front window's.
+    /// When that profile's extension is not connected, its windows are the ones no connected profile sees. Windows
+    /// not asked about yet are left out. Nil when no owner is known, so profiles cannot be told apart.
+    static func current(front: Int, windows: [Int], owners: [Int: Int]) -> Set<Int>? {
+        guard !owners.isEmpty, let owner = owners[front] else { return owners.isEmpty ? nil : [front] }
+        return Set(windows.filter { owners[$0] == owner } + [front])
+    }
+}
+
 enum ProfilePalette {
     /// Colors for profiles without a vivid one of their own, picked to read on light and dark glass alike:
     /// iris, ember, lagoon, orchid, sky, moss, rose and amber.

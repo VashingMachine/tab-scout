@@ -172,10 +172,20 @@ struct ChromeLinkTests {
                "Groups go with their names and tabs")
         expect(!otherProfile.received.contains { $0["type"] as? String == "group" }, "Only the window's profile is asked to group")
 
+        var asked: [Int: Int]?
+        link.owners(of: [7, 8]) { asked = $0 }
+        let owners = wait { asked }
+        expect(owners[7].map { link.connectionIDs.contains($0) } == true && owners[8] == ChromeExtensionLink.nobody,
+               "The profile that sees a window owns it, by its connection; a window no profile sees has no owner")
+
         guard let silent = FakeExtension(at: url, answer: { _ in nil }) else { fatalError("The silent stand-in could not connect") }
         _ = silent
         expect(error(tabs(link, window: 8, timeout: 0.3)) == .timeout, "A profile that never answers runs out of time")
         expect((try? tabs(link, window: 7, timeout: 0.3).get())?.tabs.count == 2, "A silent profile does not hold up the one that answers")
+        var partly: [Int: Int]?
+        link.owners(of: [7, 8], timeout: 0.3) { partly = $0 }
+        let unsure = wait { partly }
+        expect(unsure[7] == owners[7] && unsure[8] == nil, "A window a silent profile did not answer about is left out, as it may be that profile's")
 
         // Shutting down, unlike closing, also wakes the stand-in's own blocked read.
         shutdown(profile.socket, SHUT_RDWR)

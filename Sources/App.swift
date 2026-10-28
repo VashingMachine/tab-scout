@@ -72,9 +72,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var profileSwitching = false
     /// While Chrome brings a profile's window forward, the palette takes keyboard focus back instead of closing.
     private var keepPanelUntil: Date?
-    /// After a profile switch, the listed tabs stay as they are until the palette closes, so nothing moves under the
-    /// pointer; only the tab on screen is followed, for new tabs and searches.
+    /// After a profile switch, no browser is read again until the palette closes, so the listed tabs change once,
+    /// to the new profile's, and never reorder under the pointer.
     private var listFrozen = false
+    /// After a profile switch, the tab Chrome reports on screen, which the listed tabs follow instead of the one read
+    /// with them.
+    private var activeOverride: BrowserTab?
+    /// From a profile switch until its tabs are listed; Enter pressed meanwhile waits for them.
+    private var awaitingProfileTabs = false
+    /// How many profiles Chrome had when last read. With more than one, the palette over Chrome lists only the profile
+    /// in front.
+    private var chromeProfileCount = 0
+    /// Which extension connection, and so which Chrome profile, sees each Chrome window. A window belongs to one profile
+    /// for good, so answers are kept while the same extensions stay connected.
+    private var windowOwners: [Int: Int] = [:]
+    private var ownerConnections: Set<Int> = []
+    private var learningOwners = false
+    /// Whether the palette is over a Chrome profile whose windows cannot be told from other profiles', for lack of
+    /// Tab Scout's extension.
+    private var profilesUnseparated = false
     private var lastSeen: [PageTextIndex.Key: Date] = [:]
     private var shownFeatures: [BrowserTab: RankingFeatures] = [:]
     private var rankingItem: NSMenuItem?
@@ -217,6 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                     self.allowedBrowsers.insert(browser)
                     self.deniedBrowsers.remove(browser)
                 }
+                if browser == .chrome { self.learnWindowOwners(Set(snapshot.tabs.map(\.windowID))) }
                 guard browser == self.lastBrowser, let active = snapshot.active else { return }
                 self.observeFocus(active)
             }
@@ -243,6 +260,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             guard let browser = self.frontBrowser else { return }
             self.lastBrowser = browser
             if !self.preview && self.allowedBrowsers.contains(browser) { self.stores[browser]?.prewarm(); self.readActiveTab() }
+            // Knowing beforehand whether Chrome has several profiles lists only the one in front from the start.
+            if browser == .chrome && !self.preview {
+                self.chromeProfiles.read { [weak self] state in if let state { self?.chromeProfileCount = state.profiles.count } }
+            }
         }
         launchObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] note in
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
@@ -585,6 +606,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         scroll.horizontalScrollElasticity = .none
         scroll.sideways = { [weak self] event in self?.handleScroll(event) == nil }
         scroll.documentView = table
+        // Its layer fades the list from one profile's tabs to the next.
+        scroll.wantsLayer = true
         scroll.translatesAutoresizingMaskIntoConstraints = false
         background.addSubview(scroll)
         results = scroll
@@ -678,6 +701,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         panel.makeFirstResponder(searchField)
         keepPanelUntil = nil
         listFrozen = false
+        activeOverride = nil
         // Cached tabs appear at once; the forced read catches tab switches made in the browser since the last one.
         loadTabs(force: true)
         loadProfiles()
@@ -688,6 +712,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     @objc private func refresh(_ sender: Any?) {
         guard !acting else { return }
         listFrozen = false
+        activeOverride = nil
         loadTabs(force: true)
     }
 
@@ -696,8 +721,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private func renderSnapshot(to url: URL) {
         panel.alphaValue = 0
         panel.orderFrontRegardless()
-        loadTabs()
         loadProfiles()
+        loadTabs()
         // --query shows typed results; a moment of run loop lets the preview's "?" answer arrive.
         if let index = CommandLine.arguments.firstIndex(of: "--query"), index + 1 < CommandLine.arguments.count {
             searchField.stringValue = CommandLine.arguments[index + 1]
@@ -825,28 +850,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     /// Lists the merged tabs, again each time another browser's tabs arrive.
-    private func show(_ combined: CombinedTabs) {
-        let hadResults = ready
-        tabs = combined.tabs
-        searchIndex = combined.index
-        openTabs = OpenTabLookup(combined.tabs)
-        activeTab = combined.active
-        previousTab = focusHistory.previous(active: combined.active, in: combined.tabs)
-        focusOrder = focusHistory.order(in: combined.tabs)
+    /// `newContext` starts the selection over, as after a profile switch.
+    private func show(_ combined: CombinedTabs, newContext: Bool = false) {
+        let hadResults = ready && !newContext
+        let active = activeOverride ?? combined.active
+        let listed = profileTabs(combined.tabs, active: active)
+        tabs = listed
+        searchIndex = listed.count == combined.tabs.count ? combined.index : TabSearchIndex(listed)
+        openTabs = OpenTabLookup(listed)
+        activeTab = active
+        previousTab = focusHistory.previous(active: active, in: listed)
+        focusOrder = focusHistory.order(in: listed)
         let now = Date()
-        tabDwell = Dictionary(combined.tabs.compactMap { tab -> (BrowserTab, Double)? in
+        tabDwell = Dictionary(listed.compactMap { tab -> (BrowserTab, Double)? in
             guard let url = HistoryIdentity.url(tab.url) else { return nil }
             let strength = learning.state.engagement.strength(url: url, now: now)
             return strength > 0 ? (tab, strength) : nil
         }, uniquingKeysWith: max)
-        relatedTabs = RelatedTabs.relations(to: combined.active, in: combined.tabs)
-        // Until every browser has answered, the text of a missing browser's pages is kept.
+        relatedTabs = RelatedTabs.relations(to: active, in: listed)
+        // Until every browser has answered, the text of a missing browser's pages is kept; so is the text of tabs
+        // another profile lists.
         if !awaitingTabs { pageText.retain(combined.tabs) }
         let habits = learning.state.habits
-        let from = combined.active.flatMap { Habits.site($0.url) }
+        let from = active.flatMap { Habits.site($0.url) }
         tabTransition = [:]
         tabTimeOfDay = [:]
-        for tab in combined.tabs {
+        for tab in listed {
             guard let site = Habits.site(tab.url) else { continue }
             if let from { tabTransition[tab] = habits.transition(from: from, to: site, now: now) }
             tabTimeOfDay[tab] = habits.timeOfDay(site: site, at: now, calendar: .current, now: now)
@@ -1017,8 +1046,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         // A browser that could not be read is named, so its missing tabs are explained.
         let failed = Browser.allCases.filter { browserErrors[$0] != nil }
         if !failed.isEmpty { footer.stringValue += " | " + failed.map(\.name).joined(separator: ", ") + " unavailable" }
+        // Without Tab Scout's extension, Chrome cannot say which profile a window belongs to.
+        if profilesUnseparated { footer.stringValue += " | Every profile's tabs" }
         if question != nil { footer.stringValue = assistantStatus ?? "Type a request for Apple Intelligence" }
-        let problems = [preview ? nil : historyStore.localStorageError?.localizedDescription]
+        let problems = [preview ? nil : historyStore.localStorageError?.localizedDescription,
+                        profilesUnseparated ? "Add Tab Scout's Chrome extension to each profile to list only the tabs of the profile in front." : nil]
             + failed.map { browser in browserErrors[browser].map { describe($0, browser) } }
         footer.toolTip = problems.compactMap { $0 }.isEmpty ? nil : problems.compactMap { $0 }.joined(separator: "\n")
     }
@@ -1145,11 +1177,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 $0 + 1 < CommandLine.arguments.count ? CommandLine.arguments[$0 + 1].split(separator: ",").map(String.init) : nil
             } ?? ["Personal", "Work"]
             let menu = names.enumerated().map { ProfileMenuItem(title: $0.element, checked: $0.offset == 0) }
+            chromeProfileCount = names.count
             return showProfiles(ProfileMenu.state(menu: menu, local: [], lastUsed: nil))
         }
         guard isRunning(.chrome) else { return showProfiles(nil) }
         chromeProfiles.read { [weak self] state in
             guard let self, self.panel.isVisible, self.lastBrowser == .chrome, !self.acting else { return }
+            // Profiles added or removed since Chrome was last read change whether one profile is listed.
+            if let state, state.profiles.count != self.chromeProfileCount {
+                self.chromeProfileCount = state.profiles.count
+                self.rescope(fade: false)
+            }
             self.showProfiles(state)
         }
     }
@@ -1301,6 +1339,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         freezeList()
         profileSwitching = true
         keepPanelUntil = Date().addingTimeInterval(3)
+        // The leaving profile's tabs dim until the new profile's replace them.
+        let leaving = activeTab?.browser == .chrome ? activeTab?.windowID : nil
+        awaitingProfileTabs = true
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            results.animator().alphaValue = 0.45
+        }
         let started = DispatchTime.now()
         chromeProfiles.switchTo(profile) { [weak self] result in
             guard let self else { return }
@@ -1310,21 +1355,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             switch result {
             case .success:
                 self.keepPanelUntil = Date().addingTimeInterval(1.5)
-                // Chrome raises the window as it answers. The tab now on screen decides where new tabs open, and the
-                // tab cache is read again for the next palette.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                    guard let self, self.panel.isVisible else { return }
-                    self.bridge(.chrome).active { [weak self] result in
-                        if case .success(let tab?) = result { self?.observeFocus(tab); self?.followFrontTab(tab) }
-                    }
-                    self.stores[.chrome]?.prewarm()
-                }
+                self.followSwitch(from: leaving)
+                // Read again for the next palette, which then needs no read to show this profile.
+                self.stores[.chrome]?.prewarm()
             case .failure(let error):
                 self.keepPanelUntil = nil
+                self.restoreResults()
                 self.footer.stringValue = "Could not switch to \(profile.name)"
                 self.footer.toolTip = error.localizedDescription
                 // Back to the profile Chrome is in.
                 self.loadProfiles()
+            }
+        }
+    }
+
+    /// Asks Chrome for the tab on screen until the profile's window is in front, or Chrome has opened one, then lists
+    /// that profile's tabs.
+    private func followSwitch(from window: Int?, attempt: Int = 0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0.15 : 0.25)) { [weak self] in
+            guard let self, self.panel.isVisible, self.listFrozen else { return }
+            self.bridge(.chrome).active { [weak self] result in
+                guard let self, self.panel.isVisible else { return }
+                if case .success(let tab?) = result, tab.windowID != window {
+                    self.observeFocus(tab)
+                    return self.followFrontTab(tab)
+                }
+                if attempt < 8 { self.followSwitch(from: window, attempt: attempt + 1) } else { self.restoreResults() }
             }
         }
     }
@@ -1341,13 +1397,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         retryButton.isEnabled = true
     }
 
-    /// While the list is frozen, follows the tab on screen, so new tabs and searches go to the window now in front and
-    /// its empty tab is reused. The rows keep their order; only their text can change, such as "This empty tab".
+    /// After a profile switch, follows the tab on screen: the tabs listed become its profile's, and new tabs and
+    /// searches go to its window.
     private func followFrontTab(_ tab: BrowserTab) {
         guard listFrozen, panel.isVisible, tab.browser == lastBrowser, tab != activeTab else { return }
-        activeTab = tab
-        if table.numberOfRows > 0 {
-            table.reloadData(forRowIndexes: IndexSet(integersIn: 0..<table.numberOfRows), columnIndexes: IndexSet(integer: 0))
+        activeOverride = tab
+        rescope(fade: true)
+    }
+
+    /// Lists the tabs again from those already read, for a new tab on screen or newly told-apart windows. The list
+    /// changes only when the tabs listed or the one on screen do; after a switch it fades from one profile to the next.
+    private func rescope(fade: Bool) {
+        defer { if fade { restoreResults() } }
+        guard ready, panel.isVisible, !snapshots.isEmpty else { return }
+        let combined = CombinedTabs(snapshots, front: lastBrowser)
+        let active = activeOverride ?? combined.active
+        guard profileTabs(combined.tabs, active: active) != tabs || active != activeTab else { return }
+        if fade {
+            let transition = CATransition()
+            transition.type = .fade
+            transition.duration = 0.2
+            results.layer?.add(transition, forKey: "profile")
+        }
+        show(combined, newContext: fade)
+    }
+
+    /// Shows the list at full strength again once a switched-to profile's tabs are listed, or the switch gave up,
+    /// and runs an Enter pressed meanwhile.
+    private func restoreResults() {
+        awaitingProfileTabs = false
+        if results.alphaValue < 1 {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.18
+                results.animator().alphaValue = 1
+            }
+        }
+        guard let forceNew = pendingActivation, panel.isVisible else { return }
+        pendingActivation = nil
+        activate(forceNew: forceNew)
+    }
+
+    /// Over Chrome with several profiles, only the profile in front: its windows' tabs and no Safari tabs, so every
+    /// pick stays in that profile. A profile's windows are those its copy of Tab Scout's extension sees; without the
+    /// extension, every Chrome tab is listed.
+    private func profileTabs(_ all: [BrowserTab], active: BrowserTab?) -> [BrowserTab] {
+        profilesUnseparated = false
+        guard lastBrowser == .chrome, chromeProfileCount > 1 else { return all }
+        let chrome = all.filter { $0.browser == .chrome }
+        guard let front = active?.browser == .chrome ? active?.windowID : chrome.first?.windowID else { return chrome }
+        guard let windows = ProfileWindows.current(front: front, windows: chrome.map(\.windowID), owners: windowOwners) else {
+            profilesUnseparated = true
+            return chrome
+        }
+        return chrome.filter { windows.contains($0.windowID) }
+    }
+
+    /// Asks the profiles' extensions which of them sees each Chrome window not yet known, then lists the tabs again
+    /// if that changes which belong to the profile in front. Answers are dropped when extensions connect or leave.
+    private func learnWindowOwners(_ windows: Set<Int>) {
+        guard !preview else { return }
+        let connections = chromeLink.connectionIDs
+        if connections != ownerConnections {
+            windowOwners = [:]
+            ownerConnections = connections
+        }
+        // Closed windows never come back; their ids are not reused.
+        windowOwners = windowOwners.filter { windows.contains($0.key) }
+        let unknown = windows.filter { windowOwners[$0] == nil }
+        guard !connections.isEmpty, !unknown.isEmpty, !learningOwners else { return }
+        learningOwners = true
+        chromeLink.owners(of: Array(unknown)) { [weak self] found in
+            guard let self else { return }
+            self.learningOwners = false
+            guard self.chromeLink.connectionIDs == self.ownerConnections else { return }
+            self.windowOwners.merge(found) { $1 }
+            self.rescope(fade: false)
         }
     }
 
@@ -1373,8 +1497,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     private func activate(forceNew: Bool) {
         guard !acting else { return }
-        // Enter pressed while the tab list is still loading runs once every browser's tabs have arrived.
-        guard ready, !awaitingTabs else { if loading { pendingActivation = forceNew }; return }
+        // Enter pressed while the tab list is still loading runs once every browser's tabs have arrived, and once a
+        // switched-to profile's tabs are listed.
+        guard ready, !awaitingTabs, !awaitingProfileTabs else { if loading || awaitingProfileTabs { pendingActivation = forceNew }; return }
         let typed = searchField.stringValue
         // Enter and Cmd+Enter both run the selected command; the "`" text never opens as a page.
         if PaletteCommand.query(in: typed) != nil {
@@ -1437,6 +1562,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 self.panel.makeFirstResponder(self.searchField)
                 if case BridgeError.staleTab = error {
                     self.listFrozen = false
+                    self.activeOverride = nil
                     self.loadTabs(force: true)
                 }
             }
@@ -1589,6 +1715,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
         keepPanelUntil = nil
         listFrozen = false
+        activeOverride = nil
+        awaitingProfileTabs = false
+        results.alphaValue = 1
         showProfiles(nil)
         if !preview { googleSuggestions.cancel() }
         remoteSuggestions = []

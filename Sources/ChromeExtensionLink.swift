@@ -76,6 +76,43 @@ final class ChromeExtensionLink {
     /// How many Chrome profiles' extensions are connected now. Each connects while Chrome runs.
     var connectedProfiles: Int { queue.sync { connections.count } }
 
+    /// One per connected profile; a profile that reconnects gets a new one.
+    var connectionIDs: Set<Int> { queue.sync { Set(connections.keys) } }
+
+    /// Stands for the owner of windows no connected profile can see, such as those of a profile without the extension.
+    static let nobody = 0
+
+    /// Which connected profile can see each of `windowIDs`, by connection. A profile's extension sees only its own
+    /// profile's windows, so each window has one owner, or `nobody`. A window some profile did not answer about is
+    /// left out, since it may be that profile's.
+    func owners(of windowIDs: [Int], timeout: TimeInterval = 2, completion: @escaping ([Int: Int]) -> Void) {
+        queue.async { [self] in
+            let finish = { (owners: [Int: Int]) in DispatchQueue.main.async { completion(owners) } }
+            let asked = Array(connections.keys)
+            guard startError == nil, !asked.isEmpty, !windowIDs.isEmpty else { return finish([:]) }
+            var owners: [Int: Int] = [:]
+            var unanswered: Set<Int> = []
+            var remaining = windowIDs.count * asked.count
+            for window in windowIDs {
+                for connection in asked {
+                    request(["type": "tabs", "windowId": window], on: connection, timeout: timeout) { result in
+                        switch result {
+                        case .success(let reply) where reply["tabs"] != nil: owners[window] = connection
+                        case .success(let reply) where reply["error"] as? String == "no-window": break
+                        default: unanswered.insert(window)
+                        }
+                        remaining -= 1
+                        guard remaining == 0 else { return }
+                        for window in windowIDs where owners[window] == nil && !unanswered.contains(window) {
+                            owners[window] = Self.nobody
+                        }
+                        finish(owners)
+                    }
+                }
+            }
+        }
+    }
+
     func stop() {
         queue.sync {
             listener?.cancel()

@@ -8,6 +8,7 @@ struct ProfileTests {
         localState()
         menu()
         colors()
+        windows()
         swipe()
         print("Passed \(checks) profile checks")
     }
@@ -79,6 +80,19 @@ struct ProfileTests {
         expect(Set(many.prefix(8).map(\.hue)).count == 8, "Eight profiles get eight different colors")
         expect(ProfilePalette.motifs(ids: ["b", "a"]) == [.dots, .strands], "Patterns follow the profiles' ids too")
         expect(abs(ProfileColor(hex: 0xFF0000).hue) < 0.001 && abs(ProfileColor(hex: 0x0000FF).hue - 240) < 0.001, "Hues are in degrees")
+    }
+
+    static func windows() {
+        // Owners are extension connections; 0 stands for windows no connected profile sees.
+        let owners = [1: 5, 2: 6, 3: 5, 4: 0]
+        expect(ProfileWindows.current(front: 1, windows: [1, 2, 3], owners: [:]) == nil, "Without any owner, profiles cannot be told apart")
+        expect(ProfileWindows.current(front: 1, windows: [1, 2, 3, 4], owners: owners) == [1, 3],
+               "The profile in front has the windows its extension sees")
+        expect(ProfileWindows.current(front: 2, windows: [1, 2, 3, 4], owners: owners) == [2], "Another profile in front has its own")
+        expect(ProfileWindows.current(front: 4, windows: [1, 2, 3, 4], owners: owners) == [4],
+               "A profile without the extension has the windows no extension sees")
+        expect(ProfileWindows.current(front: 1, windows: [1, 3, 9], owners: owners) == [1, 3], "A window not asked about yet is left out")
+        expect(ProfileWindows.current(front: 9, windows: [1, 3, 9], owners: owners) == [9], "A new window in front lists only itself until known")
     }
 
     static func swipe() {
