@@ -11,6 +11,18 @@ private final class SearchPanel: NSPanel {
     override var canBecomeMain: Bool { true }
 }
 
+/// The results' scroll view offers every scroll event to `sideways` first, which takes those of a sideways swipe.
+/// Overriding scrollWheel also turns off responsive scrolling, which would otherwise hand the rest of a gesture to
+/// the scroll view after its first event, out of the palette's sight.
+private final class ResultsScrollView: NSScrollView {
+    var sideways: ((NSEvent) -> Bool)?
+
+    override func scrollWheel(with event: NSEvent) {
+        if sideways?(event) == true { return }
+        super.scrollWheel(with: event)
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSWindowDelegate,
                          NSMenuDelegate {
     private let preview = CommandLine.arguments.contains("--preview")
@@ -49,6 +61,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var assistantWork: DispatchWorkItem?
     private let chromeLink = ChromeExtensionLink()
     private let grouper = TabGrouper()
+    private let chromeProfiles = ChromeProfiles()
+    /// The profiles of the browser the palette opened over, while it has more than one.
+    private var profileState: ProfileState?
+    private var profileSwipe = ProfileSwipe(count: 0, index: 0)
+    /// The profile Chrome is in, or is being switched to.
+    private var chromeProfile = 0
+    private var profileTimer: Timer?
+    private var profileSwitch: DispatchWorkItem?
+    private var profileSwitching = false
+    /// While Chrome brings a profile's window forward, the palette takes keyboard focus back instead of closing.
+    private var keepPanelUntil: Date?
+    /// After a profile switch, the listed tabs stay as they are until the palette closes, so nothing moves under the
+    /// pointer; only the tab on screen is followed, for new tabs and searches.
+    private var listFrozen = false
     private var lastSeen: [PageTextIndex.Key: Date] = [:]
     private var shownFeatures: [BrowserTab: RankingFeatures] = [:]
     private var rankingItem: NSMenuItem?
@@ -96,6 +122,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var panel: SearchPanel!
     private var searchField: NSTextField!
     private var table: NSTableView!
+    private var results: NSScrollView!
+    private var profileAura: ProfileAuraView!
+    private var profilePill: ProfilePillView!
+    private var profileDots: ProfileDotsView!
+    /// Keeps the footer's text clear of the profile dots while they show.
+    private var footerBeforeDots: NSLayoutConstraint!
     private var footer: NSTextField!
     private var emptyLabel: NSTextField!
     private var retryButton: NSButton!
@@ -231,9 +263,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             }
             if self.panel.isVisible { self.loadTabs(force: true) }
         }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged, .scrollWheel]) { [weak self] event in
             guard let self else { return event }
-            return self.handleKey(event)
+            guard event.type == .scrollWheel else { return self.handleKey(event) }
+            // Over the results, their scroll view offers each event to the swipe itself.
+            let point = self.results.convert(event.locationInWindow, from: nil)
+            return event.window === self.panel && self.results.bounds.contains(point) ? event : self.handleScroll(event)
+        }
+        if preview, let index = CommandLine.arguments.firstIndex(of: "--appearance"), index + 1 < CommandLine.arguments.count {
+            NSApp.appearance = NSAppearance(named: CommandLine.arguments[index + 1] == "light" ? .aqua : .darkAqua)
         }
         if preview, let index = CommandLine.arguments.firstIndex(of: "--snapshot"), index + 1 < CommandLine.arguments.count {
             renderSnapshot(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
@@ -251,7 +289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             cacheTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
                 guard let self else { return }
                 if self.stores.values.allSatisfy({ $0.snapshot == nil }) { self.clearResults() }
-                if self.panel.isVisible && !self.acting && !self.loading { self.loadTabs() }
+                if self.panel.isVisible && !self.acting && !self.loading && !self.listFrozen { self.loadTabs() }
                 else if let browser = self.frontBrowser, self.allowedBrowsers.contains(browser) { self.stores[browser]?.prewarm() }
             }
             if eventTap == nil { showSetup(nil) }
@@ -404,7 +442,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         activeReadInFlight = true
         bridge(browser).active { [weak self] result in
             guard let self else { return }
-            if case .success(let tab) = result, self.frontBrowser == browser, let tab { self.observeFocus(tab) }
+            if case .success(let tab) = result, self.frontBrowser == browser, let tab {
+                self.observeFocus(tab)
+                self.followFrontTab(tab)
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
                 self.activeReadInFlight = false
                 if self.activeReadAgain { self.activeReadAgain = false; self.readActiveTab() }
@@ -485,6 +526,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         background.blendingMode = .behindWindow
         background.state = .active
         panel.contentView = background
+        profileAura = ProfileAuraView()
+        profileAura.translatesAutoresizingMaskIntoConstraints = false
+        background.addSubview(profileAura)
 
         // A launcher-style bar: the system search field keeps its magnifier at 13 pt whatever its font,
         // so the symbol is drawn beside a plain field at the text's own size.
@@ -507,6 +551,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         searchField.delegate = self
         searchField.translatesAutoresizingMaskIntoConstraints = false
         background.addSubview(searchField)
+        profilePill = ProfilePillView()
+        profilePill.isHidden = true
+        profilePill.onPress = { [weak self] in
+            guard let self, self.profileSwipe.count > 1 else { return }
+            self.moveProfile(to: (self.profileSwipe.target + 1) % self.profileSwipe.count)
+        }
+        profilePill.translatesAutoresizingMaskIntoConstraints = false
+        background.addSubview(profilePill)
         let line = NSBox()
         line.boxType = .separator
         line.translatesAutoresizingMaskIntoConstraints = false
@@ -526,12 +578,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         table.target = self
         table.action = #selector(activateSelection(_:))
         table.allowsEmptySelection = false
-        let scroll = NSScrollView()
+        let scroll = ResultsScrollView()
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
+        // Sideways scrolling switches profiles; the results never move that way.
+        scroll.horizontalScrollElasticity = .none
+        scroll.sideways = { [weak self] event in self?.handleScroll(event) == nil }
         scroll.documentView = table
         scroll.translatesAutoresizingMaskIntoConstraints = false
         background.addSubview(scroll)
+        results = scroll
 
         emptyLabel = NSTextField(wrappingLabelWithString: "")
         emptyLabel.font = .systemFont(ofSize: 13)
@@ -549,13 +605,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let settings = iconButton("gearshape", tip: "Set Up Tab Scout", action: #selector(showSetup(_:)))
         background.addSubview(retryButton)
         background.addSubview(settings)
+        profileDots = ProfileDotsView()
+        profileDots.isHidden = true
+        profileDots.onSelect = { [weak self] index in self?.moveProfile(to: index) }
+        profileDots.translatesAutoresizingMaskIntoConstraints = false
+        background.addSubview(profileDots)
+        footerBeforeDots = footer.trailingAnchor.constraint(lessThanOrEqualTo: profileDots.leadingAnchor, constant: -12)
         NSLayoutConstraint.activate([
+            profileAura.topAnchor.constraint(equalTo: background.topAnchor),
+            profileAura.bottomAnchor.constraint(equalTo: background.bottomAnchor),
+            profileAura.leadingAnchor.constraint(equalTo: background.leadingAnchor),
+            profileAura.trailingAnchor.constraint(equalTo: background.trailingAnchor),
+            profilePill.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -14),
+            profilePill.centerYAnchor.constraint(equalTo: searchField.centerYAnchor),
+            profileDots.centerXAnchor.constraint(equalTo: background.centerXAnchor),
+            profileDots.centerYAnchor.constraint(equalTo: retryButton.centerYAnchor),
             // The magnifier and typed text line up with the result icons and titles below.
             glass.centerXAnchor.constraint(equalTo: background.leadingAnchor, constant: 36),
             glass.centerYAnchor.constraint(equalTo: searchField.centerYAnchor),
             searchField.topAnchor.constraint(equalTo: background.topAnchor, constant: 16),
             searchField.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 56),
-            searchField.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -20),
+            searchField.trailingAnchor.constraint(equalTo: profilePill.leadingAnchor, constant: -10),
             line.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 14),
             line.leadingAnchor.constraint(equalTo: background.leadingAnchor),
             line.trailingAnchor.constraint(equalTo: background.trailingAnchor),
@@ -606,13 +676,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(searchField)
+        keepPanelUntil = nil
+        listFrozen = false
         // Cached tabs appear at once; the forced read catches tab switches made in the browser since the last one.
         loadTabs(force: true)
+        loadProfiles()
         reloadHistory()
         DispatchQueue.main.async { Timing.log("open", since: opened) }
     }
 
-    @objc private func refresh(_ sender: Any?) { if !acting { loadTabs(force: true) } }
+    @objc private func refresh(_ sender: Any?) {
+        guard !acting else { return }
+        listFrozen = false
+        loadTabs(force: true)
+    }
 
     /// Draws the preview palette into a PNG from an invisible window, so the layout can be checked
     /// without taking keyboard focus from the person at the Mac.
@@ -620,6 +697,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         panel.alphaValue = 0
         panel.orderFrontRegardless()
         loadTabs()
+        loadProfiles()
         // --query shows typed results; a moment of run loop lets the preview's "?" answer arrive.
         if let index = CommandLine.arguments.firstIndex(of: "--query"), index + 1 < CommandLine.arguments.count {
             searchField.stringValue = CommandLine.arguments[index + 1]
@@ -629,10 +707,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         guard let view = panel.contentView else { return NSApp.terminate(nil) }
         view.layoutSubtreeIfNeeded()
         table.layoutSubtreeIfNeeded()
-        if let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
-            view.cacheDisplay(in: view.bounds, to: bitmap)
-            try? bitmap.representation(using: .png, properties: [:])?.write(to: url)
+        // --profile-position 0.4 draws the palette partway through a swipe to the next profile.
+        if let index = CommandLine.arguments.firstIndex(of: "--profile-position"), index + 1 < CommandLine.arguments.count,
+           let position = Double(CommandLine.arguments[index + 1]) {
+            applyProfilePosition(position)
         }
+        view.displayIfNeeded()
+        var image = view.bitmapImageRepForCachingDisplay(in: view.bounds)
+        if profileState == nil, let image {
+            view.cacheDisplay(in: view.bounds, to: image)
+        } else {
+            // Drawing views alone leaves out the profile's colors, which are layers. The glass cannot be drawn
+            // offscreen, so plain gray stands in for it under the layers of everything on it.
+            let dark = view.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            image = ProfileArt.render(view.bounds.size, scale: panel.backingScaleFactor) { context in
+                context.setFillColor(NSColor(white: dark ? 0.2 : 0.93, alpha: 1).cgColor)
+                context.fill(view.bounds)
+                for subview in view.subviews where !subview.isHidden {
+                    context.saveGState()
+                    context.translateBy(x: subview.frame.minX, y: subview.frame.minY)
+                    // The profile's colors are layers, which render directly; text on the glass is vibrant, which only
+                    // drawing shows.
+                    if subview === profileAura || subview === profilePill {
+                        subview.layer?.render(in: context)
+                    } else if let drawn = subview.bitmapImageRepForCachingDisplay(in: subview.bounds) {
+                        subview.cacheDisplay(in: subview.bounds, to: drawn)
+                        drawn.cgImage.map { context.draw($0, in: CGRect(origin: .zero, size: subview.bounds.size)) }
+                    }
+                    context.restoreGState()
+                }
+            }.map(NSBitmapImageRep.init(cgImage:))
+        }
+        try? image?.representation(using: .png, properties: [:])?.write(to: url)
         NSApp.terminate(nil)
     }
 
@@ -1031,6 +1137,226 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         return event
     }
 
+    /// Shows the profiles of the browser the palette opened over. Only Chrome's can be told apart and switched.
+    private func loadProfiles() {
+        guard lastBrowser == .chrome else { return showProfiles(nil) }
+        if preview {
+            let names = CommandLine.arguments.firstIndex(of: "--profiles").flatMap {
+                $0 + 1 < CommandLine.arguments.count ? CommandLine.arguments[$0 + 1].split(separator: ",").map(String.init) : nil
+            } ?? ["Personal", "Work"]
+            let menu = names.enumerated().map { ProfileMenuItem(title: $0.element, checked: $0.offset == 0) }
+            return showProfiles(ProfileMenu.state(menu: menu, local: [], lastUsed: nil))
+        }
+        guard isRunning(.chrome) else { return showProfiles(nil) }
+        chromeProfiles.read { [weak self] state in
+            guard let self, self.panel.isVisible, self.lastBrowser == .chrome, !self.acting else { return }
+            self.showProfiles(state)
+        }
+    }
+
+    /// Shows `state`'s profiles, or hides them all with nil or a single profile. A menu read again only moves the
+    /// palette to the profile Chrome is in while nothing is moving or switching.
+    private func showProfiles(_ state: ProfileState?) {
+        guard let state, state.profiles.count > 1 else {
+            profileState = nil
+            profileSwipe = ProfileSwipe(count: 0, index: 0)
+            profileSwitch?.cancel()
+            profileSwitch = nil
+            stopProfileTimer()
+            // Hidden rather than emptied: the next palette over the same profiles shows them without drawing again.
+            for view in [profileAura, profilePill, profileDots] as [NSView] {
+                view.isHidden = true
+            }
+            footerBeforeDots.isActive = false
+            applyProfilePosition()
+            return
+        }
+        let current = state.current ?? 0
+        if profileState?.profiles == state.profiles {
+            profileState = state
+            guard current != chromeProfile, profileSwipe.axis != .sideways, profileSwitch == nil, !profileSwitching else { return }
+            chromeProfile = current
+            profileSwipe.move(to: current)
+            return startProfileTimer()
+        }
+        let fresh = profileState == nil
+        profileState = state
+        chromeProfile = current
+        profileSwipe = ProfileSwipe(count: state.profiles.count, index: current)
+        stopProfileTimer()
+        profileDots.colors = state.profiles.map(\.color)
+        profilePill.show(state.profiles)
+        for view in [profileAura, profilePill, profileDots] as [NSView] {
+            view.isHidden = false
+        }
+        footerBeforeDots.isActive = true
+        panel.contentView?.layoutSubtreeIfNeeded()
+        // Each profile's color glows from behind its badge.
+        profileAura.show(state.profiles, glowing: state.profiles.indices.map { profileAura.convert(profilePill.badgeCenter($0), from: profilePill) })
+        applyProfilePosition()
+        guard fresh, !preview else { return }
+        for view in [profileAura, profilePill, profileDots] as [NSView] {
+            view.alphaValue = 0
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            for view in [profileAura, profilePill, profileDots] as [NSView] {
+                view.animator().alphaValue = 1
+            }
+        }
+    }
+
+    /// Sideways scrolling anywhere over the palette moves between profiles; up and down still scrolls the results.
+    private func handleScroll(_ event: NSEvent) -> NSEvent? {
+        guard event.window === panel, profileSwipe.count > 1, !acting else { return event }
+        let time = event.timestamp
+        if !event.momentumPhase.isEmpty {
+            guard profileSwipe.swallowsMomentum else { return event }
+            if !event.momentumPhase.isDisjoint(with: [.ended, .cancelled]) { profileSwipe.momentumEnded() }
+            return nil
+        }
+        let dx = Double(event.scrollingDeltaX)
+        let dy = Double(event.scrollingDeltaY)
+        // A mouse wheel turned sideways, or a device without gestures, moves one profile per turn.
+        if event.phase.isEmpty {
+            guard profileSwipe.step(dx: dx, dy: dy, time: time) else { return event }
+            startProfileTimer()
+            requestProfile(profileSwipe.target, after: 0.35)
+            return nil
+        }
+        if !event.phase.isDisjoint(with: [.mayBegin, .began]) {
+            // Fingers on the trackpad catch a moving swipe and hold off a switch until they lift.
+            stopProfileTimer()
+            profileSwitch?.cancel()
+            profileSwitch = nil
+            profileSwipe.touch()
+        }
+        if !event.phase.isDisjoint(with: [.ended, .cancelled]) {
+            let swiped = profileSwipe.release(time: time)
+            startProfileTimer()
+            requestProfile(profileSwipe.target, after: 0.12)
+            return swiped ? nil : event
+        }
+        guard profileSwipe.scroll(dx: dx, dy: dy, time: time) else { return event }
+        applyProfilePosition()
+        return nil
+    }
+
+    /// Goes to a profile picked by a click on the pill or a dot.
+    private func moveProfile(to index: Int) {
+        guard profileSwipe.count > 1, !acting else { return }
+        profileSwipe.move(to: index)
+        startProfileTimer()
+        requestProfile(profileSwipe.target, after: 0.12)
+    }
+
+    private func startProfileTimer() {
+        guard profileTimer == nil, !profileSwipe.isSettled else { return applyProfilePosition() }
+        var last = CACurrentMediaTime()
+        let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] timer in
+            guard let self else { return timer.invalidate() }
+            let now = CACurrentMediaTime()
+            let moving = self.profileSwipe.advance(by: now - last)
+            last = now
+            self.applyProfilePosition()
+            if !moving { self.stopProfileTimer() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        profileTimer = timer
+    }
+
+    private func stopProfileTimer() {
+        profileTimer?.invalidate()
+        profileTimer = nil
+    }
+
+    /// Draws the profile's colors, pill and dots at the swipe's position, or at `position` for a preview. The results
+    /// stay still, so nothing moves where the eye is reading.
+    private func applyProfilePosition(_ position: Double? = nil) {
+        let position = position ?? profileSwipe.position
+        profileAura.position = position
+        profilePill.position = position
+        profileDots.position = position
+    }
+
+    /// Switches Chrome to the profile the swipe settles on, once it is clear the swipe will not go on.
+    private func requestProfile(_ index: Int, after delay: TimeInterval) {
+        profileSwitch?.cancel()
+        profileSwitch = nil
+        guard index != chromeProfile else { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.profileSwitch = nil
+            self?.switchProfile(to: index)
+        }
+        profileSwitch = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// Has Chrome bring the profile's window forward, or open one, while the palette stays open over it.
+    private func switchProfile(to index: Int) {
+        guard let state = profileState, state.profiles.indices.contains(index), index != chromeProfile else { return }
+        let profile = state.profiles[index]
+        chromeProfile = index
+        if preview { footer.stringValue = "Preview only"; return }
+        freezeList()
+        profileSwitching = true
+        keepPanelUntil = Date().addingTimeInterval(3)
+        let started = DispatchTime.now()
+        chromeProfiles.switchTo(profile) { [weak self] result in
+            guard let self else { return }
+            Timing.log("profile switch", since: started)
+            self.profileSwitching = false
+            guard self.panel.isVisible else { return }
+            switch result {
+            case .success:
+                self.keepPanelUntil = Date().addingTimeInterval(1.5)
+                // Chrome raises the window as it answers. The tab now on screen decides where new tabs open, and the
+                // tab cache is read again for the next palette.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                    guard let self, self.panel.isVisible else { return }
+                    self.bridge(.chrome).active { [weak self] result in
+                        if case .success(let tab?) = result { self?.observeFocus(tab); self?.followFrontTab(tab) }
+                    }
+                    self.stores[.chrome]?.prewarm()
+                }
+            case .failure(let error):
+                self.keepPanelUntil = nil
+                self.footer.stringValue = "Could not switch to \(profile.name)"
+                self.footer.toolTip = error.localizedDescription
+                // Back to the profile Chrome is in.
+                self.loadProfiles()
+            }
+        }
+    }
+
+    /// Stops the listed tabs from changing until the palette closes. A read already under way would reorder them
+    /// when it arrives, so it is let go.
+    private func freezeList() {
+        guard !listFrozen else { return }
+        listFrozen = true
+        requestID += 1
+        waiting = []
+        loading = false
+        pendingActivation = nil
+        retryButton.isEnabled = true
+    }
+
+    /// While the list is frozen, follows the tab on screen, so new tabs and searches go to the window now in front and
+    /// its empty tab is reused. The rows keep their order; only their text can change, such as "This empty tab".
+    private func followFrontTab(_ tab: BrowserTab) {
+        guard listFrozen, panel.isVisible, tab.browser == lastBrowser, tab != activeTab else { return }
+        activeTab = tab
+        if table.numberOfRows > 0 {
+            table.reloadData(forRowIndexes: IndexSet(integersIn: 0..<table.numberOfRows), columnIndexes: IndexSet(integer: 0))
+        }
+    }
+
+    /// The browser's front window: the one holding the tab on screen, else the first listed, since windows are
+    /// listed front to back.
+    private func frontWindow(of browser: Browser) -> Int? {
+        activeTab?.browser == browser ? activeTab?.windowID : tabs.first { $0.browser == browser }?.windowID
+    }
+
     /// Lists the typed text as a new tab first while Shift is held.
     private func holdShift(_ held: Bool) {
         guard held != newTabFirst else { return }
@@ -1109,7 +1435,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 self.footer.toolTip = self.footer.stringValue
                 self.panel.makeKeyAndOrderFront(nil)
                 self.panel.makeFirstResponder(self.searchField)
-                if case BridgeError.staleTab = error { self.loadTabs(force: true) }
+                if case BridgeError.staleTab = error {
+                    self.listFrozen = false
+                    self.loadTabs(force: true)
+                }
             }
         }
         switch row {
@@ -1117,7 +1446,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         default:
             if let destination = row.destination {
                 // Tabs are listed front window first, so this is the browser's front window.
-                bridge(target).open(destination, windowID: tabs.first { $0.browser == target }?.windowID ?? 0,
+                bridge(target).open(destination, windowID: frontWindow(of: target) ?? 0,
                                     reusing: blankActiveTab, completion: completion)
             }
         }
@@ -1134,7 +1463,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     /// and Tab Scout's extension makes the groups, since Chrome lets only extensions do that.
     private func groupTabs() {
         // Tabs are listed front window first.
-        guard let windowID = tabs.first(where: { $0.browser == .chrome })?.windowID else {
+        guard let windowID = frontWindow(of: .chrome) else {
             footer.stringValue = "Open a Chrome window to group its tabs"
             return
         }
@@ -1252,6 +1581,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         requestID += 1
         pendingActivation = nil
         newTabFirst = false
+        // A profile swiped to just before closing is still switched to.
+        if let pending = profileSwitch {
+            pending.cancel()
+            profileSwitch = nil
+            switchProfile(to: profileSwipe.target)
+        }
+        keepPanelUntil = nil
+        listFrozen = false
+        showProfiles(nil)
         if !preview { googleSuggestions.cancel() }
         remoteSuggestions = []
         resetAssistant()
@@ -1291,7 +1629,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        guard notification.object as? NSWindow === panel, panel.isVisible, !loading, !acting else { return }
+        guard notification.object as? NSWindow === panel, panel.isVisible else { return }
+        // Chrome takes keyboard focus as it raises a profile's window; the palette stays and takes it back.
+        if let until = keepPanelUntil, Date() < until {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.panel.isVisible, !self.panel.isKeyWindow else { return }
+                self.panel.makeKeyAndOrderFront(nil)
+            }
+            return
+        }
+        guard !loading, !acting else { return }
         dismiss(restoreFocus: false)
     }
 
