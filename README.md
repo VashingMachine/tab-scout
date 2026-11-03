@@ -45,7 +45,7 @@ To update: `cd ~/projects/tabs-scout && git pull && bash deploy.sh`
 
 ## Setup
 
-Tab Scout runs in the menu bar rather than the Dock. Its **Set Up Tab Scout** window opens on first launch, or from the menu, and ticks off each step once it is done:
+Tab Scout runs in the menu bar rather than the Dock. **Settings** opens on its **Setup** page on first launch, and whenever Cmd+T still needs something; the page ticks off each step once it is done, and a badge beside it counts what is missing:
 
 1. **Device Control and Data Access** (**Accessibility** before macOS 27), for the Cmd+T keyboard hook. Required.
 2. **Automation** for Safari and for Google Chrome, to read, select, and open their tabs. Each browser asks separately; a browser you do not allow is left out.

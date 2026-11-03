@@ -175,10 +175,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     /// While Shift is held, the typed text opening in a new tab is listed first, as Shift+Enter does.
     private var newTabFirst = false
     private var returnApp: NSRunningApplication?
-    private var setupWindow: NSWindow?
-    private var setupRows: [SetupStep: SetupRow] = [:]
-    private var setupStatus: NSTextField?
-    private var loginBox: NSButton?
+    /// Why the last attempt to reach a browser failed, shown on the Setup page until the next attempt.
+    private var setupProblem: (text: String, help: String?)?
     /// Browsers whose Automation access the setup window is asking for.
     private var requestingAccess: Set<Browser> = []
     /// How many Chrome profiles had the extension connected when Add to Chrome was clicked; the setup window shows
@@ -302,7 +300,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         if preview, let index = CommandLine.arguments.firstIndex(of: "--snapshot"), index + 1 < CommandLine.arguments.count {
             renderSnapshot(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
         } else if preview, CommandLine.arguments.contains("--settings") {
-            showSettings(nil)
+            openSettings(on: CommandLine.arguments.contains("--setup") ? .setup : nil)
         } else if preview {
             showSearch(nil)
         } else {
@@ -379,7 +377,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         pauseItem.state = enabled ? .on : .off
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: ",").target = self
-        menu.addItem(withTitle: "Set Up Tab Scout…", action: #selector(showSetup(_:)), keyEquivalent: "").target = self
         menu.addItem(.separator())
         rankingItem = menu.addItem(withTitle: "", action: nil, keyEquivalent: "")
         updateRankingItem()
@@ -608,7 +605,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         footer.translatesAutoresizingMaskIntoConstraints = false
         background.addSubview(footer)
         retryButton = iconButton("arrow.clockwise", tip: "Refresh tabs", action: #selector(refresh(_:)))
-        let settings = iconButton("gearshape", tip: "Set Up Tab Scout", action: #selector(showSetup(_:)))
+        let settings = iconButton("gearshape", tip: "Settings", action: #selector(showSettings(_:)))
         background.addSubview(retryButton)
         background.addSubview(settings)
         profileDots = ProfileDotsView()
@@ -668,7 +665,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         if panel.isVisible { dismiss(restoreFocus: true); return }
         let opened = DispatchTime.now()
         returnApp = NSWorkspace.shared.frontmostApplication
-        setupWindow?.orderOut(nil)
         searchField.stringValue = ""
         remoteSuggestions = []
         let mouse = NSEvent.mouseLocation
@@ -1806,7 +1802,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     func windowWillClose(_ notification: Notification) {
         // Closing the setup window gives up on adding the Chrome extension.
-        guard notification.object as? NSWindow === setupWindow else { return }
+        guard notification.object as? NSWindow === settingsWindow else { return }
         chromeProfilesBeforeAdding = nil
     }
 
@@ -1934,18 +1930,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             NSApp.activate(ignoringOtherApps: true)
             alert.runModal()
         }
-        loginBox?.state = SMAppService.mainApp.status == .enabled ? .on : .off
         syncSettings()
     }
 
     // MARK: - Settings
 
+    /// Opens Settings on Setup while Cmd+T still needs something, otherwise where it was left.
     @objc private func showSettings(_ sender: Any?) {
+        openSettings(on: nil)
+    }
+
+    /// Setup is a page of Settings; the first launch, and anything that finds a step undone, opens it there.
+    @objc private func showSetup(_ sender: Any?) {
+        openSettings(on: .setup)
+    }
+
+    private func openSettings(on page: SettingsPage?) {
         if panel?.isVisible == true { dismiss(restoreFocus: false) }
-        if settingsWindow == nil { buildSettings() }
+        let fresh = settingsWindow == nil
+        if fresh { buildSettings() }
         syncSettings()
         syncPlaces(note: nil)
         reloadPlaces()
+        updateSetup(force: true)
+        if let page { settingsModel.page = page }
+        else if !settingsModel.ready && !preview && (fresh || settingsWindow?.isVisible != true) { settingsModel.page = .setup }
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
@@ -1979,7 +1988,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 self.syncSettings()
             },
             clearHistory: { [weak self] in self?.clearHistory(nil) },
-            showSetup: { [weak self] in self?.showSetup(nil) },
+            runSetupStep: { [weak self] step in self?.runSetupStep(step) },
+            openSearch: { [weak self] in
+                self?.settingsWindow?.orderOut(nil)
+                self?.showSearch(nil)
+            },
             reloadPlaces: { [weak self] in self?.reloadPlaces() },
             placesChanged: { [weak self] settings in self?.placesChanged(settings) })
         let hosting = NSHostingController(rootView: SettingsView(model: settingsModel))
@@ -1990,6 +2003,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         window.toolbarStyle = .unified
         window.toolbar = NSToolbar(identifier: "Settings")
         window.isReleasedWhenClosed = false
+        window.delegate = self
         window.setContentSize(NSSize(width: 780, height: 640))
         window.setFrameAutosaveName("TabScoutSettings")
         if window.frame.origin == .zero { window.center() }
@@ -2047,80 +2061,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         if panel?.isVisible != true { showProfiles(nil) }
     }
 
-    @objc private func showSetup(_ sender: Any?) {
-        guard !preview else { footer.stringValue = "Preview only"; return }
-        if panel?.isVisible == true { dismiss(restoreFocus: false) }
-        if setupWindow == nil { buildSetup() }
-        NSApp.activate(ignoringOtherApps: true)
-        setupWindow?.center()
-        setupWindow?.makeKeyAndOrderFront(nil)
-        loginBox?.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        updateSetup()
-    }
-
-    /// One window walks through everything Tab Scout needs; each step ticks itself off once it is done, also when
-    /// that happens in System Settings or Chrome.
-    private func buildSetup() {
-        let height: CGFloat = 540
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: height), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "Tab Scout"
-        window.isReleasedWhenClosed = false
-        window.delegate = self
-        setupWindow = window
-        guard let content = window.contentView else { return }
-        let heading = NSTextField(labelWithString: "Set Up Tab Scout")
-        heading.font = .systemFont(ofSize: 22, weight: .semibold)
-        heading.frame = NSRect(x: 28, y: height - 55, width: 220, height: 28)
-        content.addSubview(heading)
-        let version = NSTextField(labelWithString: versionText)
-        version.font = .systemFont(ofSize: 11)
-        version.textColor = .secondaryLabelColor
-        version.alignment = .right
-        version.lineBreakMode = .byTruncatingMiddle
-        version.isSelectable = true
-        version.frame = NSRect(x: 252, y: height - 49, width: 200, height: 16)
-        content.addSubview(version)
-        for (index, step) in SetupStep.allCases.enumerated() {
-            let top = height - 84 - CGFloat(index) * 70
-            let icon = NSImageView(frame: NSRect(x: 28, y: top - 20, width: 18, height: 18))
-            icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
-            content.addSubview(icon)
-            let title = NSTextField(labelWithString: setupTitle(step))
-            title.font = .systemFont(ofSize: 15, weight: .medium)
-            title.frame = NSRect(x: 56, y: top - 22, width: 256, height: 22)
-            content.addSubview(title)
-            let detail = NSTextField(wrappingLabelWithString: "")
-            detail.font = .systemFont(ofSize: 12)
-            detail.textColor = .secondaryLabelColor
-            detail.frame = NSRect(x: 56, y: top - 56, width: 256, height: 32)
-            content.addSubview(detail)
-            let button = NSButton(title: setupAction(step), target: self, action: #selector(runSetupStep(_:)))
-            button.tag = index
-            button.bezelStyle = .rounded
-            button.frame = NSRect(x: 322, y: top - 44, width: 132, height: 32)
-            content.addSubview(button)
-            setupRows[step] = SetupRow(icon: icon, detail: detail, button: button)
-        }
-        let line = NSBox(frame: NSRect(x: 28, y: 96, width: 424, height: 1))
-        line.boxType = .separator
-        content.addSubview(line)
-        let login = NSButton(checkboxWithTitle: "Start Tab Scout at login", target: self, action: #selector(toggleLogin(_:)))
-        login.frame = NSRect(x: 26, y: 58, width: 280, height: 20)
-        content.addSubview(login)
-        loginBox = login
-        setupStatus = NSTextField(labelWithString: "")
-        setupStatus?.font = .systemFont(ofSize: 12)
-        setupStatus?.textColor = .secondaryLabelColor
-        setupStatus?.frame = NSRect(x: 28, y: 28, width: 280, height: 20)
-        content.addSubview(setupStatus!)
-        let search = NSButton(title: "Open Search", target: self, action: #selector(showSearch(_:)))
-        search.image = symbol("magnifyingglass")
-        search.imagePosition = .imageLeading
-        search.bezelStyle = .rounded
-        search.frame = NSRect(x: 322, y: 34, width: 132, height: 32)
-        content.addSubview(search)
-    }
-
     private func setupTitle(_ step: SetupStep) -> String {
         switch step {
         case .keyboard: return controlPermissionName
@@ -2140,12 +2080,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
     }
 
-    @objc private func runSetupStep(_ sender: NSButton) {
-        guard SetupStep.allCases.indices.contains(sender.tag) else { return }
-        switch SetupStep.allCases[sender.tag] {
+    private func runSetupStep(_ step: SetupStep) {
+        guard !preview else { return }
+        switch step {
         case .keyboard: openAccessibility()
-        case .safari: requestAccess(.safari, from: sender)
-        case .chrome: requestAccess(.chrome, from: sender)
+        case .safari: requestAccess(.safari)
+        case .chrome: requestAccess(.chrome)
         case .chromeExtension: addChromeExtension()
         case .history: if safariHistoryEnabled { openHistorySettings() } else { toggleSafariHistory(nil) }
         }
@@ -2153,17 +2093,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     /// Runs every two seconds. Notes when Tab Scout's Chrome extension connects even while the window is closed,
     /// because an extension that connected once counts as added while Chrome is closed.
-    private func updateSetup() {
-        guard !preview else { return }
+    private func updateSetup(force: Bool = false) {
+        guard !preview else {
+            // Sample steps, so the Setup page can be looked at without asking macOS for anything.
+            let states: [SetupStep: (SetupState, String)] = [.keyboard: (.done, "Allowed"), .safari: (.done, "Allowed"),
+                .chrome: (.needed, "Needed for Chrome tabs"), .chromeExtension: (.optional, "Lets `group sort a Chrome window's tabs into groups"),
+                .history: (.done, "Allowed; 3 of 3 profiles used")]
+            settingsModel.setup = SetupStep.allCases.map { step in
+                SettingsModel.SetupItem(id: step, title: setupTitle(step), detail: states[step]!.1, state: states[step]!.0, action: setupAction(step))
+            }
+            settingsModel.setupStatus = "Cmd+T needs the steps below"
+            return
+        }
         let connected = chromeLink.connectedProfiles
         if connected > 0 { chromeExtensionAdded = true }
         if let before = chromeProfilesBeforeAdding, connected > before {
             // Back from Chrome to show the step done.
             chromeProfilesBeforeAdding = nil
             NSApp.activate(ignoringOtherApps: true)
-            setupWindow?.makeKeyAndOrderFront(nil)
+            settingsModel.page = .setup
+            settingsWindow?.makeKeyAndOrderFront(nil)
         }
-        guard setupWindow?.isVisible == true else { return }
+        guard force || settingsWindow?.isVisible == true else { return }
+        var steps: [SetupStep: SettingsModel.SetupItem] = [:]
+        func showStep(_ step: SetupStep, _ state: SetupState, _ text: String) {
+            steps[step] = SettingsModel.SetupItem(id: step, title: setupTitle(step), detail: text, state: state, action: setupAction(step))
+        }
         // Checking trust registers the executable with macOS. Preview builds must not do that.
         let trusted = AXIsProcessTrusted()
         showStep(.keyboard, !trusted ? .needed : eventTap == nil ? .problem : .done,
@@ -2181,9 +2136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             showStep(SetupStep(browser), state, text)
         }
         let chromeInstalled = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Browser.chrome.bundleID) != nil
-        setupRows[.chromeExtension]?.button.isEnabled = chromeInstalled
-        setupRows[.chromeExtension]?.button.title = setupAction(.chromeExtension)
-        setupRows[.chromeExtension]?.detail.toolTip = chromeProfilesBeforeAdding == nil ? nil
+        let extensionHelp = chromeProfilesBeforeAdding == nil ? nil
             : "On Chrome's Extensions page, turn on Developer mode at the top right, then drag the ChromeExtension folder shown in Finder onto the page, or click Load unpacked and choose it. This step ticks itself off when the extension connects."
         let profiles = connected > 0 ? " to \(connected) Chrome profile\(connected == 1 ? "" : "s")" : ""
         if !chromeInstalled {
@@ -2202,16 +2155,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                  !safariHistoryEnabled ? "Off; ranks tabs with Safari and Chrome history" : !historyLoaded ? "Checking..."
                  : historyError != nil ? "Unavailable; local choices still work"
                  : historyProfiles.count > 1 ? "Allowed; \(included) of \(historyProfiles.count) profiles used" : "Allowed")
-        setupRows[.history]?.detail.toolTip = historyError?.localizedDescription
-        setupRows[.history]?.button.title = setupAction(.history)
-        setupStatus?.stringValue = trusted && !allowedBrowsers.isEmpty && eventTap != nil ? "Ready: press Cmd+T in Safari or Chrome" : "Permissions needed"
-    }
-
-    private func showStep(_ step: SetupStep, _ state: SetupState, _ text: String) {
-        guard let row = setupRows[step] else { return }
-        row.icon.image = symbol(state.symbol)
-        row.icon.contentTintColor = state.color
-        row.detail.stringValue = text
+        steps[.chromeExtension]?.actionEnabled = chromeInstalled
+        steps[.chromeExtension]?.help = extensionHelp
+        steps[.history]?.help = historyError?.localizedDescription
+        for browser in requestingAccess { steps[SetupStep(browser)]?.actionEnabled = false }
+        let ready = trusted && !allowedBrowsers.isEmpty && eventTap != nil
+        if ready { setupProblem = nil }
+        let model = settingsModel
+        let items = SetupStep.allCases.compactMap { steps[$0] }
+        if model.setup != items { model.setup = items }
+        if model.ready != ready { model.ready = ready }
+        let status = setupProblem?.text ?? (ready ? "Press Cmd+T in Safari or Chrome" : "Cmd+T needs the steps below")
+        if model.setupStatus != status { model.setupStatus = status }
+        if model.setupStatusHelp != setupProblem?.help { model.setupStatusHelp = setupProblem?.help }
     }
 
     private func accessState(_ browser: Browser) -> (SetupState, String) {
@@ -2242,7 +2198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private func openHistorySettings() {
         let alert = NSAlert()
         alert.messageText = "Browser History Access"
-        alert.informativeText = "macOS protects Safari and Chrome history with Full Disk Access, a broad permission. Tab Scout reads the history of every Safari and Chrome profile locally, never sends it to Google, and can leave out any profile under History Profiles. Add this Tab Scout.app under Privacy & Security > Full Disk Access, then restart Tab Scout. Tab search and local choices work without this permission."
+        alert.informativeText = "macOS protects Safari and Chrome history with Full Disk Access, a broad permission. Tab Scout reads the history of every Safari and Chrome profile locally, never sends it to Google, and can leave out any profile under Settings > Browser History. Add this Tab Scout.app under Privacy & Security > Full Disk Access, then restart Tab Scout. Tab search and local choices work without this permission."
         alert.addButton(withTitle: "Open Settings")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -2277,24 +2233,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     /// Opens the browser and reads its tabs, which makes macOS ask for Automation access the first time.
-    private func requestAccess(_ browser: Browser, from button: NSButton) {
+    private func requestAccess(_ browser: Browser) {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: browser.bundleID) else { return updateSetup() }
-        button.isEnabled = false
+        setupProblem = nil
         requestingAccess.insert(browser)
         updateSetup()
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, error in
             DispatchQueue.main.async {
                 guard let self else { return }
                 guard error == nil else {
-                    button.isEnabled = true
                     self.requestingAccess.remove(browser)
+                    self.setupProblem = ("Could not open \(browser.name)", error?.localizedDescription)
                     self.updateSetup()
-                    self.setupStatus?.stringValue = "Could not open \(browser.name)"
                     return
                 }
                 self.bridge(browser).list { [weak self] result in
                     guard let self else { return }
-                    button.isEnabled = true
                     self.requestingAccess.remove(browser)
                     switch result {
                     case .success:
@@ -2304,59 +2258,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                         self.updateSetup()
                     case .failure(let error):
                         if case BridgeError.permission = error { self.deniedBrowsers.insert(browser) }
+                        self.setupProblem = ("Check Automation settings", self.describe(error, browser))
                         self.updateSetup()
-                        self.setupStatus?.stringValue = "Check Automation settings"
-                        self.setupStatus?.toolTip = self.describe(error, browser)
                     }
                     NSApp.activate(ignoringOtherApps: true)
-                    self.setupWindow?.makeKeyAndOrderFront(nil)
+                    self.settingsWindow?.makeKeyAndOrderFront(nil)
                 }
             }
         }
     }
-}
-
-/// The steps of the setup window, in order. Cmd+T needs the keyboard step and at least one browser.
-private enum SetupStep: CaseIterable {
-    case keyboard, safari, chrome, chromeExtension, history
-
-    init(_ browser: Browser) {
-        switch browser {
-        case .safari: self = .safari
-        case .chrome: self = .chrome
-        }
-    }
-}
-
-/// How far a setup step is, shown by the icon before its name.
-private enum SetupState {
-    case done, needed, optional, waiting, problem, unavailable
-
-    var symbol: String {
-        switch self {
-        case .done: return "checkmark.circle.fill"
-        case .needed: return "circle"
-        case .optional: return "circle.dashed"
-        case .waiting: return "clock"
-        case .problem: return "exclamationmark.circle.fill"
-        case .unavailable: return "minus.circle"
-        }
-    }
-
-    var color: NSColor {
-        switch self {
-        case .done: return .systemGreen
-        case .needed, .waiting: return .controlAccentColor
-        case .optional, .unavailable: return .tertiaryLabelColor
-        case .problem: return .systemOrange
-        }
-    }
-}
-
-private struct SetupRow {
-    let icon: NSImageView
-    let detail: NSTextField
-    let button: NSButton
 }
 
 @main

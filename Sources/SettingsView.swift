@@ -13,6 +13,18 @@ final class SettingsModel: ObservableObject {
         let unavailable: Bool
     }
 
+    /// One thing Tab Scout needs or can use, as the Setup page lists it.
+    struct SetupItem: Identifiable, Equatable {
+        let id: SetupStep
+        let title: String
+        var detail: String
+        /// Longer guidance shown on hover, such as how to add the Chrome extension.
+        var help: String?
+        var state: SetupState
+        var action: String
+        var actionEnabled = true
+    }
+
     struct Actions {
         var setCapture: (Bool) -> Void = { _ in }
         var setLogin: (Bool) -> Void = { _ in }
@@ -21,7 +33,8 @@ final class SettingsModel: ObservableObject {
         var setHistorySource: (String, Bool) -> Void = { _, _ in }
         var setPageText: (Bool) -> Void = { _ in }
         var clearHistory: () -> Void = {}
-        var showSetup: () -> Void = {}
+        var runSetupStep: (SetupStep) -> Void = { _ in }
+        var openSearch: () -> Void = {}
         var reloadPlaces: () -> Void = {}
         var placesChanged: (PlaceSettings) -> Void = { _ in }
     }
@@ -40,9 +53,19 @@ final class SettingsModel: ObservableObject {
     @Published var placeSettings = PlaceSettings() {
         didSet { if placeSettings != oldValue { actions.placesChanged(placeSettings) } }
     }
+    @Published var page: SettingsPage? = .places
+    @Published var setup: [SetupItem] = []
+    @Published var ready = false
+    /// What the Setup page's banner says, such as why a browser could not be reached.
+    @Published var setupStatus = ""
+    @Published var setupStatusHelp: String?
     @Published var version = ""
     @Published var ranking = ""
     var actions = Actions()
+
+    /// Steps still to do while Cmd+T does not work yet, shown as a badge beside Setup. Once it works, a browser
+    /// still without access is a choice rather than something missing.
+    var missing: Int { ready ? 0 : setup.filter { $0.state == .needed || $0.state == .problem }.count }
 
     /// A binding that asks the app to make a change instead of making it.
     func request(_ value: KeyPath<SettingsModel, Bool>, _ action: @escaping (Actions) -> (Bool) -> Void) -> Binding<Bool> {
@@ -54,12 +77,13 @@ final class SettingsModel: ObservableObject {
 }
 
 enum SettingsPage: String, CaseIterable, Identifiable {
-    case general, places, search, history
+    case setup, general, places, search, history
 
     var id: Self { self }
 
     var title: String {
         switch self {
+        case .setup: return "Setup"
         case .general: return "General"
         case .places: return "Profiles & Swipe"
         case .search: return "Search"
@@ -69,6 +93,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
+        case .setup: return "checklist"
         case .general: return "gearshape"
         case .places: return "rectangle.stack.badge.person.crop"
         case .search: return "magnifyingglass"
@@ -79,12 +104,13 @@ enum SettingsPage: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
-    @State private var page: SettingsPage? = .places
 
     var body: some View {
         NavigationSplitView {
-            List(SettingsPage.allCases, selection: $page) { page in
-                Label(page.title, systemImage: page.symbol).tag(page)
+            List(SettingsPage.allCases, selection: $model.page) { page in
+                Label(page.title, systemImage: page.symbol)
+                    .badge(page == .setup ? model.missing : 0)
+                    .tag(page)
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
         } detail: {
@@ -92,7 +118,8 @@ struct SettingsView: View {
                 PlaceGlow(colors: model.places.map { model.placeSettings.styled($0).color })
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
-                        switch page ?? .general {
+                        switch model.page ?? .general {
+                        case .setup: SetupPage(model: model)
                         case .general: GeneralPage(model: model)
                         case .places: PlacesPage(model: model)
                         case .search: SearchPage(model: model)
@@ -104,7 +131,7 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity)
                 }
             }
-            .navigationTitle((page ?? .general).title)
+            .navigationTitle((model.page ?? .general).title)
         }
         .frame(minWidth: 700, minHeight: 520)
     }
@@ -122,17 +149,100 @@ private struct GeneralPage: View {
         GlassSection("Startup") {
             Toggle("Start at Login", isOn: model.request(\.login) { $0.setLogin })
         }
-        GlassSection("Permissions & Chrome extension",
-                     footer: "One window walks through access to Safari and Chrome and adding the optional Chrome extension.") {
-            HStack {
-                Text("Check what Tab Scout still needs")
-                Spacer()
-                GlassButton("Set Up Tab Scout…") { model.actions.showSetup() }
-            }
-        }
         GlassSection("About") {
             LabeledRow("Version") { Text(model.version).textSelection(.enabled).foregroundStyle(.secondary) }
             LabeledRow("Ranking") { Text(model.ranking).foregroundStyle(.secondary) }
+        }
+    }
+}
+
+private struct SetupPage: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: model.ready ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                .font(.system(size: 30))
+                .foregroundStyle(model.ready ? Color.green : Color.orange)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(model.ready ? "Ready" : model.missing == 1 ? "1 step left" : model.missing > 1 ? "\(model.missing) steps left" : "Not ready yet").font(.title3.weight(.semibold))
+                Text(model.setupStatus).foregroundStyle(.secondary).help(model.setupStatusHelp ?? "")
+            }
+            Spacer()
+            GlassButton("Open Search", symbol: "magnifyingglass") { model.actions.openSearch() }
+        }
+        .padding(18)
+        .glassCard(tint: model.ready ? ProfileColor(hex: 0x34C759) : ProfileColor(hex: 0xFF9F0A), cornerRadius: 20)
+        GlassSection("Steps", footer: "Each step ticks itself off once it is done, also when you do it in System Settings or Chrome.") {
+            ForEach(model.setup) { item in
+                SetupRowView(model: model, item: item)
+                if item.id != model.setup.last?.id { Divider() }
+            }
+        }
+    }
+}
+
+private struct SetupRowView: View {
+    @ObservedObject var model: SettingsModel
+    let item: SettingsModel.SetupItem
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: item.state.symbol)
+                .font(.system(size: 17))
+                .foregroundStyle(item.state.color)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title).font(.body.weight(.medium))
+                Text(item.detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if item.id == .history && model.history {
+                    Button("Choose history sources") { model.page = .history }
+                        .buttonStyle(.link)
+                        .font(.callout)
+                }
+            }
+            .help(item.help ?? "")
+            Spacer(minLength: 12)
+            GlassButton(item.action) { model.actions.runSetupStep(item.id) }
+                .disabled(!item.actionEnabled)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+/// The steps of setup, in order. Cmd+T needs the keyboard step and at least one browser.
+enum SetupStep: CaseIterable {
+    case keyboard, safari, chrome, chromeExtension, history
+
+    init(_ browser: Browser) {
+        switch browser {
+        case .safari: self = .safari
+        case .chrome: self = .chrome
+        }
+    }
+}
+
+/// How far a setup step is, shown by the icon before its name.
+enum SetupState {
+    case done, needed, optional, waiting, problem, unavailable
+
+    var symbol: String {
+        switch self {
+        case .done: return "checkmark.circle.fill"
+        case .needed: return "circle"
+        case .optional: return "circle.dashed"
+        case .waiting: return "clock"
+        case .problem: return "exclamationmark.circle.fill"
+        case .unavailable: return "minus.circle"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .done: return .green
+        case .needed, .waiting: return .accentColor
+        case .optional, .unavailable: return .secondary
+        case .problem: return .orange
         }
     }
 }

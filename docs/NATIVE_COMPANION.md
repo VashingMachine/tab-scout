@@ -32,7 +32,7 @@ Local builds are not notarized, and `build.sh` signs ad hoc unless `TAB_SCOUT_SI
 
 ## First Run
 
-Tab Scout opens its **Set Up Tab Scout** window on first launch; **Set Up Tab Scout...** in the menu and the gear in the palette reopen it. Each step shows a check mark once it is done, including when it was done in System Settings or Chrome, and the window says **Ready** when Cmd+T works:
+Tab Scout opens **Settings** on its **Setup** page on first launch; **Settings…** in the menu and the gear in the palette open it on Setup while Cmd+T still needs something. Each step shows a check mark once it is done, including when it was done in System Settings or Chrome, and the window says **Ready** when Cmd+T works:
 
 1. Click **Open Settings** and enable **Tab Scout** under Privacy & Security > Device Control and Data Access (macOS 27+) or Accessibility (earlier macOS). If it is absent, use the + button and choose the installed app.
 2. Click **Allow Access** next to Safari and allow Tab Scout to control Safari. Do the same next to Google Chrome to include its tabs; this opens Chrome. If previously denied, enable the browser under Privacy & Security > Automation > Tab Scout.
@@ -53,7 +53,7 @@ The shortcut hook starts automatically after permission is granted. Permissions 
 - When the tab on screen is empty (the Start Page, Favorites or `about:blank`), anything that would open a new tab opens in it instead, and the **New tab** action keeps it. Tab Scout checks that the tab is still empty first; if it has loaded a page meanwhile, a new tab opens as usual.
 - Cmd+Enter and Shift+Enter always open the query in a new tab, or in the empty tab on screen. Holding Shift alone lists that row first and selects it at once; typing a capital letter or `?` shows it briefly. An empty or whitespace-only query uses Safari's native **New Tab** command and configured new-tab page. With **New tabs open with: Start Page** in Safari Settings > General, it shows the native Start Page with its configured sections and background instead of a forced `about:blank`. The native command also handles opening a tab when Safari has no windows.
 - Escape or Cmd+T closes the search panel without an action.
-- The refresh icon requests updated results. The menu-bar menu provides search, shortcut capture, **Settings…**, **Set Up Tab Scout…**, and quit. **Settings…** holds **Google Suggestions**, **Use Browser History** and its sources, **Search Page Text**, **Clear Tab Scout History**, **Start at Login**, and the palette's places: which are shown, their colors and patterns, the swipe mode and its sensitivity.
+- The refresh icon requests updated results. The menu-bar menu provides search, shortcut capture, **Settings…**, and quit. **Settings…** holds **Google Suggestions**, **Use Browser History** and its sources, **Search Page Text**, **Clear Tab Scout History**, **Start at Login**, and the palette's places: which are shown, their colors and patterns, the swipe mode and its sensitivity.
 - Cmd+T is captured only while Safari or Chrome is active. Cmd+Shift+T and shortcuts in other apps retain their normal behavior.
 
 ## Suggestions And History
@@ -129,7 +129,7 @@ Safari has no such command: its scripting dictionary, its web extension API and 
 
 Chrome lets only extensions make tab groups, so the command goes through Tab Scout's extension:
 
-1. Click **Add to Chrome** in the setup window, which also opens when `` `group `` runs before the extension is added. Tab Scout installs `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/local.tabscout.chrome.json`, which lets Chrome start `TabScoutChromeHost` for the extension `dofcmbpicogclehjjkobakjbghefaglp` only.
+1. Click **Add to Chrome** on the Setup page of Settings, which also opens when `` `group `` runs before the extension is added. Tab Scout installs `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/local.tabscout.chrome.json`, which lets Chrome start `TabScoutChromeHost` for the extension `dofcmbpicogclehjjkobakjbghefaglp` only.
 2. Tab Scout reveals `Tab Scout.app/Contents/Resources/ChromeExtension` in Finder and opens Chrome's Extensions page. Turn on **Developer mode**, then drag the folder onto the page or click **Load unpacked** and choose it. The step ticks itself off and the setup window comes back once the extension connects. To group tabs in another Chrome profile, click **Add to Profile** and repeat in that profile.
 
 Chrome installs extensions only from the Chrome Web Store or by hand in Developer mode, and since Chrome 137 it ignores `--load-extension`, so Tab Scout cannot add the extension itself. An extension that has connected once counts as added while Chrome is closed.
