@@ -57,9 +57,11 @@ enum ProfileMotif: Int, CaseIterable {
     case strands, dots, waves, rings, weave
 }
 
+/// A place to swipe to in the palette: Safari, or one Chrome profile. Each lists only its own tabs.
 struct BrowserProfile: Equatable {
-    /// "chrome:" and Chrome's folder for the profile, or its menu title when Local State cannot be read.
+    /// "safari", "chrome:" and Chrome's folder for the profile, or its menu title when Local State cannot be read.
     let id: String
+    var browser = Browser.chrome
     let name: String
     /// The profile's item in Chrome's Profiles menu, which switches to it.
     let menuTitle: String?
@@ -68,6 +70,8 @@ struct BrowserProfile: Equatable {
     let color: ProfileColor
     let motif: ProfileMotif
     let picture: URL?
+    /// A system symbol drawn on the badge instead of the initial, such as Safari's compass.
+    var symbol: String?
 
     var initial: String { name.first.map { String($0).uppercased() } ?? "?" }
 }
@@ -188,6 +192,35 @@ enum ProfileMenu {
             }
         }
         return names
+    }
+}
+
+/// Safari and each Chrome profile as places to swipe between, Safari first, as the browsers are ordered elsewhere.
+enum BrowserSpaces {
+    /// Safari's color is the first of these clear of the Chrome profiles' colors: sky, lagoon, moss, amber and rose.
+    static let safariColors: [ProfileColor] = [0x3B8CF6, 0x14B8A6, 0x7CB518, 0xF5A524, 0xF43F5E].map(ProfileColor.init(hex:))
+
+    /// The places of the running browsers and which one `front` is in. Chrome's profiles keep the colors they have
+    /// alone; Chrome without readable profiles, or with only one, is a single place named after it.
+    static func combine(safari: Bool, chrome: ProfileState?, chromeRunning: Bool, front: Browser) -> ProfileState {
+        var chromeSpaces = chromeRunning ? chrome?.profiles ?? [] : []
+        if chromeRunning && chromeSpaces.count < 2 {
+            let only = chromeSpaces.first
+            chromeSpaces = [BrowserProfile(id: only?.id ?? "chrome", name: "Chrome", menuTitle: nil, directory: nil,
+                                           color: only?.color ?? ProfilePalette.colors[0], motif: only?.motif ?? .strands, picture: nil)]
+        }
+        let taken = chromeSpaces.map(\.color)
+        let nearest = { (color: ProfileColor) in taken.map { color.hueDistance(to: $0) }.min() ?? 360 }
+        let color = safariColors.first { nearest($0) >= 45 } ?? safariColors.max { nearest($0) < nearest($1) } ?? safariColors[0]
+        let used = Set(chromeSpaces.map(\.motif))
+        // Ripples suit a compass; another pattern stands in when a Chrome profile has them.
+        let motif = used.contains(.rings) ? ProfileMotif.allCases.first { !used.contains($0) } ?? .rings : .rings
+        let safariSpace = BrowserProfile(id: "safari", browser: .safari, name: "Safari", menuTitle: nil, directory: nil,
+                                         color: color, motif: motif, picture: nil, symbol: "safari")
+        let spaces = (safari ? [safariSpace] : []) + chromeSpaces
+        let offset = safari ? 1 : 0
+        let current = front == .safari ? (safari ? 0 : nil) : chromeSpaces.isEmpty ? nil : offset + min(chrome?.current ?? 0, chromeSpaces.count - 1)
+        return ProfileState(profiles: spaces, current: current)
     }
 }
 

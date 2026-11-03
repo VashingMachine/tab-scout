@@ -65,8 +65,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     /// The profiles of the browser the palette opened over, while it has more than one.
     private var profileState: ProfileState?
     private var profileSwipe = ProfileSwipe(count: 0, index: 0)
-    /// The profile Chrome is in, or is being switched to.
-    private var chromeProfile = 0
+    /// The place the palette is in, Safari or a Chrome profile, or is being switched to.
+    private var spaceIndex = 0
     private var profileTimer: Timer?
     private var profileSwitch: DispatchWorkItem?
     private var profileSwitching = false
@@ -1171,24 +1171,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     /// Shows the profiles of the browser the palette opened over. Only Chrome's can be told apart and switched.
     private func loadProfiles() {
-        guard lastBrowser == .chrome else { return showProfiles(nil) }
         if preview {
             let names = CommandLine.arguments.firstIndex(of: "--profiles").flatMap {
                 $0 + 1 < CommandLine.arguments.count ? CommandLine.arguments[$0 + 1].split(separator: ",").map(String.init) : nil
             } ?? ["Personal", "Work"]
             let menu = names.enumerated().map { ProfileMenuItem(title: $0.element, checked: $0.offset == 0) }
             chromeProfileCount = names.count
-            return showProfiles(ProfileMenu.state(menu: menu, local: [], lastUsed: nil))
+            return showProfiles(BrowserSpaces.combine(safari: true, chrome: ProfileMenu.state(menu: menu, local: [], lastUsed: nil),
+                                                      chromeRunning: true, front: lastBrowser))
         }
-        guard isRunning(.chrome) else { return showProfiles(nil) }
+        guard isRunning(.chrome) else {
+            return showProfiles(BrowserSpaces.combine(safari: isRunning(.safari), chrome: nil, chromeRunning: false, front: lastBrowser))
+        }
         chromeProfiles.read { [weak self] state in
-            guard let self, self.panel.isVisible, self.lastBrowser == .chrome, !self.acting else { return }
+            guard let self, self.panel.isVisible, !self.acting else { return }
             // Profiles added or removed since Chrome was last read change whether one profile is listed.
             if let state, state.profiles.count != self.chromeProfileCount {
                 self.chromeProfileCount = state.profiles.count
                 self.rescope(fade: false)
             }
-            self.showProfiles(state)
+            self.showProfiles(BrowserSpaces.combine(safari: self.isRunning(.safari), chrome: state, chromeRunning: true,
+                                                    front: self.lastBrowser))
         }
     }
 
@@ -1212,17 +1215,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let current = state.current ?? 0
         if profileState?.profiles == state.profiles {
             profileState = state
-            guard current != chromeProfile, profileSwipe.axis != .sideways, profileSwitch == nil, !profileSwitching else { return }
-            chromeProfile = current
+            guard current != spaceIndex, profileSwipe.axis != .sideways, profileSwitch == nil, !profileSwitching else { return }
+            spaceIndex = current
             profileSwipe.move(to: current)
             return startProfileTimer()
         }
         let fresh = profileState == nil
         profileState = state
-        chromeProfile = current
+        spaceIndex = current
         profileSwipe = ProfileSwipe(count: state.profiles.count, index: current)
         stopProfileTimer()
         profileDots.colors = state.profiles.map(\.color)
+        profileDots.breaks = Set(state.profiles.indices.filter { $0 > 0 && state.profiles[$0].browser != state.profiles[$0 - 1].browser })
         profilePill.show(state.profiles)
         for view in [profileAura, profilePill, profileDots] as [NSView] {
             view.isHidden = false
@@ -1321,7 +1325,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private func requestProfile(_ index: Int, after delay: TimeInterval) {
         profileSwitch?.cancel()
         profileSwitch = nil
-        guard index != chromeProfile else { return }
+        guard index != spaceIndex else { return }
         let work = DispatchWorkItem { [weak self] in
             self?.profileSwitch = nil
             self?.switchProfile(to: index)
@@ -1330,57 +1334,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
-    /// Has Chrome bring the profile's window forward, or open one, while the palette stays open over it.
+    /// Brings the place swiped to forward while the palette stays open over it: Safari, or a Chrome profile's window,
+    /// which Chrome raises as its own Profiles menu does, or opens.
     private func switchProfile(to index: Int) {
-        guard let state = profileState, state.profiles.indices.contains(index), index != chromeProfile else { return }
-        let profile = state.profiles[index]
-        chromeProfile = index
+        guard let state = profileState, state.profiles.indices.contains(index), index != spaceIndex else { return }
+        let space = state.profiles[index]
+        spaceIndex = index
         if preview { footer.stringValue = "Preview only"; return }
         freezeList()
         profileSwitching = true
         keepPanelUntil = Date().addingTimeInterval(3)
-        // The leaving profile's tabs dim until the new profile's replace them.
-        let leaving = activeTab?.browser == .chrome ? activeTab?.windowID : nil
+        // The tabs being left dim until the new place's replace them.
+        let leaving = activeTab
         awaitingProfileTabs = true
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.12
             results.animator().alphaValue = 0.45
         }
         let started = DispatchTime.now()
-        chromeProfiles.switchTo(profile) { [weak self] result in
+        let finish = { [weak self] (result: Result<Void, Error>) in
             guard let self else { return }
             Timing.log("profile switch", since: started)
             self.profileSwitching = false
             guard self.panel.isVisible else { return }
             switch result {
             case .success:
+                // New tabs, searches and Escape now go to this browser.
+                self.lastBrowser = space.browser
+                self.returnApp = NSRunningApplication.runningApplications(withBundleIdentifier: space.browser.bundleID).first ?? self.returnApp
                 self.keepPanelUntil = Date().addingTimeInterval(1.5)
-                self.followSwitch(from: leaving)
-                // Read again for the next palette, which then needs no read to show this profile.
-                self.stores[.chrome]?.prewarm()
+                self.followSwitch(to: space.browser, from: leaving)
+                // Read again for the next palette, which then needs no read to show this place.
+                self.stores[space.browser]?.prewarm()
             case .failure(let error):
                 self.keepPanelUntil = nil
                 self.restoreResults()
-                self.footer.stringValue = "Could not switch to \(profile.name)"
+                self.footer.stringValue = "Could not switch to \(space.name)"
                 self.footer.toolTip = error.localizedDescription
-                // Back to the profile Chrome is in.
+                // Back to the place the browsers are in.
                 self.loadProfiles()
             }
         }
+        // A Chrome profile is switched to through Chrome's Profiles menu; Safari, or Chrome as one place, just comes
+        // forward.
+        if space.browser == .chrome && (space.menuTitle != nil || space.directory != nil) {
+            chromeProfiles.switchTo(space) { [weak self] result in
+                guard case .success = result, let self else { return finish(result) }
+                self.bringForward(.chrome, completion: finish)
+            }
+        } else {
+            bringForward(space.browser, completion: finish)
+        }
     }
 
-    /// Asks Chrome for the tab on screen until the profile's window is in front, or Chrome has opened one, then lists
-    /// that profile's tabs.
-    private func followSwitch(from window: Int?, attempt: Int = 0) {
+    /// Activates a browser in the background, which brings its front window forward, or opens a window when it has
+    /// none. Launch Services does this for an app that is not active, as Tab Scout is not.
+    private func bringForward(_ browser: Browser, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier != browser.bundleID else { return completion(.success(())) }
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: browser.bundleID) else {
+            return completion(.failure(BridgeError.unavailable))
+        }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            DispatchQueue.main.async { completion(error.map { .failure($0) } ?? .success(())) }
+        }
+    }
+
+    /// Asks the browser for its tab on screen until the place's window is in front, or the browser has opened one,
+    /// then lists that place's tabs. Without any, the place's tabs are listed as they were read.
+    private func followSwitch(to browser: Browser, from leaving: BrowserTab?, attempt: Int = 0) {
         DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0.15 : 0.25)) { [weak self] in
             guard let self, self.panel.isVisible, self.listFrozen else { return }
-            self.bridge(.chrome).active { [weak self] result in
+            self.bridge(browser).active { [weak self] result in
                 guard let self, self.panel.isVisible else { return }
-                if case .success(let tab?) = result, tab.windowID != window {
+                // Between one browser's profiles, the window on screen must have changed first.
+                if case .success(let tab?) = result, leaving?.browser != browser || tab.windowID != leaving?.windowID {
                     self.observeFocus(tab)
                     return self.followFrontTab(tab)
                 }
-                if attempt < 8 { self.followSwitch(from: window, attempt: attempt + 1) } else { self.restoreResults() }
+                if attempt < 8 { self.followSwitch(to: browser, from: leaving, attempt: attempt + 1) } else { self.rescope(fade: true) }
             }
         }
     }
@@ -1437,13 +1468,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         activate(forceNew: forceNew)
     }
 
-    /// Over Chrome with several profiles, only the profile in front: its windows' tabs and no Safari tabs, so every
-    /// pick stays in that profile. A profile's windows are those its copy of Tab Scout's extension sees; without the
-    /// extension, every Chrome tab is listed.
+    /// Whether the palette lists one place at a time, Safari or one Chrome profile: whenever there is more than one.
+    private var spacesApart: Bool {
+        if preview { return (profileState?.profiles.count ?? 0) > 1 }
+        return (isRunning(.safari) ? 1 : 0) + (isRunning(.chrome) ? max(chromeProfileCount, 1) : 0) > 1
+    }
+
+    /// Only the place the palette is in, so every pick stays there: Safari's tabs, or the tabs of the Chrome profile in
+    /// front. A Chrome profile's windows are those its copy of Tab Scout's extension sees; without the extension,
+    /// every Chrome tab is listed.
     private func profileTabs(_ all: [BrowserTab], active: BrowserTab?) -> [BrowserTab] {
         profilesUnseparated = false
-        guard lastBrowser == .chrome, chromeProfileCount > 1 else { return all }
-        let chrome = all.filter { $0.browser == .chrome }
+        guard spacesApart else { return all }
+        let browserTabs = all.filter { $0.browser == lastBrowser }
+        guard lastBrowser == .chrome, chromeProfileCount > 1 else { return browserTabs }
+        let chrome = browserTabs
         guard let front = active?.browser == .chrome ? active?.windowID : chrome.first?.windowID else { return chrome }
         guard let windows = ProfileWindows.current(front: front, windows: chrome.map(\.windowID), owners: windowOwners) else {
             profilesUnseparated = true

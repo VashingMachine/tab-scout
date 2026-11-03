@@ -69,7 +69,7 @@ GROUPING=("$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/RelatedTabs.swif
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" \
     "$SOURCE_DIR/Sources/TabFocusHistory.swift" "$SOURCE_DIR/Tests/TabFocusHistoryTests.swift" -o "$WORK_DIR/TabFocusHistoryTests"
 "$WORK_DIR/TabFocusHistoryTests"
-/usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/BrowserProfiles.swift" "$SOURCE_DIR/Sources/ProfileSwipe.swift" \
+/usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/BrowserProfiles.swift" "$SOURCE_DIR/Sources/ProfileSwipe.swift" \
     "$SOURCE_DIR/Tests/ProfileTests.swift" -o "$WORK_DIR/ProfileTests"
 "$WORK_DIR/ProfileTests"
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/ResultKeyboard.swift" \

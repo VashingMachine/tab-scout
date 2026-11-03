@@ -9,6 +9,7 @@ struct ProfileTests {
         menu()
         colors()
         windows()
+        spaces()
         swipe()
         print("Passed \(checks) profile checks")
     }
@@ -93,6 +94,31 @@ struct ProfileTests {
                "A profile without the extension has the windows no extension sees")
         expect(ProfileWindows.current(front: 1, windows: [1, 3, 9], owners: owners) == [1, 3], "A window not asked about yet is left out")
         expect(ProfileWindows.current(front: 9, windows: [1, 3, 9], owners: owners) == [9], "A new window in front lists only itself until known")
+    }
+
+    static func spaces() {
+        let chrome = ProfileMenu.state(menu: [ProfileMenuItem(title: "Personal", checked: false), ProfileMenuItem(title: "Work", checked: true)],
+                                       local: [], lastUsed: nil)
+        let both = BrowserSpaces.combine(safari: true, chrome: chrome, chromeRunning: true, front: .chrome)
+        expect(both.profiles.map(\.name) == ["Safari", "Personal", "Work"] && both.current == 2,
+               "Safari comes first, then Chrome's profiles, and the Chrome profile in front is current")
+        expect(both.profiles.map(\.browser) == [.safari, .chrome, .chrome], "Each place knows its browser")
+        expect(Array(both.profiles.dropFirst()) == chrome.profiles, "Chrome's profiles keep their colors and patterns beside Safari")
+        let safari = both.profiles[0]
+        expect(safari.symbol == "safari" && safari.motif == .rings && safari.menuTitle == nil, "Safari shows its compass and ripples")
+        expect(chrome.profiles.allSatisfy { $0.color.hueDistance(to: safari.color) >= 45 }, "Safari's color keeps clear of the profiles'")
+        expect(BrowserSpaces.combine(safari: true, chrome: chrome, chromeRunning: true, front: .safari).current == 0,
+               "Over Safari, Safari is current")
+        let lone = BrowserSpaces.combine(safari: true, chrome: nil, chromeRunning: true, front: .chrome)
+        expect(lone.profiles.map(\.name) == ["Safari", "Chrome"] && lone.current == 1 && lone.profiles[1].menuTitle == nil,
+               "Chrome without readable profiles is one place, named after it")
+        let single = ProfileMenu.state(menu: [ProfileMenuItem(title: "Dariusz", checked: true)], local: [], lastUsed: nil)
+        expect(BrowserSpaces.combine(safari: true, chrome: single, chromeRunning: true, front: .chrome).profiles.map(\.name) == ["Safari", "Chrome"],
+               "Chrome with one profile is named after Chrome")
+        expect(BrowserSpaces.combine(safari: false, chrome: chrome, chromeRunning: true, front: .chrome) == chrome,
+               "Without Safari, only Chrome's profiles are places")
+        expect(BrowserSpaces.combine(safari: true, chrome: chrome, chromeRunning: false, front: .safari).profiles.count == 1,
+               "A browser that is not running is no place to go")
     }
 
     static func swipe() {

@@ -132,10 +132,10 @@ enum ProfileArt {
         }
     }
 
-    /// A disc of the profile's color lit from the top left, woven with its pattern, holding its initial or the
-    /// account's picture.
+    /// A disc of the profile's color lit from the top left, woven with its pattern, holding the account's picture,
+    /// its symbol, such as Safari's compass, or its initial.
     static func badge(_ profile: BrowserProfile, diameter: CGFloat) -> NSImage {
-        let key = "\(profile.id)|\(profile.name)|\(profile.color)|\(diameter)"
+        let key = "\(profile.id)|\(profile.name)|\(profile.color)|\(profile.symbol ?? "")|\(diameter)"
         if let cached = badges[key] { return cached }
         let picture = profile.picture.flatMap { NSImage(contentsOf: $0) }
         let image = NSImage(size: NSSize(width: diameter, height: diameter), flipped: false) { rect in
@@ -173,6 +173,10 @@ enum ProfileArt {
                 context.clip()
                 picture.draw(in: inner)
                 context.restoreGState()
+            } else if let name = profile.symbol, let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: diameter * 0.56, weight: .semibold).applying(.init(paletteColors: [.white]))) {
+                let size = symbol.size
+                symbol.draw(in: NSRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2, width: size.width, height: size.height))
             } else {
                 let font = NSFont.systemFont(ofSize: (diameter * 0.48).rounded(), weight: .bold)
                 let shadow = NSShadow()
@@ -361,10 +365,10 @@ final class ProfilePillView: NSView {
         capsule.layer?.addSublayer(grain)
         addSubview(capsule)
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
-        toolTip = "Swipe sideways with two fingers, or click, to switch Chrome profiles"
+        toolTip = "Swipe sideways with two fingers, or click, to switch browsers and Chrome profiles"
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
-        setAccessibilityHelp("Switches to the next Chrome profile. Swiping sideways with two fingers over the palette switches too.")
+        setAccessibilityHelp("Switches to the next browser or Chrome profile. Swiping sideways with two fingers over the palette switches too.")
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -454,7 +458,8 @@ final class ProfilePillView: NSView {
             page.view.alphaValue = max(0, 1 - abs(distance) * 2.1)
         }
         CATransaction.commit()
-        let name = "Chrome profile: " + profiles[Int(clamped.rounded())].name
+        let shown = profiles[Int(clamped.rounded())]
+        let name = shown.browser == .chrome && shown.name != "Chrome" ? "Chrome profile: " + shown.name : shown.name
         if accessibilityLabel() != name { setAccessibilityLabel(name) }
         if capsule.frame != cursorFrame {
             cursorFrame = capsule.frame
@@ -484,12 +489,21 @@ final class ProfilePillView: NSView {
     }
 }
 
-/// One dot per profile in its color. The current one is larger and stretches toward the next while swiping: its
-/// leading edge arrives first and its trailing edge follows. A click on a dot goes to that profile.
+/// One dot per profile in its color, a wider gap between browsers. The current one is larger and stretches toward
+/// the next while swiping: its leading edge arrives first and its trailing edge follows. A click on a dot goes to
+/// that profile.
 final class ProfileDotsView: NSView {
     private static let dot: CGFloat = 5
     private static let active: CGFloat = 7
     private static let pitch: CGFloat = 14
+    private static let gap: CGFloat = 8
+    /// The dots that start another browser's group.
+    var breaks: Set<Int> = [] {
+        didSet {
+            invalidateIntrinsicContentSize()
+            needsDisplay = true
+        }
+    }
     var onSelect: ((Int) -> Void)?
     var position = 0.0 { didSet { needsDisplay = true } }
     var colors: [ProfileColor] = [] {
@@ -500,12 +514,16 @@ final class ProfileDotsView: NSView {
         }
     }
 
+    /// How far the last dot is from the first.
+    private var span: CGFloat { CGFloat(max(colors.count - 1, 0)) * Self.pitch + CGFloat(breaks.filter { $0 > 0 && $0 < colors.count }.count) * Self.gap }
+
     override var intrinsicContentSize: NSSize {
-        NSSize(width: colors.count < 2 ? 0 : CGFloat(colors.count - 1) * Self.pitch + 20, height: 18)
+        NSSize(width: colors.count < 2 ? 0 : span + 20, height: 18)
     }
 
     private func center(_ index: Int) -> CGPoint {
-        CGPoint(x: bounds.midX + (CGFloat(index) - CGFloat(colors.count - 1) / 2) * Self.pitch, y: bounds.midY)
+        let gaps = CGFloat(breaks.filter { $0 > 0 && $0 <= index }.count)
+        return CGPoint(x: bounds.midX - span / 2 + CGFloat(index) * Self.pitch + gaps * Self.gap, y: bounds.midY)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -524,8 +542,9 @@ final class ProfileDotsView: NSView {
         // Past either end, the dot squeezes against it.
         let squeeze = min(CGFloat(abs(position - clamped)) * 6, 2.5)
         let start = center(lower)
-        var rect = NSRect(x: start.x - Self.active / 2 + tail * Self.pitch, y: start.y - Self.active / 2,
-                          width: Self.active + (head - tail) * Self.pitch, height: Self.active)
+        let step = center(upper).x - start.x
+        var rect = NSRect(x: start.x - Self.active / 2 + tail * step, y: start.y - Self.active / 2,
+                          width: Self.active + (head - tail) * step, height: Self.active)
         rect = rect.insetBy(dx: squeeze / 2, dy: -squeeze / 4)
         let color = colors[lower].mixed(with: colors[upper], Double(share)).nsColor
         NSGraphicsContext.saveGraphicsState()
@@ -547,8 +566,8 @@ final class ProfileDotsView: NSView {
     override func mouseDown(with event: NSEvent) {
         guard colors.count > 1 else { return }
         let x = convert(event.locationInWindow, from: nil).x
-        let index = Int(((x - center(0).x) / Self.pitch).rounded())
-        onSelect?(min(max(index, 0), colors.count - 1))
+        guard let index = colors.indices.min(by: { abs(center($0).x - x) < abs(center($1).x - x) }) else { return }
+        onSelect?(index)
     }
 
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
