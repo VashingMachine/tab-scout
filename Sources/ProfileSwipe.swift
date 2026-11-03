@@ -14,6 +14,9 @@ struct ProfileSwipe {
     static let stretch = 0.35
 
     let count: Int
+    let mode: SwipeMode
+    /// Scales finger travel and how far a flick carries; 1 is the default feel.
+    let sensitivity: Double
     /// Where the swipe is, in profiles: 1.5 is halfway between the second and the third.
     private(set) var position: Double
     /// The profile the swipe settles on.
@@ -27,11 +30,26 @@ struct ProfileSwipe {
     private var pending = (x: 0.0, y: 0.0)
     private var samples: [(time: Double, pages: Double)] = []
     private var lastStep = -Double.infinity
+    /// The place the fingers set out from, which a single-step swipe moves at most one away from.
+    private var origin = 0
 
-    init(count: Int, index: Int) {
+    init(count: Int, index: Int, mode: SwipeMode = .free, sensitivity: Double = 1) {
         self.count = count
+        self.mode = mode
+        self.sensitivity = min(max(sensitivity, 0.1), 4)
         target = min(max(index, 0), max(count - 1, 0))
         position = Double(target)
+        origin = target
+    }
+
+    /// Finger travel, in points, that moves one place at this sensitivity.
+    var travelPerPlace: Double { Self.pageTravel / sensitivity }
+
+    /// The places a swipe can reach: all of them, or one either side of where it set out in single-step mode.
+    private var reach: ClosedRange<Int> {
+        let last = max(count - 1, 0)
+        guard mode == .single else { return 0...last }
+        return max(origin - 1, 0)...min(origin + 1, last)
     }
 
     var isSettled: Bool { position == Double(target) && velocity == 0 }
@@ -45,6 +63,7 @@ struct ProfileSwipe {
         velocity = 0
         start = position
         travel = 0
+        origin = target
     }
 
     /// One step of a gesture. Returns whether it belongs to a sideways swipe; the first movement decides.
@@ -60,8 +79,8 @@ struct ProfileSwipe {
     private mutating func drag(_ dx: Double, time: Double) -> Bool {
         travel += dx
         // Scrolled content follows the fingers: moving them left brings the next profile in from the right.
-        position = banded(start - travel / Self.pageTravel)
-        samples.append((time, -dx / Self.pageTravel))
+        position = banded(start - travel / travelPerPlace)
+        samples.append((time, -dx / travelPerPlace))
         samples.removeAll { time - $0.time > 0.1 }
         return true
     }
@@ -74,9 +93,11 @@ struct ProfileSwipe {
         let span = max((recent.last?.time ?? time) - (recent.first?.time ?? time), 1.0 / 60)
         velocity = recent.count > 1 ? min(max(recent.reduce(0) { $0 + $1.pages } / span, -12), 12) : 0
         // Where a flick would carry it, measured from the profile it was settling on.
-        let moved = position + velocity * 0.12 - Double(target)
+        let moved = position + velocity * 0.12 * sensitivity - Double(target)
         let steps = (abs(moved) + 1 - Self.commitShare).rounded(.down) * (moved < 0 ? -1 : 1)
-        target = min(max(target + Int(steps), 0), count - 1)
+        target = min(max(target + Int(steps), reach.lowerBound), reach.upperBound)
+        // A fast flick held to the next place should not overshoot it on the way.
+        if mode == .single { velocity = min(max(velocity, -4), 4) }
         swallowsMomentum = true
         return true
     }
@@ -119,11 +140,13 @@ struct ProfileSwipe {
         return false
     }
 
-    /// Past the first or last profile, the fingers pull ever less, like scrolled content at its end.
+    /// Past the first or last profile, or the next one in single-step mode, the fingers pull ever less, like
+    /// scrolled content at its end.
     private func banded(_ raw: Double) -> Double {
-        let upper = Double(count - 1)
+        let lower = Double(reach.lowerBound)
+        let upper = Double(reach.upperBound)
         func rubber(_ over: Double) -> Double { (1 - 1 / (over * 0.55 / Self.stretch + 1)) * Self.stretch }
-        if raw < 0 { return -rubber(-raw) }
+        if raw < lower { return lower - rubber(lower - raw) }
         if raw > upper { return upper + rubber(raw - upper) }
         return raw
     }

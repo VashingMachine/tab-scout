@@ -42,7 +42,7 @@ Tab Scout opens its **Set Up Tab Scout** window on first launch; **Set Up Tab Sc
 
 The shortcut hook starts automatically after permission is granted. Permissions are granted by the user through macOS; the app and tests do not bypass them. The window learns a browser's access without a prompt from macOS when the browser is running, and otherwise once Tab Scout has read its tabs.
 
-**Google Suggestions** and **Use Browser History** are separate menu-bar toggles and are off on a new installation. Enable either feature only after reviewing the privacy details below. Tab Scout's accepted searches and choices are remembered locally; **Clear Tab Scout History** removes those records.
+**Google Suggestions** and **Use Browser History** are separate toggles in **Settings** and are off on a new installation. Enable either feature only after reviewing the privacy details below. Tab Scout's accepted searches and choices are remembered locally; **Clear Tab Scout History** removes those records.
 
 ## Usage
 
@@ -53,7 +53,7 @@ The shortcut hook starts automatically after permission is granted. Permissions 
 - When the tab on screen is empty (the Start Page, Favorites or `about:blank`), anything that would open a new tab opens in it instead, and the **New tab** action keeps it. Tab Scout checks that the tab is still empty first; if it has loaded a page meanwhile, a new tab opens as usual.
 - Cmd+Enter and Shift+Enter always open the query in a new tab, or in the empty tab on screen. Holding Shift alone lists that row first and selects it at once; typing a capital letter or `?` shows it briefly. An empty or whitespace-only query uses Safari's native **New Tab** command and configured new-tab page. With **New tabs open with: Start Page** in Safari Settings > General, it shows the native Start Page with its configured sections and background instead of a forced `about:blank`. The native command also handles opening a tab when Safari has no windows.
 - Escape or Cmd+T closes the search panel without an action.
-- The refresh icon requests updated results. The menu-bar menu provides search, shortcut capture, **Set Up Tab Scout...**, **Google Suggestions**, **Use Browser History**, **History Profiles**, **Clear Tab Scout History**, **Start at Login**, and quit.
+- The refresh icon requests updated results. The menu-bar menu provides search, shortcut capture, **Settings…**, **Set Up Tab Scout…**, and quit. **Settings…** holds **Google Suggestions**, **Use Browser History** and its sources, **Search Page Text**, **Clear Tab Scout History**, **Start at Login**, and the palette's places: which are shown, their colors and patterns, the swipe mode and its sensitivity.
 - Cmd+T is captured only while Safari or Chrome is active. Cmd+Shift+T and shortcuts in other apps retain their normal behavior.
 
 ## Suggestions And History

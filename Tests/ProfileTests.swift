@@ -11,6 +11,8 @@ struct ProfileTests {
         windows()
         spaces()
         swipe()
+        swipeModes()
+        settings()
         print("Passed \(checks) profile checks")
     }
 
@@ -166,6 +168,70 @@ struct ProfileTests {
         while moved.advance(by: 1.0 / 60) {}
         expect(moved.position == 0 && moved.target == 0, "A click jumps to any profile")
         expect(ProfileSwipe(count: 2, index: 5).target == 1, "A current profile out of range is clamped")
+    }
+
+    static func swipeModes() {
+        func flick(_ swipe: inout ProfileSwipe, by points: Double) {
+            swipe.touch()
+            var time = 0.0
+            _ = swipe.scroll(dx: -20, dy: 0, time: time)
+            for _ in 0..<Int(points / 20) {
+                time += 0.008
+                _ = swipe.scroll(dx: -20, dy: 0, time: time)
+            }
+            _ = swipe.release(time: time)
+            while swipe.advance(by: 1.0 / 60) {}
+        }
+        var free = ProfileSwipe(count: 5, index: 0)
+        flick(&free, by: 400)
+        expect(free.target >= 2, "A fast flick carries past the next place in free mode")
+        var single = ProfileSwipe(count: 5, index: 0, mode: .single)
+        flick(&single, by: 400)
+        expect(single.target == 1 && single.position == 1, "A single-step swipe stops at the next place however fast")
+        flick(&single, by: 400)
+        expect(single.target == 2, "The next single-step swipe moves one more")
+        var held = ProfileSwipe(count: 5, index: 2, mode: .single)
+        held.touch()
+        _ = held.scroll(dx: -3, dy: 0, time: 0)
+        _ = held.scroll(dx: -900, dy: 0, time: 0.5)
+        expect(held.position < 3.4, "Pulling past the next place in single-step mode stretches like an end")
+
+        var gentle = ProfileSwipe(count: 5, index: 0, sensitivity: 0.5)
+        var normal = ProfileSwipe(count: 5, index: 0)
+        gentle.touch()
+        normal.touch()
+        _ = gentle.scroll(dx: -100, dy: 0, time: 0)
+        _ = normal.scroll(dx: -100, dy: 0, time: 0)
+        expect(abs(gentle.position * 2 - normal.position) < 0.0001, "Lower sensitivity needs more finger travel per place")
+        var slow = ProfileSwipe(count: 5, index: 0, sensitivity: 0.5)
+        flick(&slow, by: 400)
+        var quick = ProfileSwipe(count: 5, index: 0, sensitivity: 1.6)
+        flick(&quick, by: 400)
+        expect(slow.target < quick.target, "Lower sensitivity carries the same flick less far")
+    }
+
+    static func settings() {
+        let chrome = ProfileMenu.state(menu: [ProfileMenuItem(title: "Personal", checked: false), ProfileMenuItem(title: "Work", checked: true),
+                                              ProfileMenuItem(title: "Side", checked: false)], local: [], lastUsed: nil)
+        let places = BrowserSpaces.combine(safari: true, chrome: chrome, chromeRunning: true, front: .chrome)
+        var chosen = PlaceSettings()
+        chosen.hidden = [places.profiles[1].id, places.profiles[2].id]
+        chosen.colors[places.profiles[3].id] = ProfileColor(hex: 0x112233)
+        chosen.motifs["safari"] = .weave
+        let applied = chosen.apply(to: places)
+        expect(applied.profiles.map(\.name) == ["Safari", "Work", "Side"] && applied.current == 1,
+               "Hidden places are left out, except the one in front")
+        expect(applied.profiles[2].color == ProfileColor(hex: 0x112233) && applied.profiles[0].motif == .weave,
+               "Chosen colors and patterns replace the automatic ones")
+
+        let defaults = UserDefaults(suiteName: "ProfileTests-\(UUID().uuidString)")!
+        chosen.swipeMode = .single
+        chosen.sensitivity = 0.7
+        chosen.save(to: defaults)
+        expect(PlaceSettings(defaults: defaults) == chosen, "Place settings survive a save and load")
+        defaults.set(9.0, forKey: "SwipeSensitivity")
+        expect(PlaceSettings(defaults: defaults).sensitivity == PlaceSettings.sensitivityRange.upperBound, "A stored sensitivity is kept in range")
+        expect(ProfileColor(hexString: ProfileColor(hex: 0x3B8CF6).hexString) == ProfileColor(hex: 0x3B8CF6), "Colors round-trip through hex")
     }
 
     static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {

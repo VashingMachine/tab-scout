@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import ApplicationServices
 import ServiceManagement
 
@@ -23,8 +24,7 @@ private final class ResultsScrollView: NSScrollView {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSWindowDelegate,
-                         NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSWindowDelegate {
     private let preview = CommandLine.arguments.contains("--preview")
     private var bridges: [Browser: BrowserBridge] = [:]
     private var stores: [Browser: TabStore] = [:]
@@ -51,7 +51,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var pageText = PageTextIndex()
     private var pageTextQueue: [BrowserTab] = []
     private var pageTextReading = false
-    private var pageTextItems: [NSMenuItem] = []
     private var mentions: [BrowserTab: String] = [:]
     private var pageTextEnabled: Bool { UserDefaults.standard.bool(forKey: "PageTextEnabled") }
     private let assistant = TabAssistant()
@@ -65,6 +64,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     /// The profiles of the browser the palette opened over, while it has more than one.
     private var profileState: ProfileState?
     private var profileSwipe = ProfileSwipe(count: 0, index: 0)
+    /// Which places the palette swipes between, their colors and patterns, and how swiping feels.
+    private var placeSettings = PlaceSettings(defaults: .standard)
+    /// Every place last read, before the hidden ones are left out, for the settings window.
+    private var knownPlaces: [BrowserProfile] = []
+    private var settingsWindow: NSWindow?
+    private let settingsModel = SettingsModel()
     /// The place the palette is in, Safari or a Chrome profile, or is being switched to.
     private var spaceIndex = 0
     private var profileTimer: Timer?
@@ -104,8 +109,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var historyRequestID = 0
     private var historyError: Error?
     private var historyLoaded = false
-    private var googleItems: [NSMenuItem] = []
-    private var historyItems: [NSMenuItem] = []
     private lazy var relativeDate: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
@@ -121,7 +124,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var windowNumbers: [Browser: [Int: Int]] = [:]
     private var statusItem: NSStatusItem!
     private var pauseItem: NSMenuItem!
-    private var loginItem: NSMenuItem!
     private var eventTap: CFMachPort?
     private var tapSource: CFRunLoopSource?
     private var capturedT = false
@@ -129,7 +131,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var frontBrowser: Browser?
     /// The browser most recently in front: new tabs open there, and the palette centers on its window.
     private var lastBrowser: Browser = .safari
-    private var enabled = true
+    /// Whether Cmd+T in a browser opens the palette; kept across launches.
+    private var enabled = UserDefaults.standard.object(forKey: "CaptureEnabled") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(enabled, forKey: "CaptureEnabled") }
+    }
     private var workspaceObserver: NSObjectProtocol?
     private var terminationObserver: NSObjectProtocol?
     private var keyMonitor: Any?
@@ -296,6 +301,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
         if preview, let index = CommandLine.arguments.firstIndex(of: "--snapshot"), index + 1 < CommandLine.arguments.count {
             renderSnapshot(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+        } else if preview, CommandLine.arguments.contains("--settings") {
+            showSettings(nil)
         } else if preview {
             showSearch(nil)
         } else {
@@ -347,8 +354,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let appItem = NSMenuItem()
         appItem.submenu = appMenu
         main.addItem(appItem)
-        addSearchPreferences(to: appMenu)
+        appMenu.addItem(withTitle: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: ",").target = self
         appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         appMenu.addItem(withTitle: "Quit Tab Scout", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let edit = NSMenu(title: "Edit")
         let editItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
@@ -368,41 +376,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         menu.addItem(.separator())
         pauseItem = menu.addItem(withTitle: "Capture Cmd+T in Safari and Chrome", action: #selector(toggleCapture(_:)), keyEquivalent: "")
         pauseItem.target = self
-        pauseItem.state = .on
-        let setup = menu.addItem(withTitle: "Set Up Tab Scout...", action: #selector(showSetup(_:)), keyEquivalent: "")
-        setup.target = self
+        pauseItem.state = enabled ? .on : .off
         menu.addItem(.separator())
-        addSearchPreferences(to: menu)
-        menu.addItem(.separator())
-        loginItem = menu.addItem(withTitle: "Start at Login", action: #selector(toggleLogin(_:)), keyEquivalent: "")
-        loginItem.target = self
-        loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        menu.addItem(withTitle: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: ",").target = self
+        menu.addItem(withTitle: "Set Up Tab Scout…", action: #selector(showSetup(_:)), keyEquivalent: "").target = self
         menu.addItem(.separator())
         rankingItem = menu.addItem(withTitle: "", action: nil, keyEquivalent: "")
         updateRankingItem()
         menu.addItem(withTitle: versionText, action: nil, keyEquivalent: "")
         menu.addItem(withTitle: "Quit Tab Scout", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         statusItem.menu = menu
-    }
-
-    private func addSearchPreferences(to menu: NSMenu) {
-        let google = menu.addItem(withTitle: "Google Suggestions", action: #selector(toggleGoogle(_:)), keyEquivalent: "")
-        google.target = self
-        google.state = googleEnabled ? .on : .off
-        googleItems.append(google)
-        let history = menu.addItem(withTitle: "Use Browser History", action: #selector(toggleSafariHistory(_:)), keyEquivalent: "")
-        history.target = self
-        history.state = safariHistoryEnabled ? .on : .off
-        historyItems.append(history)
-        let profiles = menu.addItem(withTitle: "History Profiles", action: nil, keyEquivalent: "")
-        profiles.submenu = NSMenu(title: "History Profiles")
-        profiles.submenu?.delegate = self
-        let text = menu.addItem(withTitle: "Search Page Text", action: #selector(togglePageText(_:)), keyEquivalent: "")
-        text.target = self
-        text.state = pageTextEnabled ? .on : .off
-        pageTextItems.append(text)
-        let clear = menu.addItem(withTitle: "Clear Tab Scout History...", action: #selector(clearHistory(_:)), keyEquivalent: "")
-        clear.target = self
     }
 
     private func installTapIfAllowed() {
@@ -1197,7 +1180,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     /// Shows `state`'s profiles, or hides them all with nil or a single profile. A menu read again only moves the
     /// palette to the profile Chrome is in while nothing is moving or switching.
-    private func showProfiles(_ state: ProfileState?) {
+    private func showProfiles(_ read: ProfileState?) {
+        if let read {
+            knownPlaces = read.profiles
+            if settingsWindow?.isVisible == true { syncPlaces(note: nil) }
+        }
+        let state = read.map(placeSettings.apply)
         guard let state, state.profiles.count > 1 else {
             profileState = nil
             profileSwipe = ProfileSwipe(count: 0, index: 0)
@@ -1223,7 +1211,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let fresh = profileState == nil
         profileState = state
         spaceIndex = current
-        profileSwipe = ProfileSwipe(count: state.profiles.count, index: current)
+        profileSwipe = ProfileSwipe(count: state.profiles.count, index: current, mode: placeSettings.swipeMode,
+                                    sensitivity: placeSettings.sensitivity)
         stopProfileTimer()
         profileDots.colors = state.profiles.map(\.color)
         profileDots.breaks = Set(state.profiles.indices.filter { $0 > 0 && state.profiles[$0].browser != state.profiles[$0 - 1].browser })
@@ -1711,9 +1700,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private func updateRankingItem() {
         let log = learning.state.ranking
         let quality = RankTrainer.evaluate(log.impressions, weights: log.weights)
-        guard quality.picks > 0 else { rankingItem?.title = "Ranking learns from your picks"; return }
+        guard quality.picks > 0 else {
+            rankingItem?.title = "Ranking learns from your picks"
+            settingsModel.ranking = rankingItem?.title ?? ""
+            return
+        }
         rankingItem?.title = String(format: "Ranking: your pick was first in %.0f%% of %d", quality.firstChoice * 100, quality.picks)
             + (log.isPersonalized ? ", personalized" : "")
+        settingsModel.ranking = rankingItem?.title ?? ""
     }
 
     private func rememberChoice(_ row: SearchRow, typed: String, offeredTabs: Bool) {
@@ -1819,6 +1813,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     @objc private func toggleCapture(_ sender: Any?) {
         enabled.toggle()
         pauseItem.state = enabled ? .on : .off
+        syncSettings()
     }
 
     @objc private func toggleGoogle(_ sender: Any?) {
@@ -1834,7 +1829,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
         UserDefaults.standard.set(enable, forKey: "GoogleSuggestionsEnabled")
-        googleItems.forEach { $0.state = enable ? .on : .off }
+        syncSettings()
         googleSuggestions.clearCache()
         remoteSuggestions = []
         if panel.isVisible {
@@ -1847,16 +1842,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         guard !preview else { return }
         let enable = !safariHistoryEnabled
         UserDefaults.standard.set(enable, forKey: "SafariHistoryEnabled")
-        historyItems.forEach { $0.state = enable ? .on : .off }
+        syncSettings()
         if !enable { favicons.useLocalIcons([:]) }
         reimportHistory()
     }
 
-    @objc private func toggleHistoryProfile(_ sender: NSMenuItem) {
-        guard !preview, let id = sender.representedObject as? String else { return }
+    private func setHistoryProfile(_ id: String, enabled: Bool) {
+        guard !preview else { return }
         var excluded = Self.excludedProfiles
-        if excluded.remove(id) == nil { excluded.insert(id) }
+        if enabled { excluded.remove(id) } else { excluded.insert(id) }
         UserDefaults.standard.set(excluded.sorted(), forKey: "ExcludedHistoryProfiles")
+        syncSettings()
         historyStore.discardImported()
         reimportHistory()
     }
@@ -1879,29 +1875,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         guard safariHistoryEnabled else { return }
         historyProfiles = found.profiles
         unreadableProfiles = found.failed
+        syncSettings()
         if favicons.useLocalIcons(found.icons), ready, panel.isVisible, table.numberOfRows > 0 {
             table.reloadData(forRowIndexes: IndexSet(integersIn: 0..<table.numberOfRows), columnIndexes: IndexSet(integer: 0))
-        }
-    }
-
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.removeAllItems()
-        guard safariHistoryEnabled else {
-            menu.addItem(withTitle: "Turn on Use Browser History first", action: nil, keyEquivalent: "")
-            return
-        }
-        guard !historyProfiles.isEmpty else {
-            menu.addItem(withTitle: historyLoaded ? "No browser profiles found" : "Looking for profiles...", action: nil, keyEquivalent: "")
-            return
-        }
-        let excluded = Self.excludedProfiles
-        for profile in historyProfiles {
-            let unreadable = unreadableProfiles.contains(profile.id) || (profile.id == HistoryProfile.safariID && historyError != nil)
-            let item = menu.addItem(withTitle: profile.name + (unreadable ? " (unavailable)" : ""),
-                                    action: #selector(toggleHistoryProfile(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = profile.id
-            item.state = excluded.contains(profile.id) ? .off : .on
         }
     }
 
@@ -1918,7 +1894,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
         UserDefaults.standard.set(enable, forKey: "PageTextEnabled")
-        pageTextItems.forEach { $0.state = enable ? .on : .off }
+        syncSettings()
         if enable {
             pageTextUnavailable = []
             if let current = focusTracker.current { readPageText(current) }
@@ -1958,8 +1934,117 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             NSApp.activate(ignoringOtherApps: true)
             alert.runModal()
         }
-        loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        loginBox?.state = loginItem.state
+        loginBox?.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        syncSettings()
+    }
+
+    // MARK: - Settings
+
+    @objc private func showSettings(_ sender: Any?) {
+        if panel?.isVisible == true { dismiss(restoreFocus: false) }
+        if settingsWindow == nil { buildSettings() }
+        syncSettings()
+        syncPlaces(note: nil)
+        reloadPlaces()
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    private func buildSettings() {
+        settingsModel.version = versionText
+        settingsModel.placeSettings = placeSettings
+        settingsModel.actions = SettingsModel.Actions(
+            setCapture: { [weak self] wanted in
+                guard let self else { return }
+                if wanted != self.enabled { self.toggleCapture(nil) } else { self.syncSettings() }
+            },
+            setLogin: { [weak self] wanted in
+                guard let self else { return }
+                if wanted != (SMAppService.mainApp.status == .enabled) { self.toggleLogin(nil) } else { self.syncSettings() }
+            },
+            setGoogle: { [weak self] wanted in
+                guard let self else { return }
+                if wanted != self.googleEnabled { self.toggleGoogle(nil) }
+                self.syncSettings()
+            },
+            setHistory: { [weak self] wanted in
+                guard let self else { return }
+                if wanted != self.safariHistoryEnabled { self.toggleSafariHistory(nil) }
+                self.syncSettings()
+            },
+            setHistorySource: { [weak self] id, wanted in self?.setHistoryProfile(id, enabled: wanted) },
+            setPageText: { [weak self] wanted in
+                guard let self else { return }
+                if wanted != self.pageTextEnabled { self.togglePageText(nil) }
+                self.syncSettings()
+            },
+            clearHistory: { [weak self] in self?.clearHistory(nil) },
+            showSetup: { [weak self] in self?.showSetup(nil) },
+            reloadPlaces: { [weak self] in self?.reloadPlaces() },
+            placesChanged: { [weak self] settings in self?.placesChanged(settings) })
+        let hosting = NSHostingController(rootView: SettingsView(model: settingsModel))
+        let window = NSWindow(contentViewController: hosting)
+        window.title = "Tab Scout Settings"
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        window.titlebarAppearsTransparent = true
+        window.toolbarStyle = .unified
+        window.toolbar = NSToolbar(identifier: "Settings")
+        window.isReleasedWhenClosed = false
+        window.setContentSize(NSSize(width: 780, height: 640))
+        window.setFrameAutosaveName("TabScoutSettings")
+        if window.frame.origin == .zero { window.center() }
+        settingsWindow = window
+    }
+
+    /// Fills the settings window in from what Tab Scout is doing now.
+    private func syncSettings() {
+        let model = settingsModel
+        model.objectWillChange.send()
+        model.capture = enabled
+        model.login = SMAppService.mainApp.status == .enabled
+        model.google = googleEnabled
+        model.history = safariHistoryEnabled
+        model.pageText = pageTextEnabled
+        let excluded = Self.excludedProfiles
+        model.historySources = historyProfiles.map { profile in
+            SettingsModel.HistorySource(id: profile.id, name: profile.name, browser: profile.kind.rawValue,
+                                        enabled: !excluded.contains(profile.id),
+                                        unavailable: unreadableProfiles.contains(profile.id)
+                                            || (profile.id == HistoryProfile.safariID && historyError != nil))
+        }
+        model.historyNote = historyProfiles.isEmpty ? (historyLoaded ? "No browser profiles found." : "Looking for profiles…") : nil
+    }
+
+    private func syncPlaces(note: String?) {
+        settingsModel.places = knownPlaces
+        settingsModel.placesNote = note
+    }
+
+    /// Reads Chrome's profiles again for the settings window. While Chrome is closed, the profiles it had when last
+    /// read stay listed.
+    private func reloadPlaces() {
+        if preview {
+            let menu = ["Personal", "Work", "Side project"].enumerated().map { ProfileMenuItem(title: $0.element, checked: $0.offset == 0) }
+            knownPlaces = BrowserSpaces.combine(safari: true, chrome: ProfileMenu.state(menu: menu, local: [], lastUsed: nil),
+                                                chromeRunning: true, front: .safari).profiles
+            return syncPlaces(note: nil)
+        }
+        chromeProfiles.read { [weak self] state in
+            guard let self else { return }
+            let running = self.isRunning(.chrome)
+            if state == nil, !running, self.knownPlaces.contains(where: { $0.browser == .chrome }) {
+                return self.syncPlaces(note: "Chrome is closed; its profiles are listed as they were when last read.")
+            }
+            self.knownPlaces = BrowserSpaces.combine(safari: true, chrome: state, chromeRunning: running, front: .safari).profiles
+            self.syncPlaces(note: running ? nil : "Open Chrome to list its profiles here.")
+        }
+    }
+
+    private func placesChanged(_ settings: PlaceSettings) {
+        placeSettings = settings
+        if !preview { settings.save(to: .standard) }
+        // The palette builds its places afresh next time, with the new colors and swipe.
+        if panel?.isVisible != true { showProfiles(nil) }
     }
 
     @objc private func showSetup(_ sender: Any?) {

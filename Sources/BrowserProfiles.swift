@@ -67,8 +67,8 @@ struct BrowserProfile: Equatable {
     let menuTitle: String?
     /// Chrome's folder for the profile, such as "Profile 3", which Chrome can also be started with.
     let directory: String?
-    let color: ProfileColor
-    let motif: ProfileMotif
+    var color: ProfileColor
+    var motif: ProfileMotif
     let picture: URL?
     /// A system symbol drawn on the badge instead of the initial, such as Safari's compass.
     var symbol: String?

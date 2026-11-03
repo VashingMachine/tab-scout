@@ -135,7 +135,7 @@ enum ProfileArt {
     /// A disc of the profile's color lit from the top left, woven with its pattern, holding the account's picture,
     /// its symbol, such as Safari's compass, or its initial.
     static func badge(_ profile: BrowserProfile, diameter: CGFloat) -> NSImage {
-        let key = "\(profile.id)|\(profile.name)|\(profile.color)|\(profile.symbol ?? "")|\(diameter)"
+        let key = "\(profile.id)|\(profile.name)|\(profile.color)|\(profile.motif)|\(profile.symbol ?? "")|\(diameter)"
         if let cached = badges[key] { return cached }
         let picture = profile.picture.flatMap { NSImage(contentsOf: $0) }
         let image = NSImage(size: NSSize(width: diameter, height: diameter), flipped: false) { rect in
