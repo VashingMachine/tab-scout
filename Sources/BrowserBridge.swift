@@ -51,6 +51,27 @@ final class BrowserBridge {
         execute(["switch", String(tab.windowID), String(tab.index), tab.url, tab.title], on: actionQueue, completion: completion)
     }
 
+    /// Closes the tabs still at their place with their address, and answers which of `tabs` it closed. A tab that
+    /// moved or navigated meanwhile stays open, so the wrong tab is never closed.
+    func close(_ tabs: [BrowserTab], completion: @escaping (Result<[BrowserTab], Error>) -> Void) {
+        // By window, then position: the script closes the last first, so no tab still to close moves.
+        let ordered = tabs.sorted { ($0.windowID, $0.index) < ($1.windowID, $1.index) }
+        execute(["close"] + ordered.flatMap { [String($0.windowID), String($0.index), $0.url] }, on: actionQueue) { result in
+            completion(result.flatMap { data in
+                Result {
+                    let closed = try JSONDecoder().decode([Int].self, from: data)
+                    return closed.filter(ordered.indices.contains).map { ordered[$0] }
+                }
+            })
+        }
+    }
+
+    /// Opens each address in a background tab at the end of its window, or of the front window when its own is
+    /// gone. The tab on screen stays, and the browser is not brought forward.
+    func reopen(_ pages: [(windowID: Int, url: String)], completion: @escaping (Result<Data, Error>) -> Void) {
+        execute(["reopen"] + pages.flatMap { [String($0.windowID), $0.url] }, on: actionQueue, completion: completion)
+    }
+
     /// Opens `destination` in a new tab, or in `blank`, an empty tab on screen, so that no empty tab is left behind.
     /// The script still opens a new tab when `blank` has navigated away meanwhile.
     func open(_ destination: NewTabDestination, windowID: Int, reusing blank: BrowserTab? = nil,

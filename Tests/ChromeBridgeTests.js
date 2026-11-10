@@ -102,6 +102,32 @@ function run(argv) {
     expect(fake.state.windows.length === 1 && fake.state.windows[0].tabs.length === 1, 'With no windows, New Tab makes exactly one tab');
 
     fake = chrome(sample());
+    expect(call('close', '7', '1', 'https://mail.example/', '9', '1', 'https://docs.example/', '9', '2', 'https://docs.example/') === '[0,1,2]',
+           'Tabs still at their index with their address are closed, and their positions answered');
+    expect(fake.state.windows.length === 2 && byId(fake, '7').tabs.length === 1 && byId(fake, '7').tabs[0].url === 'chrome://newtab/'
+           && !byId(fake, '9'), 'Closing the last first closes the right tabs, and a window left empty goes with them');
+    fake = chrome(sample());
+    expect(call('close', '7', '2', 'https://mail.example/', '7', '9', 'https://mail.example/', '8', '1', 'https://secret.example/',
+                '99', '1', 'https://mail.example/', '9', '1', 'https://docs.example/') === '[4]',
+           'A tab that navigated or moved, an incognito tab and a closed window are left alone');
+    expect(byId(fake, '7').tabs.length === 2 && byId(fake, '8').tabs.length === 1 && byId(fake, '9').tabs.length === 1
+           && !fake.state.activated, 'Only the confirmed tab is closed, and Chrome stays where it is');
+    expect(chrome(sample()) && call('close') === '[]', 'Nothing to close closes nothing');
+
+    fake = chrome(sample());
+    expect(call('reopen', '9', 'https://again.example/', '99', 'https://front.example/', '8', 'https://never-incognito.example/') === '3',
+           'Every page asked for is reopened');
+    expect(byId(fake, '9').tabs.length === 3 && byId(fake, '9').tabs[2].url === 'https://again.example/' && byId(fake, '9').active === 1,
+           'A page reopens at the end of its own window, behind the tab on screen');
+    expect(fake.state.windows[0].id === '7' && fake.state.windows[0].tabs.length === 4 && fake.state.windows[0].active === 2
+           && byId(fake, '8').tabs.length === 1 && !fake.state.activated,
+           'A page whose window is gone, or was incognito, reopens in the front normal window, and Chrome is not brought forward');
+    fake = chrome([]);
+    call('reopen', '5', 'https://first.example/', '5', 'https://second.example/');
+    expect(fake.state.windows.length === 1 && fake.state.windows[0].tabs.map(t => t.url).join() === 'https://first.example/,https://second.example/',
+           'Without a window, one is made and the pages open in it');
+
+    fake = chrome(sample());
     fake.state.windows[0].tabs[0].text = 'x'.repeat(40000);
     expect(call('text', '7', '1', 'https://mail.example/').length === 30000, 'Page text is cut to 30,000 characters');
     expectStale(() => call('text', '7', '1', 'https://elsewhere.example/'), 'A page that navigated away is not read');
@@ -114,11 +140,18 @@ function run(argv) {
 function fakeChrome(windows, running) {
     const state = {windows: windows, activated: false, made: 0};
     windows.forEach(w => { w.minimized = Boolean(w.minimized); });
-    const tab = t => ({
+    const tab = (w, t) => ({
         title: () => t.title,
         get url() { return () => t.url; },
         set url(value) { t.url = value; },
-        execute: () => t.text || ''
+        execute: () => t.text || '',
+        // Closing a tab moves the later ones up, and closing its last tab closes a window.
+        close: () => {
+            const at = w.tabs.indexOf(t);
+            w.tabs.splice(at, 1);
+            if (w.active > at + 1 || w.active > w.tabs.length) w.active = Math.max(1, w.active - 1);
+            if (w.tabs.length === 0) state.windows.splice(state.windows.indexOf(w), 1);
+        }
     });
     const tabs = w => new Proxy({}, {
         get(_, key) {
@@ -126,7 +159,7 @@ function fakeChrome(windows, running) {
             if (key === 'title') return () => w.tabs.map(t => t.title);
             if (key === 'length') return w.tabs.length;
             if (key === 'push') return properties => { w.tabs.push({title: '', url: properties.url || 'chrome://newtab/'}); };
-            if (typeof key === 'string' && /^\d+$/.test(key)) return tab(w.tabs[Number(key)]);
+            if (typeof key === 'string' && /^\d+$/.test(key)) return tab(w, w.tabs[Number(key)]);
         }
     });
     const browserWindow = w => ({
@@ -136,7 +169,7 @@ function fakeChrome(windows, running) {
         tabs: tabs(w),
         get activeTabIndex() { return () => w.active; },
         set activeTabIndex(value) { w.active = value; },
-        get activeTab() { return tab(w.tabs[w.active - 1]); },
+        get activeTab() { return tab(w, w.tabs[w.active - 1]); },
         get minimized() { return () => w.minimized; },
         set minimized(value) { w.minimized = value; },
         set index(value) { state.windows.splice(state.windows.indexOf(w), 1); state.windows.splice(value - 1, 0, w); }

@@ -48,6 +48,26 @@ struct ResultKeyboardTests {
             }
         }
 
+        for accessory in accessoryFlags {
+            for combination in 0..<16 {
+                var flags = accessory
+                for (bit, modifier) in shortcutFlags.enumerated() where combination & (1 << bit) != 0 {
+                    flags.formUnion(modifier)
+                }
+                let command = combination & 1 != 0, control = combination & 2 != 0, option = combination & 4 != 0, shift = combination & 8 != 0
+                let step = ResultKeyboard.placeStep(keyCode: 48, flags: flags)
+                expect((step != nil) == (!command && !control) && step.map { $0.step == (shift ? -1 : 1) && $0.carries == option } != false,
+                       "Tab goes to the next place, Shift+Tab back, and Option takes the tab along \(flags.rawValue)")
+                expect(ResultKeyboard.placeStep(keyCode: 36, flags: flags) == nil, "Only Tab moves between places \(flags.rawValue)")
+                expect(ResultKeyboard.closesTab(keyCode: 13, flags: flags, typed: true) == (combination == 1)
+                       && ResultKeyboard.closesTab(keyCode: 13, flags: flags, typed: false) == (combination == 1),
+                       "Command+W alone closes the selected tab, typed text or not \(flags.rawValue)")
+                expect(ResultKeyboard.closesTab(keyCode: 51, flags: flags, typed: false) == (combination == 1)
+                       && !ResultKeyboard.closesTab(keyCode: 51, flags: flags, typed: true),
+                       "Command+Delete closes a tab only while nothing is typed, so it still clears typed text \(flags.rawValue)")
+            }
+        }
+
         let standardArrow = event(keyCode: 125, flags: [.numericPad, .function])
         expect(!standardArrow.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty,
                "Regression fixture reproduces the nonempty flags carried by standard AppKit arrows")

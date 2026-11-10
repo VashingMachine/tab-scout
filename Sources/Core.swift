@@ -12,6 +12,18 @@ enum Timing {
     }
 }
 
+/// What the palette opened over and what was picked, as browsers, kinds and counts only, so an odd jump can be
+/// traced afterwards. Read them with:
+/// log show --last 1h --predicate 'subsystem == "local.tabscout.app" AND category == "palette"'
+enum PaletteLog {
+    private static let logger = Logger(subsystem: "local.tabscout.app", category: "palette")
+
+    /// `text` must hold no titles, addresses or typed text.
+    static func note(_ text: String) {
+        logger.notice("\(text, privacy: .public)")
+    }
+}
+
 /// A browser whose tabs Tab Scout searches. Chrome joins Safari only while it runs.
 enum Browser: String, CaseIterable {
     case safari, chrome

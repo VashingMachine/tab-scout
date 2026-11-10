@@ -12,6 +12,8 @@ final class ChromeExtensionLink {
         case windowNotFound
         case refused(String)
         case timeout
+        /// The extension in Chrome is older than this Tab Scout and does not know the request.
+        case outdated
 
         var errorDescription: String? {
             switch self {
@@ -20,6 +22,7 @@ final class ChromeExtensionLink {
             case .windowNotFound: return "This Chrome profile does not have Tab Scout's extension."
             case .refused(let reason): return "Chrome could not group the tabs: \(reason)"
             case .timeout: return "Tab Scout's Chrome extension did not answer. Try again."
+            case .outdated: return "Reload Tab Scout's extension on chrome://extensions, or restart Chrome, to use this command."
             }
         }
     }
@@ -143,6 +146,39 @@ final class ChromeExtensionLink {
                         }
                         // Other profiles cannot see the window; anything else is worth reporting.
                         if let error = reply["error"] as? String, error != "no-window" { failure = LinkError.refused(error) }
+                    case .failure(let error):
+                        if failure as? LinkError == .windowNotFound { failure = error }
+                    }
+                    if remaining == 0 { finish(.failure(failure)) }
+                }
+            }
+        }
+    }
+
+    /// Has the extension of the profile that has the window do `type`, such as "mute", and answers its reply.
+    /// Every connected profile is asked; the others cannot see the window and say so.
+    func perform(_ type: String, inWindow windowID: Int, timeout: TimeInterval = 5,
+                 completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        queue.async { [self] in
+            let finish = { (result: Result<[String: Any], Error>) in DispatchQueue.main.async { completion(result) } }
+            if let startError { return finish(.failure(LinkError.unavailable(startError))) }
+            guard !connections.isEmpty else { return finish(.failure(LinkError.notConnected)) }
+            var remaining = connections.count
+            var answered = false
+            var failure: Error = LinkError.windowNotFound
+            for connection in connections.keys {
+                request(["type": type, "windowId": windowID], on: connection, timeout: timeout) { result in
+                    remaining -= 1
+                    guard !answered else { return }
+                    switch result {
+                    case .success(let reply):
+                        guard let error = reply["error"] as? String else {
+                            answered = true
+                            return finish(.success(reply))
+                        }
+                        // An extension from before the request existed does not know it, whichever window is meant.
+                        if error == "unknown request" { failure = LinkError.outdated }
+                        else if error != "no-window", failure as? LinkError != .outdated { failure = LinkError.refused(error) }
                     case .failure(let error):
                         if failure as? LinkError == .windowNotFound { failure = error }
                     }

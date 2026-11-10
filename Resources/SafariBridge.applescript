@@ -104,6 +104,61 @@ on run argv
         return "ok"
     end if
 
+    -- Closes tabs given as window id, index and URL, the last first so that none still to close moves.
+    -- A tab no longer at its index with its URL stays open. Returns the zero-based positions closed.
+    if operation is "close" then
+        set closedSlots to {}
+        set total to ((count of argv) - 1) div 3
+        with timeout of 30 seconds
+            tell application "Safari"
+                repeat with slot from total to 1 by -1
+                    set base to (slot - 1) * 3 + 1
+                    set targetWindowID to (item (base + 1) of argv) as integer
+                    set targetIndex to (item (base + 2) of argv) as integer
+                    set targetURL to item (base + 3) of argv
+                    if exists window id targetWindowID then
+                        set browserWindow to window id targetWindowID
+                        if targetIndex <= (count of tabs of browserWindow) then
+                            set candidate to tab targetIndex of browserWindow
+                            set candidateURL to URL of candidate
+                            if candidateURL is missing value then set candidateURL to ""
+                            if my sameText(candidateURL, targetURL) then
+                                close candidate
+                                set beginning of closedSlots to (slot - 1)
+                            end if
+                        end if
+                    end if
+                end repeat
+            end tell
+        end timeout
+        return my integerListJSON(closedSlots)
+    end if
+
+    -- Opens addresses, given as window id and URL pairs, in background tabs at the end of their window, or of
+    -- the front window when theirs is gone. The tab on screen stays, and Safari is not brought forward.
+    if operation is "reopen" then
+        set total to ((count of argv) - 1) div 2
+        with timeout of 30 seconds
+            tell application "Safari"
+                repeat with slot from 1 to total
+                    set targetWindowID to (item (slot * 2) of argv) as integer
+                    set destination to item (slot * 2 + 1) of argv
+                    if (count of windows) is 0 then
+                        make new document with properties {URL:destination}
+                    else
+                        if targetWindowID is not 0 and (exists window id targetWindowID) then
+                            set browserWindow to window id targetWindowID
+                        else
+                            set browserWindow to front window
+                        end if
+                        make new tab at end of tabs of browserWindow with properties {URL:destination}
+                    end if
+                end repeat
+            end tell
+        end timeout
+        return total as text
+    end if
+
     if operation is "prepare-new-tab" then
         set targetWindowID to (item 2 of argv) as integer
         with timeout of 12 seconds
@@ -221,6 +276,21 @@ on rowsFromSnapshot(windowID, tabTitles, tabURLs, currentIndex)
     end repeat
     return windowRows
 end rowsFromSnapshot
+
+-- Text compared exactly: AppleScript otherwise ignores case, and two addresses can differ only by it.
+on sameText(oneText, otherText)
+    considering case
+        return oneText is otherText
+    end considering
+end sameText
+
+on integerListJSON(values)
+    set previousDelimiters to AppleScript's text item delimiters
+    set AppleScript's text item delimiters to ","
+    set joined to values as text
+    set AppleScript's text item delimiters to previousDelimiters
+    return "[" & joined & "]"
+end integerListJSON
 
 on excerpt(pageText, limit)
     if pageText is missing value then return ""

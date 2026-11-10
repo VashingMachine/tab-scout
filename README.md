@@ -2,7 +2,7 @@
 
 Find an open Safari or Chrome tab before opening another one.
 
-Tab Scout is a **native macOS menu-bar app**. Press **Cmd+T in Safari or Google Chrome** to open a focused search palette over the current page. It searches the tabs of the browser you are in, or of one Chrome profile, and a sideways swipe moves to the other browser or profile: picking a tab switches to it, and when nothing matches a new tab opens where you are. No browser extension is required; an optional one adds grouping of Chrome tabs.
+Tab Scout is a **native macOS menu-bar app**. Press **Cmd+T in Safari or Google Chrome** to open a focused search palette over the current page. It searches the tabs of the browser you are in, or of one Chrome profile, and a sideways swipe moves to the other browser or profile: picking a tab switches to it, and when nothing matches a new tab opens where you are. No browser extension is required; an optional one adds grouping, ungrouping and muting of Chrome tabs.
 
 ## Install
 
@@ -37,8 +37,14 @@ To update: `cd ~/projects/tabs-scout && git pull && bash deploy.sh`
 - Optionally search page text (off by default): pages you have viewed for a few seconds are read through the browser's scripting interface, so typing finds tabs that mention your words, with a snippet. Chrome allows this only with View > Developer > Allow JavaScript from Apple Events turned on. Pages you have not viewed are not read, so sleeping tabs stay asleep.
 - Ask in plain language by starting with `?`, such as `?the pull request I was reviewing before lunch`. On Macs with Apple Intelligence, the on-device model picks tabs from their titles, sites and when you last viewed them; picks come first and are labeled. Requests are never sent to Google or anywhere else.
 - Switch between Safari and each Chrome profile from the palette: swipe sideways with two fingers anywhere over it. Safari comes forward, or Chrome brings that profile's window forward, or opens one, as its own Profiles menu does, and the palette stays open. Each place is shown in its own color and woven pattern: Safari with its compass and ripples, a Chrome profile in the color Chrome gives it when it has one, otherwise one Tab Scout picks. Its name sits at the end of the search field, a dot per place in the footer, grouped by browser. In **Settings** each place can be hidden from swiping and given its own color and pattern.
+- Move between places from the keyboard too: Tab goes to the next place and Shift+Tab to the one before. With Option held, Tab or a swipe takes the tab on screen along, as the `move` command does.
+- Close a tab without leaving the palette: Command+W closes the selected tab in its browser, and the palette stays open on the next row. While nothing is typed, Command+Delete does the same.
 - Keep each browser and Chrome profile to itself: with more than one place to go, the palette lists only Safari's tabs over Safari and only the tabs of the profile in front over Chrome, and anything picked opens there. Telling a profile's windows apart needs Tab Scout's Chrome extension in each profile; without it, every Chrome tab is listed and the footer says so. History and recent searches are still shared by all profiles.
-- Run commands by starting with `` ` ``: the palette lists the commands of the browser it opened over instead of tabs. `group` sorts the front Chrome window's loose tabs into named tab groups by topic. Apple Intelligence picks the topics on this Mac; without it, tabs about the same ticket, pull request, repository or site are grouped. Chrome lets only extensions make tab groups, so this uses Tab Scout's small Chrome extension. Safari lets no other app make tab groups, so it has no commands yet.
+- Run commands by starting with `` ` ``: the palette lists the commands of the browser it opened over instead of tabs, and each row says what it would do now.
+  - `move` sends the tab on screen to another place, with a row per place: the page opens there first, then the original closes. Option+Enter keeps the original. The page is opened again there, so scroll position, form input and sign-in do not travel.
+  - `copy` copies the tab's address, and `copy link` a Markdown link with its title.
+  - `dupes` closes the extra tabs of pages open more than once and keeps the one on screen or viewed last. `sweep` closes tabs not viewed for 7 days, or for the number typed after it. `undo` reopens what a command or Command+W closed, in background tabs of the same window.
+  - In Chrome, `group` sorts the front window's loose tabs into named tab groups by topic: Apple Intelligence picks the topics on this Mac; without it, tabs about the same ticket, pull request, repository or site are grouped. `ungroup` takes the window's tabs out of their groups, and `mute` silences the profile's tabs that are playing sound, or gives the ones it muted their sound back. Chrome lets only extensions do these, so they use Tab Scout's small Chrome extension, and Safari lets no other app do them.
 - Learn how you pick: Tab Scout logs the signals behind each picked tab, as numbers only, and relearns its ranking weights every ten picks. Learned weights are used only when they rank your recent picks better than the standard ones. The menu shows how often your pick was ranked first.
 - Learn habits: which site usually follows the one on screen, and which sites belong to this hour of a weekday or weekend. Habits nudge empty-input order and break ties between equally good matches; glances while flicking through tabs do not count.
 - Center the native palette on the focused window of the browser in front when its geometry is available, with a screen-based fallback.
@@ -49,7 +55,7 @@ Tab Scout runs in the menu bar rather than the Dock. **Settings** opens on its *
 
 1. **Device Control and Data Access** (**Accessibility** before macOS 27), for the Cmd+T keyboard hook. Required.
 2. **Automation** for Safari and for Google Chrome, to read, select, and open their tabs. Each browser asks separately; a browser you do not allow is left out.
-3. Optionally the Chrome extension for the `group` command. **Add to Chrome** opens Chrome's Extensions page and shows the extension's folder in Finder: turn on Developer mode and drag the folder onto the page.
+3. Optionally the Chrome extension for the `group`, `ungroup` and `mute` commands. **Add to Chrome** opens Chrome's Extensions page and shows the extension's folder in Finder: turn on Developer mode and drag the folder onto the page.
 4. Optionally browser history, which needs **Full Disk Access**, to rank with Safari and Chrome history.
 5. Optionally **Start Tab Scout at login**.
 
@@ -71,7 +77,9 @@ With [Task](https://taskfile.dev) installed, `task deploy` runs the tests before
 - On an empty tab, such as the Start Page, an address, search, history page or suggestion opens in that tab instead of a second one beside it, and the New tab action keeps it.
 - Start with `?` to ask Apple Intelligence for a tab in your own words. While it answers, the request is also matched as ordinary text, and Enter on the search row searches it without the `?`.
 - With Safari and Chrome both open, or Chrome with more than one profile, swipe sideways with two fingers, turn a mouse wheel sideways, or click the name or a dot to switch between Safari and Chrome's profiles. Swiping up and down still scrolls the results. After a switch the list fades once to the new place's tabs and stays put until the palette closes; Enter pressed meanwhile waits for it.
-- Start with `` ` `` to list commands instead of tabs, and type to filter them; Enter runs the selected one. Only commands the browser you opened the palette over supports are listed.
+- Press Tab or Shift+Tab to switch place as a swipe does. Hold Option with Tab, or as a swipe ends, to move the tab on screen to that place; the footer names the place before you let go.
+- Command+W closes the selected tab and keeps the palette open; with nothing typed, Command+Delete does too. Typed text is still cleared by Command+Delete.
+- Start with `` ` `` to list commands instead of tabs, and type to filter them; Enter runs the selected one. Words after a command's name narrow it: `` `move work ``, `` `copy md ``, `` `sweep 14 ``. Only commands the browser you opened the palette over supports are listed. After `dupes`, `sweep`, `undo`, `ungroup` and `mute` the palette stays open and its footer says what was done.
 - Escape or Cmd+T dismisses the palette without changing tabs.
 - The refresh button updates results. Settings and permission checks are available from the menu bar.
 
@@ -79,7 +87,7 @@ Open tabs come first without a heading; Recent Searches, History, and Google Sug
 
 ## Privacy And Limits
 
-Tab titles and URLs are read through Safari's and Chrome's local scripting interfaces. Chrome's incognito windows are skipped entirely. Tab Scout does not read webpage bodies or form fields unless **Search Page Text** is enabled; then it reads the visible text of pages you have viewed, keeps at most 30,000 characters of each in memory only, never saves or sends it, and drops it when a tab closes, the option is turned off, or history is cleared. Tab snapshots, imported Safari history, and Google prediction caches stay in memory. Accepted choices, what Tab Scout learned from them (typed text per page, reading time, site habits) and the bounded favicon cache are stored locally; Clear Tab Scout History removes them.
+Tab titles and URLs are read through Safari's and Chrome's local scripting interfaces. Chrome's incognito windows are skipped entirely. Tab Scout does not read webpage bodies or form fields unless **Search Page Text** is enabled; then it reads the visible text of pages you have viewed, keeps at most 30,000 characters of each in memory only, never saves or sends it, and drops it when a tab closes, the option is turned off, or history is cleared. Tab snapshots, imported Safari history, and Google prediction caches stay in memory. Accepted choices, what Tab Scout learned from them (typed text per page, reading time, site habits), when each open page was first seen and last viewed (for `sweep`), and the bounded favicon cache are stored locally; Clear Tab Scout History removes them. The addresses of tabs a command closed stay in memory for `undo` until Tab Scout quits.
 
 Enabling Google Suggestions sends eligible typed search text to Google's public autocomplete endpoint before Enter. Requests use an ephemeral session without cookies, credentials, Safari's login session, or local history. Predictions are generic, not signed-in Google Account personalization. The undocumented endpoint is best-effort and may be unavailable. Submitted searches still use Safari's configured provider, or Google in Chrome.
 
@@ -87,7 +95,7 @@ History import is optional and read-only. It reads every Safari and Chrome profi
 
 Chrome's profiles are read from its Profiles menu through the keyboard permission's accessibility access, and their names and colors from Chrome's Local State file when Full Disk Access allows it. Switching presses the profile's item in that menu. Which profile a window belongs to is asked of Tab Scout's extension in each profile, which can see only its own profile's windows.
 
-Tab Scout's optional Chrome extension may read the titles and addresses of its profile's tabs, which Chrome describes as reading your browsing history. It uses them only when Tab Scout asks for one window's tabs to group them, and it talks only to `TabScoutChromeHost`, the helper inside Tab Scout.app that Chrome starts for it. The helper talks only to the running Tab Scout, through a socket only your user can open, and each checks the other's code signature. Topics are picked by Apple's on-device model; nothing is sent anywhere else.
+Tab Scout's optional Chrome extension may read the titles and addresses of its profile's tabs, which Chrome describes as reading your browsing history. It uses them only when Tab Scout asks: one window's tabs to group or ungroup them, and which of the profile's tabs play sound to mute them. It talks only to `TabScoutChromeHost`, the helper inside Tab Scout.app that Chrome starts for it. The helper talks only to the running Tab Scout, through a socket only your user can open, and each checks the other's code signature. Topics are picked by Apple's on-device model; nothing is sent anywhere else.
 
 The native scripting interface does not reliably identify private-browsing tabs. **Do not treat this app or its caches as a private-browsing boundary.** Avoid using it for activity that must not be recorded, and disable suggestions when typed text must remain local.
 
@@ -95,7 +103,7 @@ See [Native App Details](docs/NATIVE_COMPANION.md) for permissions, cache bounds
 
 ## Verification
 
-`bash test.sh` covers search, ranking, previous-tab tracking, Safari and Chrome history fixtures (including a locked Chrome database), keyboard decisions, palette placement, cache races, Google response handling, favicons, Safari bridge fixtures, the Chrome script against a stand-in for Chrome, commands, tab grouping, Chrome profiles from their menu and Local State, the profile swipe, and the link to the Chrome extension against stand-in extensions. With Apple Intelligence available, one grouping check asks the on-device model. Tests do not request permissions, touch a real browser, or read the user's real Safari history. Physical shortcut behavior needs a live check in Safari and Chrome.
+`bash test.sh` covers search, ranking, previous-tab tracking, Safari and Chrome history fixtures (including a locked Chrome database), keyboard decisions, palette placement, cache races, Google response handling, favicons, Safari bridge fixtures, the Chrome script against a stand-in for Chrome, commands, tab grouping, which tabs each place lists, closing and reopening tabs, duplicate and unviewed tabs, Chrome profiles from their menu and Local State, the profile swipe, and the link to the Chrome extension against stand-in extensions. With Apple Intelligence available, one grouping check asks the on-device model. Tests do not request permissions, touch a real browser, or read the user's real Safari history. Physical shortcut behavior needs a live check in Safari and Chrome.
 
 ## Repository Layout
 

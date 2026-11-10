@@ -13,6 +13,7 @@ struct BridgeTests {
         try actionArguments()
         try blankTabArguments()
         try chromeArguments()
+        try closingAndReopening()
         try defaultPageArguments()
         try defaultPageFailures()
         try serialization()
@@ -125,6 +126,36 @@ struct BridgeTests {
             [id, "switch", "7", "2", "chrome://newtab/", "New Tab"]
         ], "Chrome commands name the browser, search through Google, open Chrome's own new-tab page and reuse an empty tab")
         expect(calls.values.allSatisfy { $0.url == chromeURL }, "Chrome commands use Chrome's script")
+    }
+
+    static func closingAndReopening() throws {
+        let calls = CallRecorder()
+        var answer = "[0,2]"
+        let bridge = BrowserBridge(scriptURL: scriptURL, executor: { url, arguments in
+            calls.append(url: url, arguments: arguments)
+            return Data(answer.utf8)
+        })
+        let late = BrowserTab(windowID: 9, index: 4, title: "Late", url: "https://late.example/")
+        let early = BrowserTab(windowID: 9, index: 2, title: "Early", url: "https://early.example/?a=\"b\"")
+        let other = BrowserTab(windowID: 3, index: 7, title: "Other", url: "https://other.example/")
+        let closed = try awaitResult { bridge.close([late, other, early], completion: $0) }.get()
+        expect(calls.values.map(\.arguments) == [["close", "3", "7", other.url, "9", "2", early.url, "9", "4", late.url]],
+               "Tabs to close go by window and position, so the script can close the last first")
+        expect(closed == [other, late], "The positions the script answers are the tabs it closed")
+        answer = "[]"
+        try expect(awaitResult { bridge.close([late], completion: $0) }.get().isEmpty, "A tab that moved is reported as not closed")
+        answer = "[5,0,-1]"
+        try expect(awaitResult { bridge.close([late], completion: $0) }.get() == [late], "Positions outside the request are ignored")
+        answer = "ok"
+        expect((try? awaitResult { bridge.close([late], completion: $0) }.get()) == nil, "An answer that is not a list of positions fails")
+
+        let chrome = BrowserBridge(browser: .chrome, scriptURL: chromeURL, executor: { url, arguments in
+            calls.append(url: url, arguments: arguments)
+            return Data("2".utf8)
+        })
+        _ = try awaitResult { chrome.reopen([(windowID: 7, url: "https://a.example/"), (windowID: 0, url: "https://b.example/")], completion: $0) }.get()
+        expect(calls.values.last?.arguments == ["com.google.Chrome", "reopen", "7", "https://a.example/", "0", "https://b.example/"],
+               "Pages to reopen go with the window each was in")
     }
 
     static func defaultPageArguments() throws {

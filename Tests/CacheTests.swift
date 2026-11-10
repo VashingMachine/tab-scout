@@ -52,6 +52,12 @@ struct CacheTests {
         var emptyDelivered = false
         store.load { result in emptyDelivered = (try? result.get().tabs.isEmpty) == true }
         expect(emptyDelivered && pending.isEmpty, "Empty Safari inventory is a valid fresh cache hit")
+        date.addTimeInterval(30)
+        store.prewarm(olderThan: 60)
+        expect(pending.isEmpty, "A list read within the age asked for is not read again")
+        store.prewarm(olderThan: 20)
+        expect(pending.count == 1, "A list older than the age asked for is")
+        pending.removeFirst()(.success(TabInventory(tabs: [])))
         date.addTimeInterval(120)
         expect(store.snapshot == nil, "Sensitive tab metadata expires at retention boundary")
         var expiredDelivered = false

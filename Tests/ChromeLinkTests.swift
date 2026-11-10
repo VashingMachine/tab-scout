@@ -151,6 +151,9 @@ struct ChromeLinkTests {
                   switch request["type"] as? String {
                   case "tabs": return request["windowId"] as? Int == 7 ? ["tabs": tabList] : ["error": "no-window"]
                   case "group": return ["grouped": (request["groups"] as? [Any])?.count ?? 0]
+                  case "mute": return request["windowId"] as? Int == 7 ? ["muted": 2, "unmuted": 0] : ["error": "no-window"]
+                  case "ungroup": return ["error": "unknown request"]
+                  case "broken": return ["error": "tabs cannot be edited right now"]
                   default: return nil
                   }
               }) else { fatalError("The stand-in extensions could not connect") }
@@ -171,6 +174,20 @@ struct ChromeLinkTests {
         expect(request["windowId"] as? Int == 7 && sent?.first?["title"] as? String == "Trip" && sent?.first?["tabIds"] as? [Int] == [41, 43],
                "Groups go with their names and tabs")
         expect(!otherProfile.received.contains { $0["type"] as? String == "group" }, "Only the window's profile is asked to group")
+
+        func perform(_ type: String, window: Int) -> Result<[String: Any], Error> {
+            var result: Result<[String: Any], Error>?
+            link.perform(type, inWindow: window, timeout: 2) { result = $0 }
+            return wait { result }
+        }
+        func failure(_ result: Result<[String: Any], Error>) -> ChromeExtensionLink.LinkError? {
+            if case .failure(let error) = result { return error as? ChromeExtensionLink.LinkError }
+            return nil
+        }
+        expect((try? perform("mute", window: 7).get())?["muted"] as? Int == 2, "The profile that has the window does what is asked and answers")
+        expect(failure(perform("mute", window: 8)) == .windowNotFound, "A request about a window no profile has finds none")
+        expect(failure(perform("ungroup", window: 7)) == .outdated, "An extension that does not know a request is outdated")
+        expect(failure(perform("broken", window: 7)) == .refused("tabs cannot be edited right now"), "Chrome's own refusal is passed on")
 
         var asked: [Int: Int]?
         link.owners(of: [7, 8]) { asked = $0 }

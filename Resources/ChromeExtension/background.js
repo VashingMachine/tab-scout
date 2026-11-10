@@ -1,5 +1,6 @@
-// Lets the Tab Scout app on this Mac group this Chrome profile's tabs. Tab Scout picks the groups with Apple's
-// on-device model; this extension only lists the tabs of the window Tab Scout asks about and makes the groups.
+// Lets the Tab Scout app on this Mac group, ungroup and mute this Chrome profile's tabs. Tab Scout picks the
+// groups with Apple's on-device model; this extension only lists the tabs of the window Tab Scout asks about,
+// makes or dissolves the groups, and mutes tabs playing sound.
 // Messages pass through TabScoutChromeHost, the helper in Tab Scout.app that Chrome starts for native messaging.
 
 const HOST = 'local.tabscout.chrome';
@@ -30,6 +31,8 @@ async function handle(message) {
     try {
         if (message.type === 'tabs') return Object.assign({id: message.id}, await windowTabs(message.windowId));
         if (message.type === 'group') return {id: message.id, grouped: await group(message.windowId, message.groups)};
+        if (message.type === 'ungroup') return Object.assign({id: message.id}, await ungroup(message.windowId));
+        if (message.type === 'mute') return Object.assign({id: message.id}, await mute(message.windowId));
         return {id: message.id, error: 'unknown request'};
     } catch (error) {
         return {id: message.id, error: String((error && error.message) || error)};
@@ -74,6 +77,46 @@ async function group(windowId, groups) {
 // Tabs closed, pinned, grouped or moved to another window since Tab Scout listed them stay where they are.
 function movable(tabs, windowId) {
     return tabs.filter(tab => tab && tab.windowId === windowId && !tab.pinned && tab.groupId === NO_GROUP).map(tab => tab.id);
+}
+
+// Takes every grouped tab of the window out of its group; the tabs stay where they are.
+async function ungroup(windowId) {
+    let window;
+    try {
+        window = await chrome.windows.get(windowId, {populate: true});
+    } catch (error) {
+        return {error: 'no-window'};
+    }
+    const tabIds = grouped(window.tabs || []);
+    if (tabIds.length > 0) await chrome.tabs.ungroup(tabIds);
+    return {ungrouped: tabIds.length};
+}
+
+function grouped(tabs) {
+    return tabs.filter(tab => tab.groupId !== NO_GROUP).map(tab => tab.id);
+}
+
+// Mutes this profile's tabs that are playing sound. With none playing, the tabs it muted get their sound back.
+// Only the profile that has the window answers, as for grouping.
+async function mute(windowId) {
+    try {
+        await chrome.windows.get(windowId);
+    } catch (error) {
+        return {error: 'no-window'};
+    }
+    const plan = muting(await chrome.tabs.query({}), chrome.runtime.id);
+    await Promise.all(plan.tabIds.map(id => chrome.tabs.update(id, {muted: plan.muted})));
+    return plan.muted ? {muted: plan.tabIds.length, unmuted: 0} : {muted: 0, unmuted: plan.tabIds.length};
+}
+
+// The tabs to change: those playing sound are muted. When none is, the ones this extension muted are unmuted;
+// a tab the person muted in Chrome stays muted.
+function muting(tabs, extensionId) {
+    const silenced = tab => Boolean(tab.mutedInfo && tab.mutedInfo.muted);
+    const sounding = tabs.filter(tab => tab.audible && !silenced(tab));
+    if (sounding.length > 0) return {muted: true, tabIds: sounding.map(tab => tab.id)};
+    const own = tabs.filter(tab => silenced(tab) && tab.mutedInfo.reason === 'extension' && tab.mutedInfo.extensionId === extensionId);
+    return {muted: false, tabIds: own.map(tab => tab.id)};
 }
 
 // Chrome stops an idle extension, but keeps it running while it is connected to the helper.

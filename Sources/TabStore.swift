@@ -63,8 +63,9 @@ final class TabStore {
         refresh()
     }
 
-    func prewarm() {
-        if let snapshot, now().timeIntervalSince(snapshot.fetchedAt) < freshFor { return }
+    /// Reads the tabs again unless they were read within `age` seconds, or within the time they count as fresh.
+    func prewarm(olderThan age: TimeInterval? = nil) {
+        if let snapshot, now().timeIntervalSince(snapshot.fetchedAt) < age ?? freshFor { return }
         refresh()
     }
 

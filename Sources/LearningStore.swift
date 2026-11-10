@@ -6,12 +6,14 @@ struct LearningState: Codable, Equatable {
     var engagement = Engagement()
     var habits = Habits()
     var ranking = RankingLog()
+    var sightings = TabSightings()
 
     init() {}
 
     // Each part decodes on its own, so a file written before a part existed still loads.
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        sightings = try values.decodeIfPresent(TabSightings.self, forKey: .sightings) ?? TabSightings()
         affinity = try values.decodeIfPresent(QueryAffinity.self, forKey: .affinity) ?? QueryAffinity()
         engagement = try values.decodeIfPresent(Engagement.self, forKey: .engagement) ?? Engagement()
         habits = try values.decodeIfPresent(Habits.self, forKey: .habits) ?? Habits()

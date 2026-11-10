@@ -15,6 +15,8 @@ function dispatch(app, operation, args) {
     if (operation === 'switch') return select(app, Number(args[0]), Number(args[1]), args[2], args[3]);
     if (operation === 'url') return open(app, Number(args[0]), args[1], Number(args[2] || 0), args[3]);
     if (operation === 'new-tab') return open(app, Number(args[0]), null, 0, '');
+    if (operation === 'close') return close(app, args);
+    if (operation === 'reopen') return reopen(app, args);
     throw new Error('Unknown command');
 }
 
@@ -118,6 +120,43 @@ function open(app, windowID, destination, reuseIndex, reuseURL) {
     }
     bringForward(app, browserWindow);
     return 'ok';
+}
+
+// Closes the tabs given as window id, index and address, the last first so that none still to close moves.
+// A tab no longer at its index with its address stays open. Answers the positions closed.
+function close(app, args) {
+    const closed = [];
+    for (let position = Math.floor(args.length / 3) - 1; position >= 0; position--) {
+        const browserWindow = normalWindow(app, Number(args[position * 3]));
+        const index = Number(args[position * 3 + 1]);
+        if (!browserWindow || index < 1 || index > browserWindow.tabs.length) continue;
+        const tab = browserWindow.tabs[index - 1];
+        if ((tab.url() || '') !== args[position * 3 + 2]) continue;
+        tab.close();
+        closed.unshift(position);
+    }
+    return JSON.stringify(closed);
+}
+
+// Opens addresses, given as window id and address pairs, in background tabs at the end of their window, or of
+// the front normal window when theirs is gone. The tab on screen stays, and Chrome is not brought forward.
+function reopen(app, args) {
+    const count = Math.floor(args.length / 2);
+    for (let pair = 0; pair < count; pair++) {
+        const url = args[pair * 2 + 1];
+        const browserWindow = normalWindow(app, Number(args[pair * 2]))
+            || app.windows().find(candidate => candidate.mode() === 'normal');
+        if (!browserWindow) {
+            // A new window starts with one new-tab page, which the first address takes.
+            app.Window().make();
+            app.windows[0].activeTab.url = url;
+            continue;
+        }
+        const active = browserWindow.activeTabIndex();
+        browserWindow.tabs.push(app.Tab({url: url}));
+        browserWindow.activeTabIndex = active;
+    }
+    return String(count);
 }
 
 function normalWindow(app, windowID) {

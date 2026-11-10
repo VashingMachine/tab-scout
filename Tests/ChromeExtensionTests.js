@@ -27,9 +27,27 @@ function run(argv) {
                                    {id: 4, windowId: 5, pinned: false, groupId: 2}, loose(5, 5)], 5)) === '[1,5]',
            'Closed, moved, pinned and already grouped tabs are left alone');
 
+    expect(JSON.stringify(grouped([loose(1, 5), {id: 4, windowId: 5, pinned: false, groupId: 2}, {id: 6, windowId: 5, pinned: true, groupId: 3}])) === '[4,6]',
+           'Ungrouping takes every tab that is in a group, and no other');
+
+    const me = 'tabscout';
+    const sound = (id, audible, mutedInfo) => ({id, audible, mutedInfo});
+    const mine = {muted: true, reason: 'extension', extensionId: me};
+    expect(JSON.stringify(muting([sound(1, true, {muted: false}), sound(2, false, {muted: false}), sound(3, true, mine), sound(4, true)], me))
+           === JSON.stringify({muted: true, tabIds: [1, 4]}), 'Tabs playing sound are muted; silent and already muted ones are left');
+    expect(JSON.stringify(muting([sound(2, false, {muted: false}), sound(3, true, mine), sound(5, false, mine),
+                                  sound(6, true, {muted: true, reason: 'user'}), sound(7, true, {muted: true, reason: 'extension', extensionId: 'other'})], me))
+           === JSON.stringify({muted: false, tabIds: [3, 5]}),
+           'With nothing playing, only the tabs this extension muted get their sound back, not ones muted by hand or by another extension');
+    expect(JSON.stringify(muting([sound(2, false, {muted: false})], me)) === JSON.stringify({muted: false, tabIds: []}),
+           'With nothing playing or muted there is nothing to do');
+
     const manifest = JSON.parse(read('manifest.json'));
     expect(manifest.manifest_version === 3 && manifest.background.service_worker === 'background.js',
            'The manifest runs background.js as its service worker');
     expect(read('background.js').includes("const HOST = 'local.tabscout.chrome';"), 'The extension connects to the helper Tab Scout installs');
+    expect(manifest.version === '1.1' && ['ungroup', 'mute'].every(type => read('background.js').includes("message.type === '" + type + "'")),
+           'The version tells this extension, which also ungroups and mutes, from the first');
+    expect(read('background.js').includes("error: 'unknown request'"), 'A request it does not know is answered as such, which Tab Scout reads as an outdated extension');
     return 'Passed ' + checks + ' Chrome extension checks';
 }

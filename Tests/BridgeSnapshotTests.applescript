@@ -30,7 +30,11 @@ on run argv
     my expect((bridge's excerpt(missing value, 5)) is "", "A tab without text gives empty text")
     my expect((bridge's excerpt("abcdefgh", 5)) is "abcde", "Long page text is cut to the limit")
     my expect((bridge's excerpt("abc", 5)) is "abc", "Short page text is kept whole")
-    return "Passed 19 AppleScript snapshot checks"
+    my expect(bridge's sameText("https://example.org/A", "https://example.org/A"), "Equal addresses are the same")
+    my expect(not (bridge's sameText("https://example.org/A", "https://example.org/a")), "Addresses differing only by case are not, so the wrong tab is never closed")
+    my expect((bridge's integerListJSON({})) is "[]", "No closed tabs serialize as an empty JSON list")
+    my expect((bridge's integerListJSON({0, 2, 11})) is "[0,2,11]", "Closed positions serialize as a JSON list")
+    return "Passed 23 AppleScript snapshot checks"
 end run
 
 on expect(condition, messageText)

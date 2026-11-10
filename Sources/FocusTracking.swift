@@ -73,6 +73,9 @@ struct Engagement: Codable, Equatable {
         }
     }
 
+    /// When a normalized URL was last read, while it is still remembered.
+    func lastSeen(url: String) -> Date? { entries[url]?.lastSeen }
+
     /// Between 0 and 1 for a normalized URL.
     func strength(url: String, now: Date) -> Double {
         guard let entry = entries[url] else { return 0 }

@@ -25,6 +25,9 @@ done
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/Commands.swift" \
     "$SOURCE_DIR/Tests/CommandTests.swift" -o "$WORK_DIR/CommandTests"
 "$WORK_DIR/CommandTests"
+/usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/History.swift" \
+    "$SOURCE_DIR/Sources/TabTidy.swift" "$SOURCE_DIR/Tests/TabTidyTests.swift" -lsqlite3 -o "$WORK_DIR/TabTidyTests"
+"$WORK_DIR/TabTidyTests"
 GROUPING=("$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/RelatedTabs.swift" "$SOURCE_DIR/Sources/TabGrouping.swift")
 /usr/bin/xcrun swiftc -swift-version 5 "${GROUPING[@]}" "$SOURCE_DIR/Tests/TabGroupingTests.swift" -o "$WORK_DIR/TabGroupingTests"
 "$WORK_DIR/TabGroupingTests"
@@ -43,7 +46,7 @@ GROUPING=("$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/RelatedTabs.swif
 /usr/bin/xcrun swiftc -swift-version 5 -O "${RANKING[@]}" "$SOURCE_DIR/Tests/HistoryRankingTests.swift" \
     -lsqlite3 -o "$WORK_DIR/HistoryRankingTests"
 "$WORK_DIR/HistoryRankingTests"
-/usr/bin/xcrun swiftc -swift-version 5 "${RANKING[@]}" "$SOURCE_DIR/Sources/LearningStore.swift" \
+/usr/bin/xcrun swiftc -swift-version 5 "${RANKING[@]}" "$SOURCE_DIR/Sources/LearningStore.swift" "$SOURCE_DIR/Sources/TabTidy.swift" \
     "$SOURCE_DIR/Tests/LearningTests.swift" -lsqlite3 -o "$WORK_DIR/LearningTests"
 "$WORK_DIR/LearningTests"
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/History.swift" \

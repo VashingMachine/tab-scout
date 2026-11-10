@@ -85,6 +85,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var activeOverride: BrowserTab?
     /// From a profile switch until its tabs are listed; Enter pressed meanwhile waits for them.
     private var awaitingProfileTabs = false
+    /// Counts place switches, so the answer to an earlier one cannot undo a later one.
+    private var switchSerial = 0
+    /// Whether the swipe under way takes the tab on screen along, as holding Option makes it.
+    private var carrying = false
+    /// The tabs each command closed, the latest last, for `undo`. Kept until Tab Scout quits.
+    private var closedBatches: [[BrowserTab]] = []
+    /// What the last command did, shown in the footer until something is typed.
+    private var notice: String?
+    /// Whether the footer is saying where an Option swipe would take the tab.
+    private var carryHint = false
     /// How many profiles Chrome had when last read. With more than one, the palette over Chrome lists only the profile
     /// in front.
     private var chromeProfileCount = 0
@@ -238,6 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                     self.deniedBrowsers.remove(browser)
                 }
                 if browser == .chrome { self.learnWindowOwners(Set(snapshot.tabs.map(\.windowID))) }
+                self.noteOpen(snapshot.tabs, in: browser)
                 guard browser == self.lastBrowser, let active = snapshot.active else { return }
                 self.observeFocus(active)
             }
@@ -277,6 +288,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         terminationObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] note in
             guard let self, !self.preview, let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                   let browser = Browser(bundleID: app.bundleIdentifier) else { return }
+            // A second copy that hands over to the running browser and exits, as Chrome started for a profile or
+            // by a link opener does, is not the browser quitting.
+            guard !NSRunningApplication.runningApplications(withBundleIdentifier: browser.bundleID)
+                .contains(where: { $0.processIdentifier != app.processIdentifier && !$0.isTerminated }) else { return }
             self.stores[browser]?.invalidate()
             if self.focusTracker.current?.browser == browser { self.pauseFocus() }
             self.focusObservers[browser]?.stop()
@@ -319,7 +334,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 guard let self else { return }
                 if self.stores.values.allSatisfy({ $0.snapshot == nil }) { self.clearResults() }
                 if self.panel.isVisible && !self.acting && !self.loading && !self.listFrozen { self.loadTabs() }
-                else if let browser = self.frontBrowser, self.allowedBrowsers.contains(browser) { self.stores[browser]?.prewarm() }
+                // Tabs change when one opens or navigates, which reading the tab on screen notices; this only keeps
+                // a list at hand for the next Cmd+T.
+                else if let browser = self.frontBrowser, self.allowedBrowsers.contains(browser) { self.stores[browser]?.prewarm(olderThan: 60) }
             }
             if eventTap == nil { showSetup(nil) }
         }
@@ -449,6 +466,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             if case .success(let tab) = result, self.frontBrowser == browser, let tab {
                 self.observeFocus(tab)
                 self.followFrontTab(tab)
+                // A tab the list at hand does not have was opened or navigated, so the list is read again.
+                if let listed = self.stores[browser]?.snapshot?.tabs,
+                   !listed.contains(where: { $0.windowID == tab.windowID && $0.index == tab.index && $0.url == tab.url }) {
+                    self.stores[browser]?.prewarm(olderThan: 15)
+                }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
                 self.activeReadInFlight = false
@@ -462,6 +484,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         focusHistory.focus(tab)
         lastSeen[PageTextIndex.Key(tab)] = Date()
         if lastSeen.count > 500 { lastSeen = lastSeen.filter { $0.value > Date().addingTimeInterval(-7 * 86_400) } }
+        // A busy page title reports the same tab over and over; once a minute is exact enough for `sweep`.
+        let viewed = learning.state.sightings.entry(for: tab)?.lastViewed
+        if !preview, TabSightings.key(tab) != nil, viewed.map({ Date().timeIntervalSince($0) > 60 }) ?? true {
+            learning.update { $0.sightings.view(tab, at: Date()) }
+        }
         if frontBrowser == tab.browser, let visit = focusTracker.observe(tab, at: Date()) { recordVisit(visit) }
         // A page looked at for a few seconds has loaded; reading only viewed pages never wakes sleeping tabs.
         guard pageTextEnabled, !preview, !pageTextUnavailable.contains(tab.browser) else { return }
@@ -472,6 +499,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
     }
 
+    /// Starts the clock of pages seen open for the first time and forgets closed ones, for `sweep`. An empty list
+    /// may only mean the browser is closed, so it forgets nothing.
+    private func noteOpen(_ tabs: [BrowserTab], in browser: Browser) {
+        guard !preview, !tabs.isEmpty else { return }
+        var sightings = learning.state.sightings
+        if sightings.note(open: tabs, in: browser, at: Date()) { learning.update { $0.sightings = sightings } }
+    }
+
+    /// When a tab was last seen, for `sweep`; nil without any record of it. Reading time remembers pages from
+    /// before tabs were noted.
+    private func lastViewed(_ tab: BrowserTab) -> Date? {
+        let state = learning.state
+        let read = HistoryIdentity.url(tab.url).flatMap { state.engagement.lastSeen(url: $0) }
+        return state.sightings.lastSeen(tab, read: [read, lastSeen[PageTextIndex.Key(tab)]].compactMap { $0 }.max())
+    }
+
     private func readPageText(_ tab: BrowserTab) {
         guard pageText.needsReading(tab, now: Date()), !pageTextQueue.contains(where: { PageTextIndex.Key($0) == PageTextIndex.Key(tab) }) else { return }
         pageTextQueue.append(tab)
@@ -479,7 +522,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     private func readNextPageText() {
-        guard pageTextEnabled, !pageTextReading, !pageTextQueue.isEmpty else { return }
+        guard pageTextEnabled, !pageTextReading else { return }
+        // A page queued again while its first read ran needs no second one.
+        while let next = pageTextQueue.first, !pageText.needsReading(next, now: Date()) { pageTextQueue.removeFirst() }
+        guard !pageTextQueue.isEmpty else { return }
         let tab = pageTextQueue.removeFirst()
         pageTextReading = true
         bridge(tab.browser).text(of: tab) { [weak self] result in
@@ -668,7 +714,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         if panel.isVisible { dismiss(restoreFocus: true); return }
         let opened = DispatchTime.now()
         returnApp = NSWorkspace.shared.frontmostApplication
+        syncFrontBrowser(returnApp)
         searchField.stringValue = ""
+        notice = nil
+        carrying = false
         remoteSuggestions = []
         let mouse = NSEvent.mouseLocation
         let screens = NSScreen.screens
@@ -689,6 +738,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         loadProfiles()
         reloadHistory()
         DispatchQueue.main.async { Timing.log("open", since: opened) }
+    }
+
+    /// Puts the palette over the browser in front, even when its activation has not been reported yet. Opened from
+    /// the menu bar while the browser last used is closed, it goes to one still open.
+    private func syncFrontBrowser(_ front: NSRunningApplication?) {
+        guard !preview else { return }
+        if let browser = Browser(bundleID: front?.bundleIdentifier) {
+            if frontBrowser != nil && frontBrowser != browser { pauseFocus() }
+            frontBrowser = browser
+            lastBrowser = browser
+        } else if !isRunning(lastBrowser), let other = Browser.allCases.first(where: { $0 != lastBrowser && isRunning($0) }) {
+            lastBrowser = other
+        }
+        PaletteLog.note("open over \(lastBrowser.rawValue), front app \(front?.bundleIdentifier ?? "none")")
     }
 
     @objc private func refresh(_ sender: Any?) {
@@ -787,7 +850,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     /// A browser asked for tabs that has not answered once, so its tabs are missing rather than stale.
-    private var awaitingTabs: Bool { waiting.contains { snapshots[$0] == nil } }
+    private var awaitingAnyTabs: Bool { waiting.contains { snapshots[$0] == nil } }
+
+    /// Whether the place the palette is in still waits for its tabs. Another browser's tabs are not listed here,
+    /// so Enter does not wait for them.
+    private var awaitingTabs: Bool { waiting.contains(lastBrowser) && snapshots[lastBrowser] == nil }
 
     private func didLoad(_ browser: Browser, _ result: Result<TabSnapshot, Error>, token: Int) {
         guard token == requestID, panel.isVisible else { return }
@@ -852,7 +919,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         relatedTabs = RelatedTabs.relations(to: active, in: listed)
         // Until every browser has answered, the text of a missing browser's pages is kept; so is the text of tabs
         // another profile lists.
-        if !awaitingTabs { pageText.retain(combined.tabs) }
+        if !awaitingAnyTabs { pageText.retain(combined.tabs) }
         let habits = learning.state.habits
         let from = active.flatMap { Habits.site($0.url) }
         tabTransition = [:]
@@ -873,6 +940,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     func controlTextDidChange(_ obj: Notification) {
         pendingActivation = nil
+        notice = nil
         remoteSuggestions = []
         requestAssistant()
         if ready { updateRows() }
@@ -1035,21 +1103,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                         profilesUnseparated ? "Add Tab Scout's Chrome extension to each profile to list only the tabs of the profile in front." : nil]
             + failed.map { browser in browserErrors[browser].map { describe($0, browser) } }
         footer.toolTip = problems.compactMap { $0 }.isEmpty ? nil : problems.compactMap { $0 }.joined(separator: "\n")
+        if let notice { footer.stringValue = notice }
     }
 
     /// Lists the commands of the browser the palette opened over instead of tabs and pages.
     private func showCommands(matching text: String, keeping selected: SearchRow?) {
-        rows = PaletteCommand.matches(text, in: lastBrowser).map(SearchRow.command)
+        rows = PaletteCommand.choices(text, context: commandContext()).map(SearchRow.command)
         shownFeatures = [:]
         table.reloadData()
-        if let row = selected.flatMap({ rows.firstIndex(of: $0) }) ?? ResultNavigation.first(in: rows) {
+        // A row keeps the selection while its count changes, as after tabs were closed.
+        let kept = selected.flatMap { previous -> Int? in
+            guard case .command(let old) = previous else { return nil }
+            return rows.firstIndex {
+                if case .command(let choice) = $0 { return choice.command == old.command && choice.option == old.option }
+                return false
+            }
+        }
+        if let row = kept ?? ResultNavigation.first(in: rows) {
             table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
             table.scrollRowToVisible(row)
         }
-        let offered = PaletteCommand.matches("", in: lastBrowser)
-        emptyLabel.stringValue = !rows.isEmpty ? "" : offered.isEmpty ? "\(lastBrowser.name) has no commands yet" : "No matching command"
-        footer.stringValue = offered.isEmpty ? "Commands" : "Commands for \(lastBrowser.name)"
+        emptyLabel.stringValue = rows.isEmpty ? "No matching command" : ""
+        footer.stringValue = notice ?? "Commands for \(lastBrowser.name)"
         footer.toolTip = nil
+    }
+
+    /// What the commands would act on now: the places a tab can move to and how much there is to tidy.
+    private func commandContext() -> CommandContext {
+        var context = CommandContext(browser: lastBrowser)
+        context.places = otherPlaces.map { CommandPlace(id: $0.profile.id, name: $0.profile.name) }
+        context.duplicates = TabTidy.duplicates(in: tabs, active: activeTab, recent: focusOrder).count
+        let now = Date()
+        context.stale = { [tabs, activeTab] days in
+            TabTidy.stale(in: tabs, active: activeTab, days: days, now: now, lastSeen: { self.lastViewed($0) }).count
+        }
+        context.undoable = closedBatches.last?.count ?? 0
+        return context
+    }
+
+    /// The places other than the one the palette is in, the next one first, as Tab goes through them.
+    private var otherPlaces: [(index: Int, profile: BrowserProfile)] {
+        guard let state = profileState, state.profiles.count > 1 else { return [] }
+        return (1..<state.profiles.count).map { (spaceIndex + $0) % state.profiles.count }.map { ($0, state.profiles[$0]) }
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
@@ -1110,8 +1205,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                            url: nil, image: symbol("clock"), tint: .secondaryLabelColor)
         case .suggestion(let query):
             cell.configure(title: query, detail: "Google", url: nil, image: symbol("magnifyingglass"), tint: .secondaryLabelColor)
-        case .command(let command):
-            cell.configure(title: command.name, detail: command.summary, url: nil, image: symbol("rectangle.3.group"), tint: .systemBlue)
+        case .command(let choice):
+            // A move shows where it goes: the place's own badge, as the pill and the dots draw it.
+            let place = choice.command == .move ? profileState?.profiles.first { $0.id == choice.option } : nil
+            let badge = place.map { ProfileArt.badge($0, diameter: 20) }
+            cell.configure(title: choice.title, detail: choice.detail, url: nil,
+                           image: badge ?? symbol(choice.command.symbol) ?? symbol("command"), tint: badge == nil ? .systemBlue : nil)
         case .history(let visit):
             let image = preview ? nil : favicons.imageFor(url: visit.url)
             cell.configure(title: visit.title.isEmpty ? visit.url : visit.title,
@@ -1137,6 +1236,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         if event.type == .flagsChanged { holdShift(ResultKeyboard.holdsShiftAlone(flags)); return event }
         if event.keyCode == 53 { if !acting { dismiss(restoreFocus: true) }; return nil }
         if event.keyCode == 17 && flags == .command { if !acting { dismiss(restoreFocus: true) }; return nil }
+        if ResultKeyboard.closesTab(keyCode: event.keyCode, flags: flags, typed: !searchField.stringValue.isEmpty) {
+            closeSelectedTab()
+            return nil
+        }
+        if let move = ResultKeyboard.placeStep(keyCode: event.keyCode, flags: flags) {
+            stepPlace(by: move.step, carrying: move.carries)
+            return nil
+        }
         if event.keyCode == 36 || event.keyCode == 76 {
             activate(forceNew: ResultKeyboard.forcesNewTab(flags))
             return nil
@@ -1174,6 +1281,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             }
             self.showProfiles(BrowserSpaces.combine(safari: self.isRunning(.safari), chrome: state, chromeRunning: true,
                                                     front: self.lastBrowser))
+            // Commands typed before the places were read list them now.
+            if self.ready, PaletteCommand.query(in: self.searchField.stringValue) != nil { self.updateRows(preserveSelection: true) }
         }
     }
 
@@ -1248,9 +1357,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let dx = Double(event.scrollingDeltaX)
         let dy = Double(event.scrollingDeltaY)
         // A mouse wheel turned sideways, or a device without gestures, moves one profile per turn.
+        let option = event.modifierFlags.contains(.option)
         if event.phase.isEmpty {
             guard profileSwipe.step(dx: dx, dy: dy, time: time) else { return event }
             startProfileTimer()
+            carrying = option
             requestProfile(profileSwipe.target, after: 0.35)
             return nil
         }
@@ -1259,17 +1370,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             stopProfileTimer()
             profileSwitch?.cancel()
             profileSwitch = nil
+            carrying = false
             profileSwipe.touch()
         }
         if !event.phase.isDisjoint(with: [.ended, .cancelled]) {
             let swiped = profileSwipe.release(time: time)
             startProfileTimer()
+            // Option held as the fingers lift takes the tab on screen to the place the swipe settles on.
+            carrying = swiped && option && !event.phase.contains(.cancelled)
             requestProfile(profileSwipe.target, after: 0.12)
+            if profileSwipe.target == spaceIndex { showCarryHint(nil) }
             return swiped ? nil : event
         }
         guard profileSwipe.scroll(dx: dx, dy: dy, time: time) else { return event }
         applyProfilePosition()
+        showCarryHint(option ? Int(profileSwipe.position.rounded()) : nil)
         return nil
+    }
+
+    /// While Option is held during a swipe, the footer says where the tab on screen would go.
+    private func showCarryHint(_ place: Int?) {
+        if let place, let state = profileState, state.profiles.indices.contains(place), place != spaceIndex {
+            carryHint = true
+            footer.stringValue = "Release to move this tab to \(state.profiles[place].name)"
+        } else if carryHint {
+            carryHint = false
+            if ready { updateRows(preserveSelection: true) }
+        }
+    }
+
+    /// Tab and Shift+Tab go to the next place or the one before, around the ends; with Option the tab on screen
+    /// goes along.
+    private func stepPlace(by step: Int, carrying: Bool) {
+        let count = profileSwipe.count
+        guard count > 1, !acting else { return }
+        let next = ((profileSwipe.target + step) % count + count) % count
+        if carrying { moveTab(toPlace: next, keep: false) } else { moveProfile(to: next) }
     }
 
     /// Goes to a profile picked by a click on the pill or a dot.
@@ -1277,6 +1413,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         guard profileSwipe.count > 1, !acting else { return }
         profileSwipe.move(to: index)
         startProfileTimer()
+        carrying = false
         requestProfile(profileSwipe.target, after: 0.12)
     }
 
@@ -1314,9 +1451,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         profileSwitch?.cancel()
         profileSwitch = nil
         guard index != spaceIndex else { return }
+        let carried = carrying
         let work = DispatchWorkItem { [weak self] in
-            self?.profileSwitch = nil
-            self?.switchProfile(to: index)
+            guard let self else { return }
+            self.profileSwitch = nil
+            self.carrying = false
+            if carried { self.moveTab(toPlace: index, keep: false) } else { self.switchProfile(to: index) }
         }
         profileSwitch = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
@@ -1331,6 +1471,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         if preview { footer.stringValue = "Preview only"; return }
         freezeList()
         profileSwitching = true
+        switchSerial += 1
+        let serial = switchSerial
         keepPanelUntil = Date().addingTimeInterval(3)
         // The tabs being left dim until the new place's replace them.
         let leaving = activeTab
@@ -1343,6 +1485,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let finish = { [weak self] (result: Result<Void, Error>) in
             guard let self else { return }
             Timing.log("profile switch", since: started)
+            // A later switch has taken over. Should its browser have come forward first, it does so again.
+            guard serial == self.switchSerial else {
+                if self.panel.isVisible, !self.profileSwitching, let latest = self.profileState?.profiles,
+                   latest.indices.contains(self.spaceIndex), latest[self.spaceIndex].browser != space.browser {
+                    self.bringForward(latest[self.spaceIndex].browser) { _ in }
+                }
+                return
+            }
             self.profileSwitching = false
             guard self.panel.isVisible else { return }
             switch result {
@@ -1428,6 +1578,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     /// changes only when the tabs listed or the one on screen do; after a switch it fades from one profile to the next.
     private func rescope(fade: Bool) {
         defer { if fade { restoreResults() } }
+        // A place swiped to before its tabs arrived is listed from what its browser has answered since.
+        if snapshots[lastBrowser] == nil, let read = stores[lastBrowser]?.snapshot { snapshots[lastBrowser] = read }
         guard ready, panel.isVisible, !snapshots.isEmpty else { return }
         let combined = CombinedTabs(snapshots, front: lastBrowser)
         let active = activeOverride ?? combined.active
@@ -1456,27 +1608,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         activate(forceNew: forceNew)
     }
 
-    /// Whether the palette lists one place at a time, Safari or one Chrome profile: whenever there is more than one.
-    private var spacesApart: Bool {
-        if preview { return (profileState?.profiles.count ?? 0) > 1 }
-        return (isRunning(.safari) ? 1 : 0) + (isRunning(.chrome) ? max(chromeProfileCount, 1) : 0) > 1
-    }
-
     /// Only the place the palette is in, so every pick stays there: Safari's tabs, or the tabs of the Chrome profile in
     /// front. A Chrome profile's windows are those its copy of Tab Scout's extension sees; without the extension,
     /// every Chrome tab is listed.
     private func profileTabs(_ all: [BrowserTab], active: BrowserTab?) -> [BrowserTab] {
-        profilesUnseparated = false
-        guard spacesApart else { return all }
-        let browserTabs = all.filter { $0.browser == lastBrowser }
-        guard lastBrowser == .chrome, chromeProfileCount > 1 else { return browserTabs }
-        let chrome = browserTabs
-        guard let front = active?.browser == .chrome ? active?.windowID : chrome.first?.windowID else { return chrome }
-        guard let windows = ProfileWindows.current(front: front, windows: chrome.map(\.windowID), owners: windowOwners) else {
-            profilesUnseparated = true
-            return chrome
-        }
-        return chrome.filter { windows.contains($0.windowID) }
+        let listing = PlaceScope.listing(all, in: lastBrowser, chromeProfiles: chromeProfileCount, active: active,
+                                         owners: windowOwners)
+        profilesUnseparated = listing.unseparated
+        return listing.tabs
     }
 
     /// Asks the profiles' extensions which of them sees each Chrome window not yet known, then lists the tabs again
@@ -1530,7 +1669,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let typed = searchField.stringValue
         // Enter and Cmd+Enter both run the selected command; the "`" text never opens as a page.
         if PaletteCommand.query(in: typed) != nil {
-            if rows.indices.contains(table.selectedRow), case .command(let command) = rows[table.selectedRow] { run(command) }
+            if rows.indices.contains(table.selectedRow), case .command(let choice) = rows[table.selectedRow] { run(choice) }
             return
         }
         let offeredTabs = rows.contains { if case .tab = $0 { return true }; return false }
@@ -1551,6 +1690,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         case .previousTab(let tab), .tab(let tab): tab.browser
         default: lastBrowser
         }
+        // A place swiped to a moment ago gives way to the pick.
+        profileSwitch?.cancel()
+        profileSwitch = nil
+        let kind = switch row {
+        case .previousTab: "previous tab"
+        case .tab: "tab"
+        case .newTab: "new tab"
+        case .history: "history page"
+        default: "search"
+        }
+        PaletteLog.note("pick \(kind) in \(target.rawValue) over \(lastBrowser.rawValue); \(tabs.count) tabs listed, "
+                        + "\(tabs.filter { $0.browser != lastBrowser }.count) of another browser")
         acting = true
         searchField.isEnabled = false
         retryButton.isEnabled = false
@@ -1605,10 +1756,294 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
     }
 
-    private func run(_ command: PaletteCommand) {
+    private func run(_ choice: CommandChoice) {
         if preview { footer.stringValue = "Preview only"; return }
-        switch command {
+        PaletteLog.note("command \(choice.command.name) over \(lastBrowser.rawValue)")
+        switch choice.command {
         case .group: groupTabs()
+        case .ungroup:
+            askExtension("ungroup", working: "Ungrouping tabs...") { reply in
+                let count = reply["ungrouped"] as? Int ?? 0
+                return count == 0 ? "No tab in this window is in a group"
+                    : "Took \(PaletteCommand.counted(count, "tab")) out of \(count == 1 ? "its group" : "their groups")"
+            }
+        case .mute:
+            askExtension("mute", working: "Muting tabs...") { reply in
+                let muted = reply["muted"] as? Int ?? 0
+                let unmuted = reply["unmuted"] as? Int ?? 0
+                if muted > 0 { return "Muted \(PaletteCommand.counted(muted, "tab")); `mute again brings the sound back" }
+                return unmuted > 0 ? "Unmuted \(PaletteCommand.counted(unmuted, "tab"))" : "No tab in this profile is playing sound"
+            }
+        case .move:
+            // Without another place the row only explains itself.
+            guard let index = profileState?.profiles.firstIndex(where: { $0.id == choice.option }) else {
+                footer.stringValue = choice.detail
+                return
+            }
+            moveTab(toPlace: index, keep: NSEvent.modifierFlags.contains(.option))
+        case .copy: copyTab(asLink: choice.option == "markdown")
+        case .dupes:
+            closeTabs(TabTidy.duplicates(in: tabs, active: activeTab, recent: focusOrder), nothing: choice.detail) { count in
+                "Closed \(PaletteCommand.counted(count, "duplicate tab")); `undo reopens \(count == 1 ? "it" : "them")"
+            }
+        case .sweep:
+            let days = choice.option.flatMap(Int.init) ?? PaletteCommand.sweepDays
+            let stale = TabTidy.stale(in: tabs, active: activeTab, days: days, now: Date(), lastSeen: { self.lastViewed($0) })
+            closeTabs(stale, nothing: choice.detail) { count in
+                "Closed \(PaletteCommand.counted(count, "tab")) not viewed for \(PaletteCommand.counted(days, "day")); "
+                    + "`undo reopens \(count == 1 ? "it" : "them")"
+            }
+        case .undo: reopenClosed()
+        }
+    }
+
+    /// Holds the palette still while a command works in a browser.
+    private func beginWork(_ message: String) {
+        acting = true
+        searchField.isEnabled = false
+        retryButton.isEnabled = false
+        footer.stringValue = message
+        footer.toolTip = nil
+    }
+
+    /// Ends a command the palette stayed open for: the footer says what it did until something is typed. A command
+    /// that worked leaves the search field empty, ready for the next thing.
+    private func endWork(_ message: String, cleared: Bool = true) {
+        unlock()
+        if cleared { searchField.stringValue = "" }
+        panel.makeFirstResponder(searchField)
+        notice = message
+        if ready { updateRows() } else { footer.stringValue = message }
+    }
+
+    /// Lets the palette be used again after `beginWork`.
+    private func unlock() {
+        acting = false
+        searchField.isEnabled = true
+        retryButton.isEnabled = true
+    }
+
+    /// Closes tabs of the place the palette is in and stays open to say how many went; `undo` reopens them.
+    private func closeTabs(_ doomed: [BrowserTab], nothing: String, done: @escaping (Int) -> String) {
+        guard let browser = doomed.first?.browser else {
+            footer.stringValue = nothing
+            return
+        }
+        beginWork("Closing \(PaletteCommand.counted(doomed.count, "tab"))...")
+        bridge(browser).close(doomed) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let closed) where closed.isEmpty:
+                self.endWork("Those tabs had moved, so none was closed", cleared: false)
+                if !self.listFrozen { self.loadTabs(force: true) }
+            case .success(let closed):
+                self.forget(closed)
+                let kept = doomed.count - closed.count
+                self.endWork(done(closed.count) + (kept > 0 ? " (\(kept) had moved and \(kept == 1 ? "stays" : "stay") open)" : ""))
+            case .failure(let error):
+                self.endWork(self.describe(error, browser), cleared: false)
+            }
+        }
+    }
+
+    /// Takes closed tabs off the list at once and remembers them for `undo`; the browser's own list follows.
+    private func forget(_ closed: [BrowserTab]) {
+        guard let browser = closed.first?.browser else { return }
+        closedBatches.append(closed)
+        if closedBatches.count > 20 { closedBatches.removeFirst() }
+        stores[browser]?.invalidate()
+        if let snapshot = snapshots[browser] {
+            let left = TabTidy.removing(closed, from: snapshot.tabs)
+            let active = snapshot.active.flatMap { TabTidy.removing(closed, from: [$0]).first }
+            snapshots[browser] = TabSnapshot(tabs: left, active: active, index: TabSearchIndex(left), fetchedAt: Date(),
+                                             revision: snapshot.revision)
+        }
+        if let shown = activeOverride { activeOverride = TabTidy.removing(closed, from: [shown]).first }
+        if ready, !snapshots.isEmpty { show(CombinedTabs(snapshots, front: lastBrowser)) }
+        // After a place switch the list stays as it is until the palette closes; otherwise the browser confirms it.
+        if !listFrozen { loadTabs(force: true) }
+    }
+
+    /// Command+W closes the selected tab in its browser, as it closes a tab there. The palette stays open on the
+    /// row that follows, and `undo` reopens the tab.
+    private func closeSelectedTab() {
+        guard ready, !acting, rows.indices.contains(table.selectedRow) else { return }
+        let position = table.selectedRow
+        let tab: BrowserTab
+        switch rows[position] {
+        case .previousTab(let selected), .tab(let selected): tab = selected
+        default: return
+        }
+        if preview { footer.stringValue = "Preview only"; return }
+        acting = true
+        footer.stringValue = "Closing..."
+        bridge(tab.browser).close([tab]) { [weak self] result in
+            guard let self else { return }
+            self.acting = false
+            guard self.panel.isVisible else { return }
+            switch result {
+            case .success(let closed) where !closed.isEmpty:
+                self.notice = "Closed \(tab.displayTitle); `undo reopens it"
+                self.forget(closed)
+                if let row = [position, position - 1].first(where: { self.rows.indices.contains($0) && self.rows[$0].isSelectable }) {
+                    self.table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+                    self.table.scrollRowToVisible(row)
+                }
+            case .success:
+                self.notice = "That tab had moved, so it stays open"
+                if self.listFrozen { self.updateRows(preserveSelection: true) } else { self.loadTabs(force: true) }
+            case .failure(let error):
+                self.notice = self.describe(error, tab.browser)
+                self.updateRows(preserveSelection: true)
+            }
+        }
+    }
+
+    /// Reopens the tabs the last command closed, in background tabs of the windows they were in.
+    private func reopenClosed() {
+        guard let batch = closedBatches.last, let browser = batch.first?.browser else {
+            footer.stringValue = "Nothing to reopen"
+            return
+        }
+        beginWork("Reopening \(PaletteCommand.counted(batch.count, "tab"))...")
+        bridge(browser).reopen(batch.map { (windowID: $0.windowID, url: $0.url) }) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                self.closedBatches.removeLast()
+                self.stores[browser]?.invalidate()
+                self.endWork("Reopened \(PaletteCommand.counted(batch.count, "tab")) in \(browser.name)")
+                if !self.listFrozen { self.loadTabs(force: true) }
+            case .failure(let error):
+                self.endWork(self.describe(error, browser), cleared: false)
+            }
+        }
+    }
+
+    private func copyTab(asLink: Bool) {
+        guard let tab = activeTab, tab.browser == lastBrowser, !tab.isBlank else {
+            footer.stringValue = "No page on screen to copy"
+            return
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(asLink ? PaletteCommand.markdownLink(title: tab.title, url: tab.url) : tab.url, forType: .string)
+        dismiss(restoreFocus: true)
+    }
+
+    /// Has Tab Scout's extension in the profile of the front Chrome window do something, and stays open to say what.
+    private func askExtension(_ type: String, working: String, done: @escaping ([String: Any]) -> String) {
+        guard let windowID = frontWindow(of: .chrome) else {
+            footer.stringValue = "Open a Chrome window first"
+            return
+        }
+        beginWork(working)
+        chromeLink.perform(type, inWindow: windowID) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let reply):
+                // Ungrouping leaves tabs where they are, so the list stands.
+                self.endWork(done(reply))
+            case .failure(ChromeExtensionLink.LinkError.notConnected), .failure(ChromeExtensionLink.LinkError.windowNotFound):
+                // As for grouping: this profile lacks the extension, and Setup offers it.
+                self.unlock()
+                if self.chromeLink.connectedProfiles == 0 { self.chromeExtensionAdded = false }
+                self.dismiss(restoreFocus: false)
+                self.showSetup(nil)
+            case .failure(let error):
+                self.endWork(error.localizedDescription, cleared: false)
+            }
+        }
+    }
+
+    /// Moves the tab on screen to another place: its page opens there first, and only then is the original closed,
+    /// so a failure never loses the tab. `keep` leaves the original open.
+    private func moveTab(toPlace index: Int, keep: Bool) {
+        guard !acting, let state = profileState, state.profiles.indices.contains(index), index != spaceIndex else { return }
+        let place = state.profiles[index]
+        // A swipe that carried the tab came to rest on the other place; when nothing moves, the palette returns.
+        let stay = { [weak self] (message: String) in
+            guard let self else { return }
+            self.profileSwipe.move(to: self.spaceIndex)
+            self.startProfileTimer()
+            self.notice = message
+            if self.ready { self.updateRows(preserveSelection: true) } else { self.footer.stringValue = message }
+        }
+        if preview { return stay("Preview only") }
+        guard let tab = activeTab, tab.browser == lastBrowser, TabTidy.canMove(tab.url) else {
+            return stay("This page cannot be opened in \(place.name)")
+        }
+        profileSwitch?.cancel()
+        profileSwitch = nil
+        beginWork("Moving to \(place.name)...")
+        // Hidden at once like any pick; a failure brings the palette back.
+        panel.orderOut(nil)
+        PaletteLog.note("move tab from \(lastBrowser.rawValue) to \(place.browser.rawValue)\(keep ? ", keeping it" : "")")
+        let started = DispatchTime.now()
+        let finish = { [weak self] in
+            guard let self else { return }
+            Timing.log("move", since: started)
+            self.unlock()
+            for browser in Set([tab.browser, place.browser]) { self.stores[browser]?.invalidate() }
+            self.dismiss(restoreFocus: false)
+            self.stores[place.browser]?.prewarm()
+        }
+        open(tab.url, in: place) { [weak self] result in
+            guard let self else { return }
+            if case .failure(let error) = result {
+                self.unlock()
+                self.panel.makeKeyAndOrderFront(nil)
+                self.panel.makeFirstResponder(self.searchField)
+                return stay("Could not open the page in \(place.name): \(error.localizedDescription)")
+            }
+            guard !keep else { return finish() }
+            self.bridge(tab.browser).close([tab]) { [weak self] closed in
+                // The page is open in the other place either way; an original that moved meanwhile just stays.
+                if case .success(let gone) = closed, !gone.isEmpty {
+                    self?.closedBatches.append(gone)
+                }
+                finish()
+            }
+        }
+    }
+
+    /// Opens an address in a place: Safari, Chrome as it is, or a Chrome profile, which Chrome is first switched to as
+    /// its own Profiles menu does. The page opens only once that profile's window is in front.
+    private func open(_ url: String, in place: BrowserProfile, completion: @escaping (Result<Void, Error>) -> Void) {
+        let openInFront = { [weak self] (front: BrowserTab?) in
+            guard let self else { return }
+            // An empty tab on screen there takes the page instead of a second tab beside it.
+            self.bridge(place.browser).open(.url(url), windowID: front?.windowID ?? 0,
+                                            reusing: front.flatMap { $0.isBlank ? $0 : nil }) { result in
+                completion(result.map { _ in })
+            }
+        }
+        guard place.browser == .chrome, place.menuTitle != nil || place.directory != nil else { return openInFront(nil) }
+        chromeProfiles.switchTo(place) { [weak self] result in
+            guard let self else { return }
+            if case .failure(let error) = result { return completion(.failure(error)) }
+            let openThere = { self.bridge(.chrome).active { front in openInFront((try? front.get()) ?? nil) } }
+            // Without its menu, Chrome was started for the profile's folder and is given a moment to open the window.
+            guard place.menuTitle != nil else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: openThere)
+                return
+            }
+            self.awaitProfile(place) { arrived in
+                arrived ? openThere() : completion(.failure(ChromeProfiles.SwitchError.unavailable))
+            }
+        }
+    }
+
+    /// Waits until Chrome's Profiles menu checks `place`, which it does once that profile's window is in front.
+    private func awaitProfile(_ place: BrowserProfile, attempt: Int = 0, completion: @escaping (Bool) -> Void) {
+        chromeProfiles.read { [weak self] state in
+            if let state, let current = state.current, state.profiles.indices.contains(current),
+               state.profiles[current].id == place.id {
+                return completion(true)
+            }
+            guard let self, attempt < 15 else { return completion(false) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                self.awaitProfile(place, attempt: attempt + 1, completion: completion)
+            }
         }
     }
 
@@ -1749,6 +2184,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         listFrozen = false
         activeOverride = nil
         awaitingProfileTabs = false
+        notice = nil
+        carrying = false
+        carryHint = false
         results.alphaValue = 1
         showProfiles(nil)
         if !preview { googleSuggestions.cancel() }
@@ -2069,7 +2507,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         case .keyboard: return controlPermissionName
         case .safari: return "Safari"
         case .chrome: return "Google Chrome"
-        case .chromeExtension: return "Chrome Tab Groups (Optional)"
+        case .chromeExtension: return "Chrome Extension (Optional)"
         case .history: return "Browser History (Optional)"
         }
     }
@@ -2100,7 +2538,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         guard !preview else {
             // Sample steps, so the Setup page can be looked at without asking macOS for anything.
             let states: [SetupStep: (SetupState, String)] = [.keyboard: (.done, "Allowed"), .safari: (.done, "Allowed"),
-                .chrome: (.needed, "Needed for Chrome tabs"), .chromeExtension: (.optional, "Lets `group sort a Chrome window's tabs into groups"),
+                .chrome: (.needed, "Needed for Chrome tabs"), .chromeExtension: (.optional, "Lets `group, `ungroup and `mute work in Chrome"),
                 .history: (.done, "Allowed; 3 of 3 profiles used")]
             settingsModel.setup = SetupStep.allCases.map { step in
                 SettingsModel.SetupItem(id: step, title: setupTitle(step), detail: states[step]!.1, state: states[step]!.0, action: setupAction(step))
@@ -2149,9 +2587,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         } else if chromeProfilesBeforeAdding != nil {
             showStep(.chromeExtension, .waiting, "In Chrome, turn on Developer mode and drag the folder from Finder onto the page")
         } else if chromeExtensionAdded {
-            showStep(.chromeExtension, .done, "Added\(profiles); type `group in the palette")
+            showStep(.chromeExtension, .done, "Added\(profiles); type `group, `ungroup or `mute in the palette")
         } else {
-            showStep(.chromeExtension, .optional, "Lets `group sort a Chrome window's tabs into groups")
+            showStep(.chromeExtension, .optional, "Lets `group, `ungroup and `mute work in Chrome")
         }
         let included = historyProfiles.filter { !Self.excludedProfiles.contains($0.id) }.count
         showStep(.history, !safariHistoryEnabled ? .optional : !historyLoaded ? .waiting : historyError != nil ? .problem : .done,

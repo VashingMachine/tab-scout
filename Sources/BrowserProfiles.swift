@@ -235,6 +235,31 @@ enum ProfileWindows {
     }
 }
 
+/// The tabs the palette lists: only those of the place it is in, so every pick stays there.
+enum PlaceScope {
+    struct Listing: Equatable {
+        let tabs: [BrowserTab]
+        /// Chrome's profiles could not be told apart, so every Chrome tab is listed.
+        let unseparated: Bool
+    }
+
+    /// `all` narrowed to `browser`, and over Chrome with several profiles to the windows of the profile in front.
+    /// It depends only on the tabs read and the browser the palette opened over, never on what is running now,
+    /// so another browser's tabs cannot slip into the list.
+    static func listing(_ all: [BrowserTab], in browser: Browser, chromeProfiles: Int, active: BrowserTab?,
+                        owners: [Int: Int]) -> Listing {
+        let own = all.filter { $0.browser == browser }
+        guard browser == .chrome, chromeProfiles > 1,
+              let front = active?.browser == .chrome ? active?.windowID : own.first?.windowID else {
+            return Listing(tabs: own, unseparated: false)
+        }
+        guard let windows = ProfileWindows.current(front: front, windows: own.map(\.windowID), owners: owners) else {
+            return Listing(tabs: own, unseparated: true)
+        }
+        return Listing(tabs: own.filter { windows.contains($0.windowID) }, unseparated: false)
+    }
+}
+
 enum ProfilePalette {
     /// Colors for profiles without a vivid one of their own, picked to read on light and dark glass alike:
     /// iris, ember, lagoon, orchid, sky, moss, rose and amber.

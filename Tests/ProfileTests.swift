@@ -9,6 +9,7 @@ struct ProfileTests {
         menu()
         colors()
         windows()
+        scope()
         spaces()
         swipe()
         swipeModes()
@@ -208,6 +209,34 @@ struct ProfileTests {
         var quick = ProfileSwipe(count: 5, index: 0, sensitivity: 1.6)
         flick(&quick, by: 400)
         expect(slow.target < quick.target, "Lower sensitivity carries the same flick less far")
+    }
+
+    static func scope() {
+        let safari = [BrowserTab(windowID: 1, index: 1, title: "News", url: "https://news.example/"),
+                      BrowserTab(windowID: 1, index: 2, title: "Mail", url: "https://mail.example/")]
+        let work = [BrowserTab(browser: .chrome, windowID: 7, index: 1, title: "Meet", url: "https://meet.example/"),
+                    BrowserTab(browser: .chrome, windowID: 8, index: 1, title: "Code", url: "https://code.example/")]
+        let personal = [BrowserTab(browser: .chrome, windowID: 9, index: 1, title: "Shop", url: "https://shop.example/")]
+        let all = work + safari + personal
+        let owners = [7: 1, 8: 1, 9: 2]
+        for profiles in [0, 1, 3] {
+            let listing = PlaceScope.listing(all, in: .safari, chromeProfiles: profiles, active: safari[0], owners: owners)
+            expect(listing.tabs == safari && !listing.unseparated,
+                   "Over Safari only Safari's tabs are listed, however many profiles Chrome has (\(profiles))")
+        }
+        expect(PlaceScope.listing(work + personal, in: .safari, chromeProfiles: 3, active: nil, owners: owners).tabs.isEmpty,
+               "Chrome's tabs arriving before Safari's never stand in for them")
+        expect(PlaceScope.listing(all, in: .chrome, chromeProfiles: 1, active: work[0], owners: [:]).tabs == work + personal,
+               "Over Chrome with one profile every Chrome tab is listed, and no Safari tab")
+        expect(PlaceScope.listing(all, in: .chrome, chromeProfiles: 3, active: work[0], owners: owners).tabs == work,
+               "With several profiles only the windows of the profile in front are listed")
+        expect(PlaceScope.listing(all, in: .chrome, chromeProfiles: 3, active: safari[0], owners: owners).tabs == work,
+               "Without a Chrome tab on screen, the first Chrome window listed is the one in front")
+        let unknown = PlaceScope.listing(all, in: .chrome, chromeProfiles: 3, active: work[0], owners: [:])
+        expect(unknown.tabs == work + personal && unknown.unseparated,
+               "Without the extension the profiles cannot be told apart, which the footer then says")
+        expect(PlaceScope.listing([], in: .chrome, chromeProfiles: 3, active: nil, owners: owners) == .init(tabs: [], unseparated: false),
+               "No tabs is not a failure to tell profiles apart")
     }
 
     static func settings() {

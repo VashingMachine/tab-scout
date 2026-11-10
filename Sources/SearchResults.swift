@@ -8,7 +8,7 @@ enum SearchRow: Equatable {
     case history(HistoryVisit)
     case suggestion(String)
     case section(SearchSection)
-    case command(PaletteCommand)
+    case command(CommandChoice)
 
     var isSelectable: Bool {
         if case .section = self { return false }
