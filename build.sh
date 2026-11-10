@@ -9,8 +9,13 @@ cp "$SOURCE_DIR/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
 # Stamp the commit and build time so the app can show which build is installed.
 BUILD_INFO="$(git -C "$SOURCE_DIR" describe --always --dirty 2>/dev/null || echo "unknown commit"), built $(date '+%Y-%m-%d %H:%M')"
 /usr/bin/plutil -insert TabScoutBuild -string "$BUILD_INFO" "$APP_DIR/Contents/Info.plist"
+# osascript saves a compiled script back to its file after each run, with that run's arguments in it. Inside
+# the app that would break the signature's seal and leave the last tab's address on disk, so the scripts are
+# read-only: osascript then runs them as before and only notes on stderr that it could not save.
+/bin/rm -f "$APP_DIR/Contents/Resources/SafariBridge.scpt" "$APP_DIR/Contents/Resources/ChromeBridge.scpt"
 /usr/bin/osacompile -o "$APP_DIR/Contents/Resources/SafariBridge.scpt" "$SOURCE_DIR/Resources/SafariBridge.applescript"
 /usr/bin/osacompile -l JavaScript -o "$APP_DIR/Contents/Resources/ChromeBridge.scpt" "$SOURCE_DIR/Resources/ChromeBridge.js"
+/bin/chmod 444 "$APP_DIR/Contents/Resources/SafariBridge.scpt" "$APP_DIR/Contents/Resources/ChromeBridge.scpt"
 /usr/bin/xcrun swiftc "$SOURCE_DIR/Resources/MakeIcon.swift" -o "$WORK_DIR/MakeIcon"
 "$WORK_DIR/MakeIcon" "$WORK_DIR/TabScout.iconset"
 /usr/bin/iconutil -c icns "$WORK_DIR/TabScout.iconset" -o "$APP_DIR/Contents/Resources/TabScout.icns"

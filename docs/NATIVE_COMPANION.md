@@ -86,7 +86,7 @@ Favicons load asynchronously, with a system icon as the fallback. Icon loading n
 
 ## Privacy
 
-Tab Scout reads the titles and URLs of tabs Safari exposes in its open windows. Inventory snapshots stay in memory and are not written to logs. It does not inspect the contents of your current Safari pages.
+Tab Scout reads the titles and URLs of tabs Safari exposes in its open windows. Inventory snapshots stay in memory and are not written to logs. The two bridge scripts inside the app are read-only, because `osascript` would otherwise save each run's arguments, such as a tab's address, back into them. It does not inspect the contents of your current Safari pages.
 
 After a successful action, Tab Scout stores the accepted search phrase or selected URL/title, use count, and last-use date at `~/Library/Application Support/TabScout/History/choices-v1.json`. It does not record every typed prefix, cancelled selection, or failed action. Local records are retained for up to 183 days and bounded to 1,000 visited URLs and 500 search phrases. **Clear Tab Scout History** deletes these accepted-choice records; it does not erase Safari history or a Google Account's activity.
 
