@@ -34,10 +34,10 @@ Local builds are not notarized, and `build.sh` signs ad hoc unless `TAB_SCOUT_SI
 
 Tab Scout opens **Settings** on its **Setup** page on first launch; **Settings…** in the menu and the gear in the palette open it on Setup while Cmd+T still needs something. Each step shows a check mark once it is done, including when it was done in System Settings or Chrome, and the window says **Ready** when Cmd+T works:
 
-1. Click **Open Settings** and enable **Tab Scout** under Privacy & Security > Device Control and Data Access (macOS 27+) or Accessibility (earlier macOS). If it is absent, use the + button and choose the installed app.
+1. Click **Open Settings**. System Settings opens on Privacy & Security > Device Control and Data Access (macOS 27+) or Accessibility (earlier macOS), with a small panel below it showing Tab Scout's icon: drag the icon into the list, or turn on **Tab Scout** if it is listed already. The icon is the copy of Tab Scout that is running, so the right app is added. When macOS keeps an old entry after a rebuild, the panel asks to remove it with − first. The panel closes and Settings comes back once Cmd+T works.
 2. Click **Allow Access** next to Safari and allow Tab Scout to control Safari. Do the same next to Google Chrome to include its tabs; this opens Chrome. If previously denied, enable the browser under Privacy & Security > Automation > Tab Scout.
 3. Optionally click **Add to Chrome** for the `` `group `` command; see [Chrome Grouping](#chrome-grouping).
-4. Optionally click **Turn On** next to Browser History, then **Open Settings** to give Tab Scout Full Disk Access.
+4. Optionally click **Turn On** next to Browser History, then **Open Settings** and drag Tab Scout's icon from the panel below System Settings into the Full Disk Access list. History is read as soon as access is on.
 5. Optionally check **Start Tab Scout at login**, then click **Open Search**, or switch to Safari or Chrome and press Cmd+T.
 
 The shortcut hook starts automatically after permission is granted. Permissions are granted by the user through macOS; the app and tests do not bypass them. The window learns a browser's access without a prompt from macOS when the browser is running, and otherwise once Tab Scout has read its tabs.
@@ -64,7 +64,7 @@ Turn on **Google Suggestions** for Google's public autocomplete predictions. Req
 
 These are **Google** suggestions, not automatic discovery of Safari's selected engine. Safari's scripting interface exposes a search command but not provider identity or its Smart Search suggestion rows. Choosing any search result still uses Safari's configured search engine; Google can supply the prediction even if that engine is different. Change Safari's provider in Safari Settings > Search. [Apple: Customize searching](https://support.apple.com/guide/safari/customize-searching-in-safari-ibrwe75c2a3c/mac)
 
-Turn on **Use Browser History** to supplement accepted Tab Scout choices with recent Safari and Chrome visits and recognizable Google searches in visited results URLs. Access is read-only, runs in the background, and is optional. If macOS denies access, tabs, Tab Scout recent searches, and ordinary searches remain usable. To allow it, add the installed app under System Settings > Privacy & Security > Full Disk Access, then fully quit and reopen Tab Scout. Full Disk Access grants broader access to protected app data, not just these history files. macOS also protects Chrome's profile folder, so Chrome history needs the same permission. [Apple: Privacy & Security settings](https://support.apple.com/guide/mac-help/change-privacy-security-settings-mchl211c911f/mac)
+Turn on **Use Browser History** to supplement accepted Tab Scout choices with recent Safari and Chrome visits and recognizable Google searches in visited results URLs. Access is read-only, runs in the background, and is optional. If macOS denies access, tabs, Tab Scout recent searches, and ordinary searches remain usable. To allow it, add the installed app under System Settings > Privacy & Security > Full Disk Access; the Setup page's **Open Settings** shows its icon to drag there. If history is still not read, quit and reopen Tab Scout. Full Disk Access grants broader access to protected app data, not just these history files. macOS also protects Chrome's profile folder, so Chrome history needs the same permission. [Apple: Privacy & Security settings](https://support.apple.com/guide/mac-help/change-privacy-security-settings-mchl211c911f/mac)
 
 Every profile is read: Safari's main `~/Library/Safari/History.db`, each further Safari profile's history in Safari's container, and each Chrome profile listed in Chrome's `Local State`, by the name it has in Chrome. **History Profiles** in the menu turns any of them off; a profile that cannot be read is marked unavailable there while the others still work. Synced history from other devices is not guaranteed to be represented. Each profile's read considers the last 183 days and at most 10,000 visits, and at most 5,000 merged URLs stay in memory; a page visited in several profiles counts every visit. Chrome visits loaded inside another page's frames are left out.
 
@@ -163,6 +163,8 @@ Preview takes keyboard focus. To check the layout without that, render the previ
 ```
 
 Add `--query` with text to type, and `--browser chrome` or `--browser safari` to open the palette over that browser, for example `--browser chrome --query '`'` for Chrome's commands.
+
+`--preview --drag-guide` opens the keyboard permission's list in System Settings with the drag panel below it; it never closes by itself, and nothing should be dropped into the list from a preview build.
 
 Quit preview before launching the normal app. Core live behavior, permissions, rendering, and cold/warm performance checks are documented in [Tests/MANUAL_TESTS.md](../Tests/MANUAL_TESTS.md). The suggestions/history acceptance checklist is in [docs/MANUAL_QA.md](MANUAL_QA.md).
 

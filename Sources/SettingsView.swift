@@ -580,7 +580,7 @@ private struct PlaceGlow: View {
     }
 }
 
-private extension View {
+extension View {
     /// Liquid Glass on macOS 26 and later, a material card before it.
     @ViewBuilder
     func glassCard(tint: ProfileColor?, cornerRadius: CGFloat) -> some View {

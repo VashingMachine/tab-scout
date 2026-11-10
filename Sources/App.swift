@@ -139,6 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var terminationObserver: NSObjectProtocol?
     private var keyMonitor: Any?
     private var permissionTimer: Timer?
+    private let dragGuide = SettingsDragGuide()
     private var cacheTimer: Timer?
     private var panel: SearchPanel!
     private var searchField: NSTextField!
@@ -299,6 +300,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
         if preview, let index = CommandLine.arguments.firstIndex(of: "--snapshot"), index + 1 < CommandLine.arguments.count {
             renderSnapshot(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+        } else if preview, CommandLine.arguments.contains("--drag-guide") {
+            showKeyboardGuide()
         } else if preview, CommandLine.arguments.contains("--settings") {
             openSettings(on: CommandLine.arguments.contains("--setup") ? .setup : nil)
         } else if preview {
@@ -2083,7 +2086,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private func runSetupStep(_ step: SetupStep) {
         guard !preview else { return }
         switch step {
-        case .keyboard: openAccessibility()
+        case .keyboard: showKeyboardGuide()
         case .safari: requestAccess(.safari)
         case .chrome: requestAccess(.chrome)
         case .chromeExtension: addChromeExtension()
@@ -2189,20 +2192,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
     }
 
-    private func openAccessibility() {
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(options)
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") { NSWorkspace.shared.open(url) }
+    /// Opens the keyboard permission's list with the drag guide beside it. After a rebuild macOS can keep an old
+    /// entry that looks allowed but no longer counts, so then the guide asks to replace it.
+    private func showKeyboardGuide() {
+        guard let pane = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else { return }
+        guard eventTap == nil else { NSWorkspace.shared.open(pane); return }
+        let stale = !preview && AXIsProcessTrusted() && eventTap == nil
+        let request = SettingsDragGuide.Request(
+            title: stale ? "Add Tab Scout again" : "Drag Tab Scout into the list",
+            detail: stale ? "macOS no longer honors the Tab Scout in the list. Remove it with −, then drag this icon in."
+                : "Or turn on Tab Scout if it is listed already. Cmd+T works as soon as it is on.",
+            isDone: { [weak self] in
+                guard let self, !self.preview else { return false }
+                self.installTapIfAllowed()
+                return self.eventTap != nil
+            })
+        dragGuide.show(request, pane: pane) { [weak self] in self?.returnToSetup() }
+    }
+
+    /// Opens the Full Disk Access list with the drag guide beside it, and reads history again once it is granted.
+    private func showFullDiskAccessGuide() {
+        guard let pane = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") else { return }
+        let request = SettingsDragGuide.Request(
+            title: "Drag Tab Scout into the list",
+            detail: "Or turn on Tab Scout if it is listed already. History is read as soon as it is on.",
+            isDone: { HistoryStore.canReadSafariHistory() })
+        dragGuide.show(request, pane: pane) { [weak self] in
+            self?.reimportHistory()
+            self?.returnToSetup()
+        }
+    }
+
+    /// Back from System Settings to show the step done.
+    private func returnToSetup() {
+        updateSetup(force: true)
+        NSApp.activate(ignoringOtherApps: true)
+        settingsModel.page = .setup
+        settingsWindow?.makeKeyAndOrderFront(nil)
     }
 
     private func openHistorySettings() {
         let alert = NSAlert()
         alert.messageText = "Browser History Access"
-        alert.informativeText = "macOS protects Safari and Chrome history with Full Disk Access, a broad permission. Tab Scout reads the history of every Safari and Chrome profile locally, never sends it to Google, and can leave out any profile under Settings > Browser History. Add this Tab Scout.app under Privacy & Security > Full Disk Access, then restart Tab Scout. Tab search and local choices work without this permission."
+        alert.informativeText = "macOS protects Safari and Chrome history with Full Disk Access, a broad permission. Tab Scout reads the history of every Safari and Chrome profile locally, never sends it to Google, and can leave out any profile under Settings > Browser History. System Settings opens on Full Disk Access with Tab Scout's icon below it to drag into the list. Tab search and local choices work without this permission."
         alert.addButton(withTitle: "Open Settings")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
+        showFullDiskAccessGuide()
     }
 
     /// Chrome lets only extensions make tab groups, so grouping needs Tab Scout's own, added once to each profile.

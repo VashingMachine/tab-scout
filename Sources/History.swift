@@ -165,6 +165,17 @@ final class HistoryStore {
         self.profileReader = profileReader
     }
 
+    /// Whether Safari's history can be opened now, which macOS allows only with Full Disk Access. Opening the file
+    /// is what the permission guards, so it is the check.
+    static func canReadSafariHistory() -> Bool {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        for path in ["Library/Safari/History.db", "Library/Containers/com.apple.Safari/Data/Library/Safari/History.db"] {
+            let descriptor = open(home.appendingPathComponent(path).path, O_RDONLY)
+            if descriptor >= 0 { close(descriptor); return true }
+        }
+        return false
+    }
+
     var snapshot: HistorySnapshot {
         let date = now()
         if let mergedSnapshot, let mergedAt, date.timeIntervalSince(mergedAt) >= 0,
