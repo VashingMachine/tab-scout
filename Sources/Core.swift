@@ -24,9 +24,9 @@ enum PaletteLog {
     }
 }
 
-/// A browser whose tabs Tab Scout searches. Chrome joins Safari only while it runs.
+/// A browser whose tabs Tab Scout searches. Safari is always asked; the others only while they run.
 enum Browser: String, CaseIterable {
-    case safari, chrome
+    case safari, chrome, firefox, zen
 
     init?(bundleID: String?) {
         guard let browser = Self.allCases.first(where: { $0.bundleID == bundleID }) else { return nil }
@@ -37,6 +37,8 @@ enum Browser: String, CaseIterable {
         switch self {
         case .safari: return "com.apple.Safari"
         case .chrome: return "com.google.Chrome"
+        case .firefox: return "org.mozilla.firefox"
+        case .zen: return "app.zen-browser.zen"
         }
     }
 
@@ -44,14 +46,20 @@ enum Browser: String, CaseIterable {
         switch self {
         case .safari: return "Safari"
         case .chrome: return "Chrome"
+        case .firefox: return "Firefox"
+        case .zen: return "Zen"
         }
     }
+
+    /// Firefox and the browsers built on it offer other apps no scripting for tabs, so Tab Scout reaches their tabs
+    /// through its extension, and only once that is added.
+    var usesExtension: Bool { self == .firefox || self == .zen }
 
     /// Where a typed search goes. Chrome offers no scripting command for its own search engine, so searches there use Google.
     var searchEngine: String {
         switch self {
-        case .safari: return "Safari's default search engine"
         case .chrome: return "Google in Chrome"
+        case .safari, .firefox, .zen: return "\(name)'s default search engine"
         }
     }
 
@@ -79,11 +87,13 @@ struct BrowserTab: Hashable {
 
     var displayTitle: String { title.isEmpty ? (url.isEmpty ? "Untitled tab" : url) : title }
     var host: String { URL(string: url)?.host ?? url }
-    /// A fresh tab showing the Start Page, Favorites, Chrome's new-tab page or an empty page, which a new page can replace.
+    /// A fresh tab showing the Start Page, Favorites, Chrome's or Firefox's new-tab page or an empty page, which a
+    /// new page can replace.
     var isBlank: Bool { Self.isBlank(url) }
 
     static func isBlank(_ url: String) -> Bool {
-        ["", "about:blank", "favorites://", "topsites://", "chrome://newtab/", "chrome://new-tab-page/"].contains(url)
+        ["", "about:blank", "favorites://", "topsites://", "chrome://newtab/", "chrome://new-tab-page/",
+         "about:newtab", "about:home"].contains(url)
     }
 }
 
@@ -139,6 +149,8 @@ enum BridgeError: LocalizedError, Equatable {
     case invalidResponse
     case unavailable
     case permission
+    /// The browser is reached through Tab Scout's extension, which is not added to it or not running.
+    case extensionMissing
     case staleTab
     case timeout
     case script(String)
@@ -152,6 +164,7 @@ enum BridgeError: LocalizedError, Equatable {
         case .invalidResponse: return "\(name) returned an unreadable tab list. Try again."
         case .unavailable: return "\(name) is not running."
         case .permission: return "Allow \(browser?.name ?? "browser") access in System Settings > Privacy & Security > Automation."
+        case .extensionMissing: return "\(name) needs Tab Scout's extension. Add it in Tab Scout's Settings > Setup."
         case .staleTab: return "That tab was closed or moved. Refresh the tab list."
         case .timeout: return "\(name) took too long to respond. Try again."
         case .script(let message): return message

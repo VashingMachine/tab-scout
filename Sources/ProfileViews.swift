@@ -365,10 +365,10 @@ final class ProfilePillView: NSView {
         capsule.layer?.addSublayer(grain)
         addSubview(capsule)
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
-        toolTip = "Swipe sideways with two fingers, or click, to switch browsers and Chrome profiles"
+        toolTip = "Swipe sideways with two fingers, or click, to switch browsers, Chrome profiles and Zen spaces"
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
-        setAccessibilityHelp("Switches to the next browser or Chrome profile. Swiping sideways with two fingers over the palette switches too.")
+        setAccessibilityHelp("Switches to the next browser, Chrome profile or Zen space. Swiping sideways with two fingers over the palette switches too.")
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -459,7 +459,8 @@ final class ProfilePillView: NSView {
         }
         CATransaction.commit()
         let shown = profiles[Int(clamped.rounded())]
-        let name = shown.browser == .chrome && shown.name != "Chrome" ? "Chrome profile: " + shown.name : shown.name
+        let name = shown.id.hasPrefix("zen:") ? "Zen space: " + shown.name
+            : shown.browser == .chrome && shown.name != "Chrome" ? "Chrome profile: " + shown.name : shown.name
         if accessibilityLabel() != name { setAccessibilityLabel(name) }
         if capsule.frame != cursorFrame {
             cursorFrame = capsule.frame

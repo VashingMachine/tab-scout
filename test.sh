@@ -31,10 +31,14 @@ done
 GROUPING=("$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/RelatedTabs.swift" "$SOURCE_DIR/Sources/TabGrouping.swift")
 /usr/bin/xcrun swiftc -swift-version 5 "${GROUPING[@]}" "$SOURCE_DIR/Tests/TabGroupingTests.swift" -o "$WORK_DIR/TabGroupingTests"
 "$WORK_DIR/TabGroupingTests"
-/usr/bin/xcrun swiftc -swift-version 5 "${GROUPING[@]}" "$SOURCE_DIR/Sources/NativeMessaging.swift" \
+/usr/bin/xcrun swiftc -swift-version 5 "${GROUPING[@]}" "$SOURCE_DIR/Sources/NativeMessaging.swift" "$SOURCE_DIR/Sources/ExtensionLink.swift" \
     "$SOURCE_DIR/Sources/ChromeExtensionLink.swift" "$SOURCE_DIR/Tests/ChromeLinkTests.swift" -o "$WORK_DIR/ChromeLinkTests"
 "$WORK_DIR/ChromeLinkTests" "$SOURCE_DIR/Resources/ChromeExtension/manifest.json"
-# The Chrome helper only passes messages on, so it is just built here; ChromeLinkTests covers its framing.
+/usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/NativeMessaging.swift" \
+    "$SOURCE_DIR/Sources/ExtensionLink.swift" "$SOURCE_DIR/Sources/FirefoxLink.swift" "$SOURCE_DIR/Tests/FirefoxLinkTests.swift" \
+    -o "$WORK_DIR/FirefoxLinkTests"
+"$WORK_DIR/FirefoxLinkTests" "$SOURCE_DIR/Resources/FirefoxExtension/manifest.json"
+# The helper only passes messages on, so it is just built here; the link tests cover its framing.
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/ChromeHost/main.swift" "$SOURCE_DIR/Sources/NativeMessaging.swift" \
     -o "$WORK_DIR/TabScoutChromeHost"
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/History.swift" \
@@ -75,6 +79,9 @@ GROUPING=("$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/RelatedTabs.swif
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/BrowserProfiles.swift" "$SOURCE_DIR/Sources/ProfileSwipe.swift" \
     "$SOURCE_DIR/Sources/PlaceSettings.swift" "$SOURCE_DIR/Tests/ProfileTests.swift" -o "$WORK_DIR/ProfileTests"
 "$WORK_DIR/ProfileTests"
+/usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/BrowserProfiles.swift" \
+    "$SOURCE_DIR/Sources/ZenSession.swift" "$SOURCE_DIR/Tests/ZenSessionTests.swift" -o "$WORK_DIR/ZenSessionTests"
+"$WORK_DIR/ZenSessionTests"
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/ResultKeyboard.swift" \
     "$SOURCE_DIR/Tests/ResultKeyboardTests.swift" -o "$WORK_DIR/ResultKeyboardTests"
 "$WORK_DIR/ResultKeyboardTests"
@@ -107,4 +114,5 @@ GROUPING=("$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/RelatedTabs.swif
 # Runs the script against a stand-in for Chrome; no browser is touched.
 /usr/bin/osascript -l JavaScript "$SOURCE_DIR/Tests/ChromeBridgeTests.js" "$SOURCE_DIR/Resources/ChromeBridge.js"
 /usr/bin/osascript -l JavaScript "$SOURCE_DIR/Tests/ChromeExtensionTests.js" "$SOURCE_DIR/Resources/ChromeExtension"
+/usr/bin/osascript -l JavaScript "$SOURCE_DIR/Tests/FirefoxExtensionTests.js" "$SOURCE_DIR/Resources/FirefoxExtension"
 /usr/bin/plutil -lint "$SOURCE_DIR/Resources/Info.plist" "$SOURCE_DIR/Resources/Entitlements.plist"

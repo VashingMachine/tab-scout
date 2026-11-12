@@ -1,7 +1,8 @@
 import Foundation
 import Darwin
 
-/// Reads and changes one browser's tabs through its script: SafariBridge.scpt for Safari, ChromeBridge.scpt for Chrome.
+/// Reads and changes one browser's tabs through its script: SafariBridge.scpt for Safari, ChromeBridge.scpt for
+/// Chrome. Firefox and the browsers built on it take the same commands through Tab Scout's extension instead.
 final class BrowserBridge {
     typealias ScriptExecutor = (URL, [String]) throws -> Data
     typealias NewTabExecutor = () throws -> Data
@@ -21,6 +22,12 @@ final class BrowserBridge {
         self.scriptURL = scriptURL
         self.newTabExecutor = newTabExecutor
         self.executor = executor
+    }
+
+    /// For a browser reached through Tab Scout's extension: `transport` runs one command there and answers what
+    /// the browser's script would print.
+    convenience init(browser: Browser, transport: @escaping ([String]) throws -> Data) {
+        self.init(browser: browser, scriptURL: URL(fileURLWithPath: "/dev/null"), executor: { _, arguments in try transport(arguments) })
     }
 
     func list(completion: @escaping (Result<TabInventory, Error>) -> Void) {
@@ -82,11 +89,12 @@ final class BrowserBridge {
         switch (destination, browser) {
         case (.defaultPage, .safari):
             execute(["prepare-new-tab", windowID], on: actionQueue, after: newTabExecutor, completion: completion)
-        case (.defaultPage, .chrome): execute(["new-tab", windowID], on: actionQueue, completion: completion)
+        case (.defaultPage, _): execute(["new-tab", windowID], on: actionQueue, completion: completion)
         case (.url(let url), _): execute(["url", windowID, url] + reuse, on: actionQueue, completion: completion)
-        case (.search(let query), .safari): execute(["search", windowID, query] + reuse, on: actionQueue, completion: completion)
         case (.search(let query), .chrome):
             execute(["url", windowID, Browser.googleSearch(query)] + reuse, on: actionQueue, completion: completion)
+        // Safari's script and the Firefox extension search with the browser's own engine.
+        case (.search(let query), _): execute(["search", windowID, query] + reuse, on: actionQueue, completion: completion)
         }
     }
 
@@ -95,7 +103,7 @@ final class BrowserBridge {
         let submitted = DispatchTime.now()
         let step = "\(browser.rawValue) \(arguments[0])"
         // Chrome's script serves every Chromium browser, picked by bundle identifier.
-        let argv = browser == .safari ? arguments : [browser.bundleID] + arguments
+        let argv = browser == .chrome ? [browser.bundleID] + arguments : arguments
         queue.async { [scriptURL, executor] in
             Timing.log("\(step) queued", since: submitted)
             let started = DispatchTime.now()

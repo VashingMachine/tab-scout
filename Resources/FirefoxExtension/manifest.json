@@ -1,0 +1,15 @@
+{
+  "manifest_version": 2,
+  "name": "Tab Scout",
+  "version": "1.0",
+  "description": "Lets the Tab Scout app on this Mac search, switch to, open and close this browser's tabs when you press Cmd+T.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "tabscout@local.tabscout",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {"required": ["browsingActivity"]}
+    }
+  },
+  "permissions": ["tabs", "nativeMessaging", "search"],
+  "background": {"scripts": ["background.js"]}
+}

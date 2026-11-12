@@ -57,13 +57,15 @@ enum ProfileMotif: Int, CaseIterable {
     case strands, dots, waves, rings, weave
 }
 
-/// A place to swipe to in the palette: Safari, or one Chrome profile. Each lists only its own tabs.
+/// A place to swipe to in the palette: Safari, one Chrome profile, Firefox, Zen or one of Zen's spaces. Each lists
+/// only its own tabs.
 struct BrowserProfile: Equatable {
-    /// "safari", "chrome:" and Chrome's folder for the profile, or its menu title when Local State cannot be read.
+    /// "safari", "firefox" or "zen"; "chrome:" and Chrome's folder for the profile, or its menu title when Local
+    /// State cannot be read; "zen:" and Zen's identifier for a space.
     let id: String
     var browser = Browser.chrome
     let name: String
-    /// The profile's item in Chrome's Profiles menu, which switches to it.
+    /// The profile's item in Chrome's Profiles menu, or the space's in Zen's Spaces menu, which switches to it.
     let menuTitle: String?
     /// Chrome's folder for the profile, such as "Profile 3", which Chrome can also be started with.
     let directory: String?
@@ -72,8 +74,10 @@ struct BrowserProfile: Equatable {
     let picture: URL?
     /// A system symbol drawn on the badge instead of the initial, such as Safari's compass.
     var symbol: String?
+    /// An emoji drawn on the badge instead of the initial, such as the one a Zen space was given.
+    var emblem: String?
 
-    var initial: String { name.first.map { String($0).uppercased() } ?? "?" }
+    var initial: String { emblem ?? name.first.map { String($0).uppercased() } ?? "?" }
 }
 
 /// A browser's profiles, in the order its own menu lists them, and the one its front window belongs to.
@@ -195,32 +199,72 @@ enum ProfileMenu {
     }
 }
 
-/// Safari and each Chrome profile as places to swipe between, Safari first, as the browsers are ordered elsewhere.
+extension Browser {
+    /// The system symbol on the browser's badge: Safari's compass, a flame for Firefox and rings for Zen. Chrome's
+    /// profiles show their initial or the account's picture instead.
+    var placeSymbol: String? {
+        switch self {
+        case .safari: return "safari"
+        case .chrome: return nil
+        case .firefox: return "flame"
+        case .zen: return "circle.circle"
+        }
+    }
+}
+
+/// Safari, each Chrome profile, Firefox and Zen as places to swipe between, in the order the browsers are listed
+/// elsewhere.
 enum BrowserSpaces {
     /// Safari's color is the first of these clear of the Chrome profiles' colors: sky, lagoon, moss, amber and rose.
     static let safariColors: [ProfileColor] = [0x3B8CF6, 0x14B8A6, 0x7CB518, 0xF5A524, 0xF43F5E].map(ProfileColor.init(hex:))
+    /// Firefox prefers ember, then amber, rose, orchid and iris.
+    static let firefoxColors: [ProfileColor] = [0xFF7A45, 0xF5A524, 0xF43F5E, 0xD946EF, 0x6E63FF].map(ProfileColor.init(hex:))
+    /// Zen prefers orchid, then lagoon, moss, iris and amber.
+    static let zenColors: [ProfileColor] = [0xD946EF, 0x14B8A6, 0x7CB518, 0x6E63FF, 0xF5A524].map(ProfileColor.init(hex:))
 
     /// The places of the running browsers and which one `front` is in. Chrome's profiles keep the colors they have
-    /// alone; Chrome without readable profiles, or with only one, is a single place named after it.
-    static func combine(safari: Bool, chrome: ProfileState?, chromeRunning: Bool, front: Browser) -> ProfileState {
+    /// alone; Chrome without readable profiles, or with only one, is a single place named after it. `others` are the
+    /// running browsers reached through Tab Scout's extension: each is a single place, unless `spaces` lists two or
+    /// more places inside it, as for Zen's spaces, which keep their colors as Chrome's profiles do. A single place's
+    /// color and pattern stay clear of everything else's.
+    static func combine(safari: Bool, chrome: ProfileState?, chromeRunning: Bool, others: [Browser] = [],
+                        spaces: [Browser: ProfileState] = [:], front: Browser) -> ProfileState {
         var chromeSpaces = chromeRunning ? chrome?.profiles ?? [] : []
         if chromeRunning && chromeSpaces.count < 2 {
             let only = chromeSpaces.first
             chromeSpaces = [BrowserProfile(id: only?.id ?? "chrome", name: "Chrome", menuTitle: nil, directory: nil,
                                            color: only?.color ?? ProfilePalette.colors[0], motif: only?.motif ?? .strands, picture: nil)]
         }
-        let taken = chromeSpaces.map(\.color)
-        let nearest = { (color: ProfileColor) in taken.map { color.hueDistance(to: $0) }.min() ?? 360 }
-        let color = safariColors.first { nearest($0) >= 45 } ?? safariColors.max { nearest($0) < nearest($1) } ?? safariColors[0]
-        let used = Set(chromeSpaces.map(\.motif))
-        // Ripples suit a compass; another pattern stands in when a Chrome profile has them.
-        let motif = used.contains(.rings) ? ProfileMotif.allCases.first { !used.contains($0) } ?? .rings : .rings
-        let safariSpace = BrowserProfile(id: "safari", browser: .safari, name: "Safari", menuTitle: nil, directory: nil,
-                                         color: color, motif: motif, picture: nil, symbol: "safari")
-        let spaces = (safari ? [safariSpace] : []) + chromeSpaces
-        let offset = safari ? 1 : 0
-        let current = front == .safari ? (safari ? 0 : nil) : chromeSpaces.isEmpty ? nil : offset + min(chrome?.current ?? 0, chromeSpaces.count - 1)
-        return ProfileState(profiles: spaces, current: current)
+        let own = others.filter(\.usesExtension)
+        let inside = spaces.filter { own.contains($0.key) && $0.value.profiles.count > 1 }
+        var taken = chromeSpaces.map(\.color) + own.flatMap { inside[$0]?.profiles.map(\.color) ?? [] }
+        var used = Set(chromeSpaces.map(\.motif))
+        func place(_ browser: Browser, colors: [ProfileColor], motif wanted: ProfileMotif) -> BrowserProfile {
+            let nearest = { (color: ProfileColor) in taken.map { color.hueDistance(to: $0) }.min() ?? 360 }
+            let color = colors.first { nearest($0) >= 45 } ?? colors.max { nearest($0) < nearest($1) } ?? colors[0]
+            // Ripples suit a compass; another pattern stands in when a place before has them.
+            let motif = used.contains(wanted) ? ProfileMotif.allCases.first { !used.contains($0) } ?? wanted : wanted
+            taken.append(color)
+            used.insert(motif)
+            return BrowserProfile(id: browser.rawValue, browser: browser, name: browser.name, menuTitle: nil, directory: nil,
+                                  color: color, motif: motif, picture: nil, symbol: browser.placeSymbol)
+        }
+        let safariSpaces = safari ? [place(.safari, colors: safariColors, motif: .rings)] : []
+        let otherSpaces = own.flatMap { browser in
+            inside[browser]?.profiles
+                ?? [place(browser, colors: browser == .firefox ? firefoxColors : zenColors, motif: browser == .firefox ? .waves : .dots)]
+        }
+        let current: Int?
+        switch front {
+        case .safari: current = safari ? 0 : nil
+        case .chrome: current = chromeSpaces.isEmpty ? nil : safariSpaces.count + min(chrome?.current ?? 0, chromeSpaces.count - 1)
+        case .firefox, .zen:
+            // Inside a browser with places of its own, the one it says is in front; when it cannot say, its first.
+            let first = otherSpaces.firstIndex { $0.browser == front }
+            let within = inside[front].map { min($0.current ?? 0, $0.profiles.count - 1) } ?? 0
+            current = first.map { safariSpaces.count + chromeSpaces.count + $0 + within }
+        }
+        return ProfileState(profiles: safariSpaces + chromeSpaces + otherSpaces, current: current)
     }
 }
 

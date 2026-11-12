@@ -68,6 +68,16 @@ struct CoreTests {
         try expect(TabInventory.decodeActive(Data("[7,2,\"Mail\",\"m\"]".utf8), browser: .chrome)?.browser == .chrome,
                    "The Chrome tab on screen is a Chrome tab")
         expect(tab("New Tab", "chrome://newtab/").isBlank, "Chrome's new-tab page is a blank tab")
+        expect(Browser(bundleID: "org.mozilla.firefox") == .firefox && Browser(bundleID: "app.zen-browser.zen") == .zen
+               && Browser(bundleID: "org.mozilla.firefoxdeveloperedition") == nil,
+               "Firefox and Zen are recognized by bundle identifier; other editions are not taken for them")
+        expect(Browser.allCases.filter(\.usesExtension) == [.firefox, .zen], "Firefox and Zen are reached through Tab Scout's extension; Safari and Chrome are scripted")
+        expect(tab("New Tab", "about:newtab").isBlank && tab("Firefox Home", "about:home").isBlank && !tab("Settings", "about:preferences").isBlank,
+               "Firefox's new-tab and home pages are blank tabs; its other pages are not")
+        expect(Browser.firefox.searchEngine == "Firefox's default search engine" && Browser.zen.searchEngine == "Zen's default search engine"
+               && Browser.chrome.searchEngine == "Google in Chrome", "Firefox and Zen search with their own engine")
+        expect(BridgeError.extensionMissing.message(for: .firefox) == "Firefox needs Tab Scout's extension. Add it in Tab Scout's Settings > Setup.",
+               "A browser without the extension says what it needs")
         expect(Browser.googleSearch("C++ & rust") == "https://www.google.com/search?q=C%2B%2B%20%26%20rust",
                "Encode a Chrome search so plus signs and ampersands survive")
         expect(Browser.googleSearch("zażółć") == "https://www.google.com/search?q=za%C5%BC%C3%B3%C5%82%C4%87",

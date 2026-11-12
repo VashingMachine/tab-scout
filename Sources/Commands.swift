@@ -26,8 +26,10 @@ enum PaletteCommand: String, CaseIterable {
 
     var browsers: Set<Browser> {
         switch self {
-        // Chrome lets only extensions group and mute tabs; Safari lets no other app do either.
-        case .group, .ungroup, .mute: return [.chrome]
+        // Chrome lets only extensions group and mute tabs; Safari lets no other app do either. Firefox and Zen
+        // are reached through Tab Scout's extension anyway, which mutes there too.
+        case .group, .ungroup: return [.chrome]
+        case .mute: return [.chrome, .firefox, .zen]
         case .move, .copy, .dupes, .sweep, .undo: return Set(Browser.allCases)
         }
     }
@@ -79,7 +81,7 @@ enum PaletteCommand: String, CaseIterable {
         switch self {
         case .move:
             guard !context.places.isEmpty else {
-                return [CommandChoice(command: self, title: name, detail: "Open Safari or another Chrome profile to move tabs there")]
+                return [CommandChoice(command: self, title: name, detail: "Open another browser or Chrome profile to move tabs there")]
             }
             let wanted = argument == "to" ? "" : argument.hasPrefix("to ") ? String(argument.dropFirst(3)) : argument
             return context.places.filter { wanted.isEmpty || $0.name.lowercased().contains(wanted) }.map { place in
@@ -126,7 +128,7 @@ enum PaletteCommand: String, CaseIterable {
     }
 }
 
-/// A place a tab can move to: Safari, or a Chrome profile.
+/// A place a tab can move to: another browser, or a Chrome profile.
 struct CommandPlace: Equatable {
     let id: String
     let name: String

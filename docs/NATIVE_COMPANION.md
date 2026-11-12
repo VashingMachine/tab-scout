@@ -1,19 +1,19 @@
 # Tab Scout Native App
 
-Search your open Safari and Chrome tabs with Cmd+T. Switch to a match in its own browser, or open a new tab in the browser you were using when there is no match.
+Search your open Safari, Chrome, Firefox and Zen tabs with Cmd+T. Switch to a match in its own browser, or open a new tab in the browser you were using when there is no match.
 
-Tab Scout is a native macOS menu-bar app, **not a browser extension**. It uses Safari's and Chrome's local scripting interfaces and a keyboard hook. The one exception is grouping and muting Chrome tabs: Chrome lets only extensions do either, so the `group`, `ungroup` and `mute` commands use a small optional extension (see [Chrome Grouping](#chrome-grouping)). Optional Google predictions and local history ranking make the palette more useful without waiting for a network request. There is no subscription or Apple developer account requirement for a local build.
+Tab Scout is a native macOS menu-bar app, **not a browser extension**. It uses Safari's and Chrome's local scripting interfaces and a keyboard hook. There are two exceptions. Chrome lets only extensions group and mute tabs, so the `group`, `ungroup` and `mute` commands use a small optional extension (see [Chrome Grouping](#chrome-grouping)). Firefox and Zen offer other apps no scripting for tabs at all, so they are reached through a small extension of their own (see [Firefox And Zen](#firefox-and-zen)). Optional Google predictions and local history ranking make the palette more useful without waiting for a network request. There is no subscription or Apple developer account requirement for a local build.
 
 See the [README](../README.md) for the quick start.
 
 ## Requirements
 
 - macOS 13 or later.
-- Safari, Google Chrome, or both.
+- Safari, Google Chrome, Firefox or Zen, in any combination. Firefox and Zen need version 140 or later.
 - Xcode 26 or later, or its Command Line Tools, to build from source; the build needs the macOS 26 SDK.
 - Device Control and Data Access / Accessibility permission for the Cmd+T hook in Safari and Chrome.
 - Automation permission to read and control Safari tabs, and separately Chrome tabs.
-- Optional Full Disk Access to include Safari and Chrome browsing history and Chrome's site icons. Tab switching, ordinary searches, and Google predictions do not require this permission.
+- Optional Full Disk Access to include Safari, Chrome, Firefox and Zen browsing history and Chrome's, Firefox's and Zen's site icons. Tab switching, ordinary searches, and Google predictions do not require this permission.
 
 The project uses system frameworks only. It has no package dependencies.
 
@@ -37,8 +37,9 @@ Tab Scout opens **Settings** on its **Setup** page on first launch; **Settings�
 1. Click **Open Settings**. System Settings opens on Privacy & Security > Device Control and Data Access (macOS 27+) or Accessibility (earlier macOS), with a small panel below it showing Tab Scout's icon: drag the icon into the list, or turn on **Tab Scout** if it is listed already. The icon is the copy of Tab Scout that is running, so the right app is added. When macOS keeps an old entry after a rebuild, the panel asks to remove it with − first. The panel closes and Settings comes back once Cmd+T works.
 2. Click **Allow Access** next to Safari and allow Tab Scout to control Safari. Do the same next to Google Chrome to include its tabs; this opens Chrome. If previously denied, enable the browser under Privacy & Security > Automation > Tab Scout.
 3. Optionally click **Add to Chrome** for the `` `group ``, `` `ungroup `` and `` `mute `` commands; see [Chrome Grouping](#chrome-grouping).
+   Optionally click **Add to Firefox** or **Add to Zen**, listed when the browser is installed, to search its tabs; see [Firefox And Zen](#firefox-and-zen).
 4. Optionally click **Turn On** next to Browser History, then **Open Settings** and drag Tab Scout's icon from the panel below System Settings into the Full Disk Access list. History is read as soon as access is on.
-5. Optionally check **Start Tab Scout at login**, then click **Open Search**, or switch to Safari or Chrome and press Cmd+T.
+5. Optionally check **Start Tab Scout at login**, then click **Open Search**, or switch to your browser and press Cmd+T.
 
 The shortcut hook starts automatically after permission is granted. Permissions are granted by the user through macOS; the app and tests do not bypass them. The window learns a browser's access without a prompt from macOS when the browser is running, and otherwise once Tab Scout has read its tabs.
 
@@ -56,7 +57,7 @@ The shortcut hook starts automatically after permission is granted. Permissions 
 - Tab goes to the next place (Safari, or a Chrome profile) and Shift+Tab to the one before, as a sideways swipe does. With Option held, Tab or the end of a swipe moves the tab on screen there.
 - Command+W closes the selected tab in its browser. The palette stays open on the row that follows, and `` `undo `` reopens the tab. While nothing is typed, Command+Delete does the same; with text in the field it deletes to the start of the line as usual.
 - The refresh icon requests updated results. The menu-bar menu provides search, shortcut capture, **Settings…**, and quit. **Settings…** holds **Google Suggestions**, **Use Browser History** and its sources, **Search Page Text**, **Clear Tab Scout History**, **Start at Login**, and the palette's places: which are shown, their colors and patterns, the swipe mode and its sensitivity.
-- Cmd+T is captured only while Safari or Chrome is active. Cmd+Shift+T and shortcuts in other apps retain their normal behavior.
+- Cmd+T is captured only while Safari or Chrome is active, or Firefox or Zen with Tab Scout's extension connected. Cmd+Shift+T and shortcuts in other apps retain their normal behavior.
 
 ## Suggestions And History
 
@@ -121,6 +122,40 @@ While Chrome is running, its tabs are listed with Safari's. Each browser is read
 
 The bridge is `Resources/ChromeBridge.js`, JavaScript for Automation compiled into the app. It needs no Chrome scripting dictionary to build, and takes the browser's bundle identifier, so other Chromium browsers that share Chrome's scripting terms could be added.
 
+## Firefox And Zen
+
+Firefox and the browsers built on it, such as Zen, offer other apps no scripting for tabs: nothing like Safari's and Chrome's dictionaries exists. Their tabs are therefore reached through Tab Scout's extension, `Resources/FirefoxExtension`, which answers the same commands as the Safari and Chrome scripts: list the tabs, say which is on screen, switch to one, open an address, a search or a new tab, close and reopen tabs. Everything in the palette works on top of that as it does for Chrome, with these differences:
+
+- Until the extension is added and connected, Tab Scout leaves the browser alone: Cmd+T stays the browser's own, and its tabs are not asked for.
+- Searches use the browser's own search engine, and **New tab** opens its own new-tab page. An empty new-tab page on screen is reused.
+- Firefox is one place in the palette, with its own color, pattern and symbol; running once per profile, it is asked about the copy in front. Zen is one place too, or one per space; see [Zen Spaces](#zen-spaces).
+- `` `mute `` works for all of the browser's tabs. `` `group `` and `` `ungroup `` are Chrome's only.
+- **Search Page Text** does not read Firefox or Zen pages: the extension asks for no access to sites.
+- Private windows are never listed or used, also when the extension is allowed to run in them.
+- The extension tells Tab Scout when the tab on screen or the set of tabs changes, so the browser's accessibility is never observed for that.
+
+### Zen Spaces
+
+Zen shows an extension only the tabs of the space in front, and tells it nothing about spaces. So the palette over Zen lists that space's tabs, with the essentials every space shows, and each space is a place of its own to swipe to, as a Chrome profile is.
+
+- The spaces' names, order, emoji and theme colors come from `zen-sessions.jsonlz4`, the session file in Zen's profile folder, which Tab Scout can read with Full Disk Access. Without it, or with a single space, Zen is one place. Zen saves that file every few seconds, so a space made a moment ago appears a moment later.
+- The space in front is the one holding the tabs Zen lists; when that settles nothing, as for an empty space, it is the one `prefs.js` names as last switched to.
+- Switching presses the space's item in Zen's **Spaces** menu through the accessibility access the keyboard permission gives, as for Chrome's profiles. The menu is recognized by its layout, in any language. A space the menu does not list is reached with its **Next Space** and **Previous Space** commands. The palette then reads Zen's tabs again and lists the new space's.
+- `` `move `` to another space closes the tab first and opens its page again in the other space, because the first space's tabs are out of reach once Zen has left it; if the page then fails to open, `` `undo `` brings the tab back. Option+Enter keeps the original. Moving to a space from another browser opens the page there after Zen has switched.
+- Spaces named alike are numbered by their place. A space's color and pattern can be changed, and the space hidden from swiping, under **Settings > Profiles & Swipe**.
+
+**Adding it.** The Setup page lists **Firefox** and **Zen** when they are installed. Clicking **Add to Firefox** or **Add to Zen** writes `~/Library/Application Support/Mozilla/NativeMessagingHosts/local.tabscout.firefox.json`, which tells the browser where `TabScoutFirefoxHost` is (Firefox and Zen read the same folder), and then hands the packaged extension, `Tab Scout.app/Contents/Resources/FirefoxExtension.xpi`, to the browser, which asks in its own window whether to add it. Nothing is added until you agree there. The step ticks itself off when the extension connects.
+
+**Signatures.** Firefox adds for good only extensions Mozilla has signed, and Zen does the same until told otherwise:
+
+- **Zen**: open `about:config`, set `xpinstall.signatures.required` to `false`, then click **Add to Zen**. Zen then asks whether to add the extension and keeps it across restarts. With the setting left on, it says the add-on could not be installed because it has not been verified.
+- **Firefox**: release and beta builds ignore that setting and refuse the unsigned package the same way. Without a signature, **Add to Firefox** opens `about:debugging` and shows the package in Finder: click **Load Temporary Add-on…** and choose it. It works until Firefox quits and has to be loaded again after that.
+- **Signed**: `bash sign-firefox.sh` has Mozilla sign the extension as a self-distributed add-on, which is free and not listed on addons.mozilla.org; Mozilla checks submissions automatically and may also review them, so it can take a while. It needs Node.js and the API credentials of an addons.mozilla.org account in `WEB_EXT_API_KEY` and `WEB_EXT_API_SECRET`. The signed package is saved as `Resources/FirefoxExtension.signed.xpi`, which `build.sh` puts into the app for as long as it holds the very files in `Resources/FirefoxExtension`. With it, **Add to Firefox** and **Add to Zen** both lead straight to the browser's own question, and Zen needs no setting changed. Mozilla signs each version once: raise `version` in the extension's `manifest.json` and `FirefoxExtension.version` in `Sources/FirefoxLink.swift` together before signing a changed extension.
+
+After an update of Tab Scout that changes the extension, the browser keeps the copy it has. The Setup page then says the added one is older: click **Add Again**.
+
+**How it talks.** The extension asks for `tabs`, `nativeMessaging` and `search`, and declares that it passes browsing activity on, which the browser shows before adding it. It keeps a connection to the helper, which the browser starts for it and which connects to Tab Scout's socket, `~/Library/Application Support/TabScout/firefox.sock`, as Chrome's helper does to its own: only the helper may connect, and each end checks the other's code signature. The browser a helper was started by is the one whose tabs its extension has. `TabScoutFirefoxHost` is the same program as `TabScoutChromeHost` under another name.
+
 ## Commands
 
 Typing `` ` `` first lists commands instead of tabs; the first word after it filters them by name, then the whole text by description. Each command names the browsers it works in, and only those of the browser the palette opened over are listed. Each row says what the command would do now, such as how many tabs it would close. Enter or Cmd+Enter runs the selected command. Commands are never sent to Google or remembered as searches.
@@ -133,7 +168,7 @@ Typing `` ` `` first lists commands instead of tabs; the first word after it fil
 | `sweep`, `sweep 14` | Closes this place's tabs not viewed for 7 days, or for the days typed. | Both |
 | `undo` | Reopens the tabs the last command, or Command+W, closed. | Both |
 | `group`, `ungroup` | Sorts the front window's loose tabs into named groups, or takes its tabs out of their groups. | Chrome |
-| `mute` | Mutes the profile's tabs playing sound; with none playing, unmutes the ones it muted. | Chrome |
+| `mute` | Mutes the profile's tabs playing sound; with none playing, unmutes the ones it muted. | Chrome, Firefox, Zen |
 
 **Moving.** A move opens the page again in the other place, so scroll position, form input and sign-in do not travel; web pages and files can move, a browser's own pages cannot. The page opens there before anything is closed, and the original is closed only while it is still at its position with its address, so a failure leaves the tab where it was. A Chrome profile is switched to through Chrome's Profiles menu, as a swipe does, and the page opens once the menu shows that profile in front. Places hidden from swiping in Settings are not offered.
 
@@ -176,6 +211,8 @@ Favicon and Google network tests use injected responses rather than contacting l
 
 Commands are covered by their rows and arguments, by which tabs each place lists, by duplicate and unviewed tab selection, and by closing and reopening tabs through Chrome's script against a stand-in. Safari's close and reopen are compiled and their helpers checked, but run against Safari only in the manual tests.
 
+The Firefox extension's decisions are checked without a browser, and the app's end of its link against stand-in extensions. Zen's session file, which space is in front, the spaces as places and the use of its Spaces menu are checked against fixtures. `/usr/bin/python3 Tests/FirefoxLive/run.py` is the one check that uses a real browser, and is not part of `test.sh`: it starts a hidden second copy of Firefox, or of Zen with `"/Applications/Zen Browser.app"` as its argument, on a throwaway profile, loads the extension as a temporary add-on, and runs every command against pages served from this Mac. It puts the helper's file back as it was afterwards.
+
 GitHub Actions runs the tests and builds/signature-verifies the app on macOS. CI does not launch Safari, request permissions, or prove physical keyboard-hook behavior.
 
 For visual testing without Safari access or permission requests:
@@ -198,7 +235,7 @@ Quit preview before launching the normal app. Core live behavior, permissions, r
 
 ## Limitations
 
-- Only tabs Safari and Chrome expose in open windows can be searched. Inactive Tab Groups and profiles are not a complete searchable inventory; activate the relevant group first.
+- Only tabs the browsers expose in open windows can be searched. Inactive Tab Groups and profiles are not a complete searchable inventory; activate the relevant group first.
 - Tab inventory timing depends on Safari responsiveness and session size. Cached results improve repeated opens; a cold start still needs a Safari read.
 - Authenticated-only, cross-origin, unsupported, or unavailable icons fall back to the system icon.
 - Google suggestions may be unavailable or change format without notice. They are not Apple's separate Safari Suggestions and do not reproduce signed-in Google predictions.
@@ -209,4 +246,4 @@ Quit preview before launching the normal app. Core live behavior, permissions, r
 
 ## Remove
 
-Use **Clear Tab Scout History**, disable **Start at Login**, quit Tab Scout, and remove the app. Remove its device-control / Accessibility, Automation, and optional Full Disk Access entries in System Settings if desired. In-memory tab snapshots, Google predictions, and imported Safari history are discarded on quit. Remove `~/Library/Caches/local.tabscout.app/Favicons-v1` to clear the persistent favicon cache and `~/Library/Application Support/TabScout/History` to remove any remaining local history files. To remove Chrome grouping, remove the Tab Scout extension on Chrome's Extensions page and delete `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/local.tabscout.chrome.json`.
+Use **Clear Tab Scout History**, disable **Start at Login**, quit Tab Scout, and remove the app. Remove its device-control / Accessibility, Automation, and optional Full Disk Access entries in System Settings if desired. In-memory tab snapshots, Google predictions, and imported Safari history are discarded on quit. Remove `~/Library/Caches/local.tabscout.app/Favicons-v1` to clear the persistent favicon cache and `~/Library/Application Support/TabScout/History` to remove any remaining local history files. To remove Chrome grouping, remove the Tab Scout extension on Chrome's Extensions page and delete `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/local.tabscout.chrome.json`. For Firefox and Zen, remove Tab Scout under Add-ons and Themes in each and delete `~/Library/Application Support/Mozilla/NativeMessagingHosts/local.tabscout.firefox.json`.

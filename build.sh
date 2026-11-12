@@ -23,13 +23,34 @@ BUILD_INFO="$(git -C "$SOURCE_DIR" describe --always --dirty 2>/dev/null || echo
     -module-cache-path "$WORK_DIR/ModuleCache" \
     "$SOURCE_DIR"/Sources/*.swift -lsqlite3 -Xlinker -weak_framework -Xlinker FoundationModels \
     -o "$APP_DIR/Contents/MacOS/TabScout"
-# The helper Chrome starts for Tab Scout's extension, and the extension itself.
+# The helper a browser starts for Tab Scout's extension, one program under a name per kind of browser, and the
+# extensions themselves.
 /usr/bin/xcrun swiftc -swift-version 5 -O -target "$(uname -m)-apple-macosx13.0" \
     -module-cache-path "$WORK_DIR/ModuleCache" \
     "$SOURCE_DIR/Sources/ChromeHost/main.swift" "$SOURCE_DIR/Sources/NativeMessaging.swift" \
     -o "$APP_DIR/Contents/MacOS/TabScoutChromeHost"
+/bin/cp -f "$APP_DIR/Contents/MacOS/TabScoutChromeHost" "$APP_DIR/Contents/MacOS/TabScoutFirefoxHost"
 /bin/rm -rf "$APP_DIR/Contents/Resources/ChromeExtension"
 /bin/cp -R "$SOURCE_DIR/Resources/ChromeExtension" "$APP_DIR/Contents/Resources/ChromeExtension"
+# Firefox adds only a package Mozilla has signed, which sign-firefox.sh fetches. The signed package is used while
+# it still holds these very files; otherwise the extension is packaged unsigned, which Zen can be told to accept.
+FIREFOX_DIR="$SOURCE_DIR/Resources/FirefoxExtension"
+FIREFOX_SIGNED="$SOURCE_DIR/Resources/FirefoxExtension.signed.xpi"
+FIREFOX_PACKAGE="$APP_DIR/Contents/Resources/FirefoxExtension.xpi"
+signed_is_current() {
+    local file
+    [[ -f "$FIREFOX_SIGNED" ]] || return 1
+    for file in manifest.json background.js; do
+        /usr/bin/unzip -p "$FIREFOX_SIGNED" "$file" 2>/dev/null | /usr/bin/cmp -s - "$FIREFOX_DIR/$file" || return 1
+    done
+}
+/bin/rm -f "$FIREFOX_PACKAGE"
+if signed_is_current; then
+    /bin/cp "$FIREFOX_SIGNED" "$FIREFOX_PACKAGE"
+else
+    [[ ! -f "$FIREFOX_SIGNED" ]] || echo "warning: FirefoxExtension.signed.xpi no longer matches Resources/FirefoxExtension; run sign-firefox.sh" >&2
+    (cd "$FIREFOX_DIR" && /usr/bin/zip -q -X "$FIREFOX_PACKAGE" manifest.json background.js)
+fi
 # Interrupted codesign runs can leave a temporary executable that must not be sealed as a resource.
 if [[ -f "$APP_DIR/Contents/MacOS/TabScout.cstemp" ]]; then
     mv "$APP_DIR/Contents/MacOS/TabScout.cstemp" "$WORK_DIR/TabScout-interrupted.cstemp"
@@ -37,6 +58,8 @@ fi
 # Nested code is signed before the app that seals it.
 /usr/bin/codesign --force --sign "${TAB_SCOUT_SIGN_IDENTITY:--}" --identifier local.tabscout.chrome-host \
     "$APP_DIR/Contents/MacOS/TabScoutChromeHost"
+/usr/bin/codesign --force --sign "${TAB_SCOUT_SIGN_IDENTITY:--}" --identifier local.tabscout.firefox-host \
+    "$APP_DIR/Contents/MacOS/TabScoutFirefoxHost"
 /usr/bin/codesign --force --sign "${TAB_SCOUT_SIGN_IDENTITY:--}" --identifier local.tabscout.app \
     --entitlements "$SOURCE_DIR/Resources/Entitlements.plist" "$APP_DIR"
 /usr/bin/codesign --verify --strict "$APP_DIR"

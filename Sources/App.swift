@@ -59,8 +59,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var assistantStatus: String?
     private var assistantWork: DispatchWorkItem?
     private let chromeLink = ChromeExtensionLink()
+    private let firefoxLink = FirefoxLink()
+    /// The browsers reached through Tab Scout's extension whose extension is connected now. Only they are asked
+    /// for tabs, and only over them does Cmd+T open the palette; in the others it stays the browser's own.
+    private var connectedExtensions: Set<Browser> = []
     private let grouper = TabGrouper()
     private let chromeProfiles = ChromeProfiles()
+    private let zenSpaces = ZenSpaces()
     /// The profiles of the browser the palette opened over, while it has more than one.
     private var profileState: ProfileState?
     private var profileSwipe = ProfileSwipe(count: 0, index: 0)
@@ -198,6 +203,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         get { UserDefaults.standard.bool(forKey: "ChromeExtensionAdded") }
         set { UserDefaults.standard.set(newValue, forKey: "ChromeExtensionAdded") }
     }
+    /// The browser whose extension the Setup page is waiting for, after its Add button was clicked.
+    private var addingExtension: Browser?
     private var allowedBrowsers: Set<Browser> = []
     private var deniedBrowsers: Set<Browser> = []
     /// Browsers whose page text could not be read; Chrome needs Allow JavaScript from Apple Events.
@@ -231,6 +238,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                    // Chrome may be launching or asking for permission; Safari's tabs never wait for it anyway.
                    .chrome: BrowserBridge(browser: .chrome, scriptURL: scripts[1],
                                           executor: { try ScriptProcess.execute(scriptURL: $0, arguments: $1, timeout: 20) })]
+        for browser in Browser.allCases where browser.usesExtension {
+            bridges[browser] = BrowserBridge(browser: browser, transport: { [weak self, firefoxLink] arguments in
+                let data = try firefoxLink.run(arguments, in: browser)
+                // The extension raises the tab's window; the browser itself comes forward here when another app is in front.
+                if ["switch", "url", "search", "new-tab"].contains(arguments.first ?? "") {
+                    DispatchQueue.main.async { self?.bringForward(browser) { _ in } }
+                }
+                return data
+            })
+        }
         for browser in Browser.allCases {
             let store = TabStore { [weak self] completion in self?.bridges[browser]?.list(completion: completion) }
             store.onPermissionDenied = { [weak self] in
@@ -253,6 +270,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 self.observeFocus(active)
             }
             stores[browser] = store
+            // A browser reached through the extension says itself when its tab on screen changes.
+            guard !browser.usesExtension else { continue }
             let observer = BrowserFocusObserver()
             observer.onChange = { [weak self] in if self?.frontBrowser == browser { self?.readActiveTab() } }
             focusObservers[browser] = observer
@@ -260,8 +279,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         buildMenu()
         buildPanel()
         reloadHistory()
-        frontBrowser = Browser(bundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
-        lastBrowser = frontBrowser ?? (!isRunning(.safari) && isRunning(.chrome) ? .chrome : .safari)
+        frontBrowser = servedBrowser(NSWorkspace.shared.frontmostApplication)
+        lastBrowser = frontBrowser ?? (isRunning(.safari) ? nil : Browser.allCases.first { isRunning($0) && serves($0) }) ?? .safari
         // A preview can show the palette as it opens over a given browser: --browser chrome.
         if preview, let index = CommandLine.arguments.firstIndex(of: "--browser"), index + 1 < CommandLine.arguments.count,
            let browser = Browser(rawValue: CommandLine.arguments[index + 1]) {
@@ -270,7 +289,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
             guard let self, let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
             let was = self.frontBrowser
-            self.frontBrowser = Browser(bundleID: app.bundleIdentifier)
+            self.frontBrowser = self.servedBrowser(app)
+            self.firefoxLink.noteFront(process: app.processIdentifier)
             if was != nil && self.frontBrowser != was { self.pauseFocus() }
             guard let browser = self.frontBrowser else { return }
             self.lastBrowser = browser
@@ -298,9 +318,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             self.focusHistory.forget(browser)
             self.snapshots[browser] = nil
             // New tabs go to a browser still open; with none open, to the one just quit.
-            if self.lastBrowser == browser, let other = Browser.allCases.first(where: { $0 != browser && self.isRunning($0) }) {
-                self.lastBrowser = other
-            }
+            if self.lastBrowser == browser, let other = self.otherBrowser(than: browser) { self.lastBrowser = other }
             if self.panel.isVisible { self.loadTabs(force: true) }
         }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged, .scrollWheel]) { [weak self] event in
@@ -325,6 +343,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             installTapIfAllowed()
             startFocusObservers()
             chromeLink.start()
+            firefoxLink.onChange = { [weak self] in self?.extensionsChanged() }
+            firefoxLink.onEvent = { [weak self] browser, event in self?.extensionChanged(event, in: browser) }
+            firefoxLink.start()
+            if let front = NSWorkspace.shared.frontmostApplication { firefoxLink.noteFront(process: front.processIdentifier) }
+            refreshFirefoxHost()
             permissionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
                 self?.installTapIfAllowed()
                 self?.startFocusObservers()
@@ -362,6 +385,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         if !preview {
             googleSuggestions.cancel()
             chromeLink.stop()
+            firefoxLink.stop()
         }
         learning.flush()
     }
@@ -392,7 +416,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let search = menu.addItem(withTitle: "Search Tabs", action: #selector(showSearch(_:)), keyEquivalent: "")
         search.target = self
         menu.addItem(.separator())
-        pauseItem = menu.addItem(withTitle: "Capture Cmd+T in Safari and Chrome", action: #selector(toggleCapture(_:)), keyEquivalent: "")
+        pauseItem = menu.addItem(withTitle: "Capture Cmd+T in Browsers", action: #selector(toggleCapture(_:)), keyEquivalent: "")
         pauseItem.target = self
         pauseItem.state = enabled ? .on : .off
         menu.addItem(.separator())
@@ -450,6 +474,89 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         !NSRunningApplication.runningApplications(withBundleIdentifier: browser.bundleID).isEmpty
     }
 
+    /// Whether Tab Scout can list `browser`'s tabs: Safari's and Chrome's through their scripting, the others'
+    /// once their copy of Tab Scout's extension is connected.
+    private func serves(_ browser: Browser) -> Bool {
+        !browser.usesExtension || connectedExtensions.contains(browser)
+    }
+
+    /// The browser `app` is, when Tab Scout serves it. In any other app, a browser without the extension included,
+    /// Cmd+T is left alone.
+    private func servedBrowser(_ app: NSRunningApplication?) -> Browser? {
+        guard let browser = Browser(bundleID: app?.bundleIdentifier), serves(browser) else { return nil }
+        return browser
+    }
+
+    /// A running browser Tab Scout serves other than `browser`, for when that one quits or loses its extension.
+    private func otherBrowser(than browser: Browser) -> Browser? {
+        Browser.allCases.first { $0 != browser && isRunning($0) && serves($0) }
+    }
+
+    /// The running browsers reached through the extension, each a place of its own in the palette.
+    private var extensionPlaces: [Browser] {
+        if preview { return lastBrowser.usesExtension ? [lastBrowser] : [] }
+        return Browser.allCases.filter { $0.usesExtension && connectedExtensions.contains($0) && isRunning($0) }
+    }
+
+    /// An extension connected or left. Its browser's tabs are read at once, so the first Cmd+T there shows them,
+    /// and a browser that lost its extension gets its own Cmd+T back.
+    private func extensionsChanged() {
+        let connected = firefoxLink.connectedBrowsers
+        let gained = connected.subtracting(connectedExtensions)
+        let lost = connectedExtensions.subtracting(connected)
+        connectedExtensions = connected
+        for browser in gained {
+            UserDefaults.standard.set(true, forKey: Self.extensionAddedKey(browser))
+            allowedBrowsers.insert(browser)
+            stores[browser]?.prewarm()
+            if browser == .zen { zenSpaces.noteMenu() }
+        }
+        for browser in lost {
+            allowedBrowsers.remove(browser)
+            stores[browser]?.invalidate()
+            if focusTracker.current?.browser == browser { pauseFocus() }
+            if lastBrowser == browser, !panel.isVisible, let other = otherBrowser(than: browser) { lastBrowser = other }
+        }
+        // The app in front may just have become a browser Tab Scout serves, or stopped being one.
+        let front = servedBrowser(NSWorkspace.shared.frontmostApplication)
+        if front != frontBrowser {
+            if frontBrowser != nil { pauseFocus() }
+            frontBrowser = front
+            if let front, !panel.isVisible {
+                lastBrowser = front
+                readActiveTab()
+            }
+        }
+        if let adding = addingExtension, gained.contains(adding) {
+            // Back from the browser to show the step done.
+            addingExtension = nil
+            returnToSetup()
+        } else {
+            updateSetup()
+        }
+    }
+
+    /// A browser's extension says its tab on screen or its tabs changed, which Safari and Chrome are watched for.
+    private func extensionChanged(_ event: String, in browser: Browser) {
+        if event == "focus", frontBrowser == browser { readActiveTab() }
+        // In Zen another tab on screen can mean another space, with other tabs altogether; asking is cheap.
+        if !panel.isVisible, allowedBrowsers.contains(browser) { stores[browser]?.prewarm(olderThan: event == "focus" ? 1 : 2) }
+    }
+
+    private static func extensionAddedKey(_ browser: Browser) -> String { "ExtensionAdded." + browser.rawValue }
+
+    /// Whether Tab Scout's extension has connected from `browser` before, so it counts as added while the browser is closed.
+    private func extensionAdded(_ browser: Browser) -> Bool {
+        UserDefaults.standard.bool(forKey: Self.extensionAddedKey(browser))
+    }
+
+    /// Keeps the file that tells Firefox where Tab Scout's helper is pointing at this copy of the app, once it exists.
+    private func refreshFirefoxHost() {
+        guard FileManager.default.fileExists(atPath: FirefoxHostManifest.url.path),
+              let helper = Bundle.main.url(forAuxiliaryExecutable: "TabScoutFirefoxHost") else { return }
+        try? FirefoxHostManifest.install(helper: helper)
+    }
+
     private func bridge(_ browser: Browser) -> BrowserBridge { bridges[browser]! }
 
     private func describe(_ error: Error, _ browser: Browser) -> String {
@@ -469,7 +576,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 // A tab the list at hand does not have was opened or navigated, so the list is read again.
                 if let listed = self.stores[browser]?.snapshot?.tabs,
                    !listed.contains(where: { $0.windowID == tab.windowID && $0.index == tab.index && $0.url == tab.url }) {
-                    self.stores[browser]?.prewarm(olderThan: 15)
+                    self.stores[browser]?.prewarm(olderThan: browser.usesExtension ? 1 : 15)
                 }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
@@ -491,7 +598,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
         if frontBrowser == tab.browser, let visit = focusTracker.observe(tab, at: Date()) { recordVisit(visit) }
         // A page looked at for a few seconds has loaded; reading only viewed pages never wakes sleeping tabs.
-        guard pageTextEnabled, !preview, !pageTextUnavailable.contains(tab.browser) else { return }
+        guard pageTextEnabled, !preview, !tab.browser.usesExtension, !pageTextUnavailable.contains(tab.browser) else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             guard let self, let current = self.focusTracker.current,
                   current.windowID == tab.windowID, current.url == tab.url else { return }
@@ -744,11 +851,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     /// the menu bar while the browser last used is closed, it goes to one still open.
     private func syncFrontBrowser(_ front: NSRunningApplication?) {
         guard !preview else { return }
-        if let browser = Browser(bundleID: front?.bundleIdentifier) {
+        if let front { firefoxLink.noteFront(process: front.processIdentifier) }
+        if let browser = servedBrowser(front) {
             if frontBrowser != nil && frontBrowser != browser { pauseFocus() }
             frontBrowser = browser
             lastBrowser = browser
-        } else if !isRunning(lastBrowser), let other = Browser.allCases.first(where: { $0 != lastBrowser && isRunning($0) }) {
+        } else if !isRunning(lastBrowser) || !serves(lastBrowser), let other = otherBrowser(than: lastBrowser) {
             lastBrowser = other
         }
         PaletteLog.note("open over \(lastBrowser.rawValue), front app \(front?.bundleIdentifier ?? "none")")
@@ -828,18 +936,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 BrowserTab(windowID: 2, index: 1, title: "Wikipedia", url: "https://en.wikipedia.org/")
             ]
             let chrome = [BrowserTab(browser: .chrome, windowID: 5, index: 1, title: "Swift Forums", url: "https://forums.swift.org/")]
+            // --browser firefox or zen shows the palette over that browser, with tabs of its own.
+            let other = lastBrowser.usesExtension ? [
+                BrowserTab(browser: lastBrowser, windowID: 3, index: 1, title: "MDN Web Docs", url: "https://developer.mozilla.org/"),
+                BrowserTab(browser: lastBrowser, windowID: 3, index: 2, title: "Hacker News", url: "https://news.ycombinator.com/")
+            ] : []
             focusHistory.focus(safari[1])
             focusHistory.focus(safari[0])
-            waiting = [.safari, .chrome]
+            waiting = other.isEmpty ? [.safari, .chrome] : [.safari, .chrome, lastBrowser]
             loading = true
-            for (browser, samples) in [(Browser.safari, safari), (.chrome, chrome)] {
+            for (browser, samples) in [(Browser.safari, safari), (.chrome, chrome), (lastBrowser, other)] where !samples.isEmpty {
                 didLoad(browser, .success(TabSnapshot(tabs: samples, active: samples[0], index: TabSearchIndex(samples),
                                                       fetchedAt: Date(), revision: 0)), token: token)
             }
             return
         }
-        // Chrome is asked only while it runs; Safari's script answers at once when Safari is closed.
-        let browsers = Browser.allCases.filter { $0 == .safari || isRunning($0) }
+        // Chrome is asked only while it runs; Safari's script answers at once when Safari is closed. A browser
+        // reached through the extension is asked once that is connected, or when the palette opened over it.
+        let browsers = Browser.allCases.filter { $0 == .safari || (isRunning($0) && (serves($0) || $0 == lastBrowser)) }
         snapshots = snapshots.filter { browsers.contains($0.key) }
         browserErrors = browserErrors.filter { browsers.contains($0.key) }
         waiting = Set(browsers)
@@ -875,6 +989,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             if case BridgeError.permission = error {
                 allowedBrowsers.remove(browser)
                 deniedBrowsers.insert(browser)
+                snapshots[browser] = nil
+            } else if case BridgeError.extensionMissing = error {
+                allowedBrowsers.remove(browser)
                 snapshots[browser] = nil
             }
         }
@@ -1258,7 +1375,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         return event
     }
 
-    /// Shows the profiles of the browser the palette opened over. Only Chrome's can be told apart and switched.
+    /// Shows the places to swipe between: the running browsers, with Chrome's profiles and Zen's spaces each a
+    /// place of their own.
     private func loadProfiles() {
         if preview {
             let names = CommandLine.arguments.firstIndex(of: "--profiles").flatMap {
@@ -1266,24 +1384,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             } ?? ["Personal", "Work"]
             let menu = names.enumerated().map { ProfileMenuItem(title: $0.element, checked: $0.offset == 0) }
             chromeProfileCount = names.count
+            // --spaces "Home,Work" shows Zen with spaces of those names, the first in front.
+            let spaces = CommandLine.arguments.firstIndex(of: "--spaces").flatMap {
+                $0 + 1 < CommandLine.arguments.count ? CommandLine.arguments[$0 + 1].split(separator: ",").map(String.init) : nil
+            }?.map { ZenSpace(id: "{" + $0 + "}", name: $0) } ?? []
+            let zen = ZenSession(spaces: spaces).places(current: spaces.first?.id)
             return showProfiles(BrowserSpaces.combine(safari: true, chrome: ProfileMenu.state(menu: menu, local: [], lastUsed: nil),
-                                                      chromeRunning: true, front: lastBrowser))
+                                                      chromeRunning: true, others: extensionPlaces,
+                                                      spaces: zen.map { [.zen: $0] } ?? [:], front: lastBrowser))
         }
-        guard isRunning(.chrome) else {
-            return showProfiles(BrowserSpaces.combine(safari: isRunning(.safari), chrome: nil, chromeRunning: false, front: lastBrowser))
-        }
-        chromeProfiles.read { [weak self] state in
+        readPlaces { [weak self] chrome, spaces in
             guard let self, self.panel.isVisible, !self.acting else { return }
+            let chromeRunning = self.isRunning(.chrome)
             // Profiles added or removed since Chrome was last read change whether one profile is listed.
-            if let state, state.profiles.count != self.chromeProfileCount {
-                self.chromeProfileCount = state.profiles.count
+            if chromeRunning, let chrome, chrome.profiles.count != self.chromeProfileCount {
+                self.chromeProfileCount = chrome.profiles.count
                 self.rescope(fade: false)
             }
-            self.showProfiles(BrowserSpaces.combine(safari: self.isRunning(.safari), chrome: state, chromeRunning: true,
-                                                    front: self.lastBrowser))
+            self.showProfiles(BrowserSpaces.combine(safari: self.isRunning(.safari), chrome: chrome, chromeRunning: chromeRunning,
+                                                    others: self.extensionPlaces, spaces: spaces, front: self.lastBrowser))
             // Commands typed before the places were read list them now.
             if self.ready, PaletteCommand.query(in: self.searchField.stringValue) != nil { self.updateRows(preserveSelection: true) }
         }
+    }
+
+    /// Reads what the places are made of: Chrome's profiles while it runs, and Zen's spaces while its extension is
+    /// connected. Zen is asked for its tabs first, because the tabs it lists tell which space it is in.
+    private func readPlaces(completion: @escaping (_ chrome: ProfileState?, _ spaces: [Browser: ProfileState]) -> Void) {
+        var chrome: ProfileState?
+        var spaces: [Browser: ProfileState] = [:]
+        let reads = DispatchGroup()
+        if isRunning(.chrome) {
+            reads.enter()
+            chromeProfiles.read { state in
+                chrome = state
+                reads.leave()
+            }
+        }
+        if extensionPlaces.contains(.zen) {
+            reads.enter()
+            bridge(.zen).list { [zenSpaces] result in
+                let inventory = try? result.get()
+                // Windows are listed front to back, so the first window is the one on screen.
+                let front = inventory?.active?.windowID ?? inventory?.tabs.first?.windowID
+                let addresses = inventory?.tabs.filter { $0.windowID == front }.map(\.url) ?? []
+                zenSpaces.read(showing: addresses) { state in
+                    if let state { spaces[.zen] = state }
+                    reads.leave()
+                }
+            }
+        }
+        reads.notify(queue: .main) { completion(chrome, spaces) }
     }
 
     /// Shows `state`'s profiles, or hides them all with nil or a single profile. A menu read again only moves the
@@ -1513,12 +1664,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 self.loadProfiles()
             }
         }
-        // A Chrome profile is switched to through Chrome's Profiles menu; Safari, or Chrome as one place, just comes
-        // forward.
+        // A Chrome profile is switched to through Chrome's Profiles menu, and one of Zen's spaces through its Spaces
+        // menu; a browser that is one place just comes forward.
         if space.browser == .chrome && (space.menuTitle != nil || space.directory != nil) {
             chromeProfiles.switchTo(space) { [weak self] result in
                 guard case .success = result, let self else { return finish(result) }
                 self.bringForward(.chrome, completion: finish)
+            }
+        } else if space.browser == .zen && space.menuTitle != nil {
+            zenSpaces.switchTo(space) { [weak self] result in
+                guard case .success = result, let self else { return finish(result) }
+                self.bringForward(.zen, completion: finish)
             }
         } else {
             bringForward(space.browser, completion: finish)
@@ -1540,6 +1696,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     /// Asks the browser for its tab on screen until the place's window is in front, or the browser has opened one,
     /// then lists that place's tabs. Without any, the place's tabs are listed as they were read.
     private func followSwitch(to browser: Browser, from leaving: BrowserTab?, attempt: Int = 0) {
+        if browser.usesExtension {
+            // From another of Zen's spaces, the tabs listed until now are the ones to see change.
+            return followExtensionSwitch(to: browser, before: leaving?.browser == browser ? snapshots[browser]?.tabs : nil)
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0.15 : 0.25)) { [weak self] in
             guard let self, self.panel.isVisible, self.listFrozen else { return }
             self.bridge(browser).active { [weak self] result in
@@ -1550,6 +1710,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                     return self.followFrontTab(tab)
                 }
                 if attempt < 8 { self.followSwitch(to: browser, from: leaving, attempt: attempt + 1) } else { self.rescope(fade: true) }
+            }
+        }
+    }
+
+    /// After a switch to a browser reached through the extension, its tabs are read again: Zen lists a space's
+    /// tabs only once it is in that space. Coming from another space, the read is repeated until the tabs differ
+    /// from those of the space left, or Zen has had time enough; then whatever it lists is shown.
+    private func followExtensionSwitch(to browser: Browser, before: [BrowserTab]?, attempt: Int = 0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0.15 : 0.25)) { [weak self] in
+            guard let self, self.panel.isVisible, self.listFrozen, self.lastBrowser == browser else { return }
+            self.bridge(browser).list { [weak self] result in
+                guard let self, self.panel.isVisible, self.listFrozen, self.lastBrowser == browser else { return }
+                guard case .success(let inventory) = result, inventory.tabs != before || attempt >= 6 else {
+                    if attempt < 6 { return self.followExtensionSwitch(to: browser, before: before, attempt: attempt + 1) }
+                    return self.rescope(fade: true)
+                }
+                self.snapshots[browser] = TabSnapshot(tabs: inventory.tabs, active: inventory.active, index: TabSearchIndex(inventory.tabs),
+                                                      fetchedAt: Date(), revision: self.snapshots[browser]?.revision ?? 0)
+                self.activeOverride = nil
+                if let active = inventory.active { self.observeFocus(active) }
+                self.rescope(fade: true)
             }
         }
     }
@@ -1569,7 +1750,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     /// After a profile switch, follows the tab on screen: the tabs listed become its profile's, and new tabs and
     /// searches go to its window.
     private func followFrontTab(_ tab: BrowserTab) {
-        guard listFrozen, panel.isVisible, tab.browser == lastBrowser, tab != activeTab else { return }
+        // A browser reached through the extension has its tabs read again after a switch, which also finds the tab on screen.
+        guard listFrozen, panel.isVisible, tab.browser == lastBrowser, !tab.browser.usesExtension, tab != activeTab else { return }
         activeOverride = tab
         rescope(fade: true)
     }
@@ -1930,8 +2112,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         dismiss(restoreFocus: true)
     }
 
-    /// Has Tab Scout's extension in the profile of the front Chrome window do something, and stays open to say what.
+    /// Has Tab Scout's extension in the profile of the front Chrome window, or in Firefox or Zen, do something, and
+    /// stays open to say what.
     private func askExtension(_ type: String, working: String, done: @escaping ([String: Any]) -> String) {
+        if lastBrowser.usesExtension {
+            // One copy of the extension has all of the browser's tabs, so no window needs naming.
+            let browser = lastBrowser
+            beginWork(working)
+            firefoxLink.perform(type, in: browser) { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case .success(let reply): self.endWork(done(reply))
+                case .failure(let error): self.endWork(self.describe(error, browser), cleared: false)
+                }
+            }
+            return
+        }
         guard let windowID = frontWindow(of: .chrome) else {
             footer.stringValue = "Open a Chrome window first"
             return
@@ -1987,13 +2183,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             self.dismiss(restoreFocus: false)
             self.stores[place.browser]?.prewarm()
         }
+        let failed = { [weak self] (message: String) in
+            guard let self else { return }
+            self.unlock()
+            self.panel.makeKeyAndOrderFront(nil)
+            self.panel.makeFirstResponder(self.searchField)
+            stay(message)
+        }
+        // Between two of Zen's spaces the original closes first: once Zen is in the other space, the tabs of this
+        // one are out of the extension's reach. Should the page then fail to open, `undo` brings the tab back.
+        if place.browser == tab.browser, tab.browser.usesExtension, !keep {
+            bridge(tab.browser).close([tab]) { [weak self] closed in
+                guard let self else { return }
+                guard case .success(let gone) = closed, !gone.isEmpty else { return failed("That tab had moved, so it stays where it is") }
+                self.closedBatches.append(gone)
+                self.open(tab.url, in: place) { result in
+                    if case .failure(let error) = result {
+                        return failed("Could not open the page in \(place.name): \(error.localizedDescription); `undo reopens it here")
+                    }
+                    finish()
+                }
+            }
+            return
+        }
         open(tab.url, in: place) { [weak self] result in
             guard let self else { return }
             if case .failure(let error) = result {
-                self.unlock()
-                self.panel.makeKeyAndOrderFront(nil)
-                self.panel.makeFirstResponder(self.searchField)
-                return stay("Could not open the page in \(place.name): \(error.localizedDescription)")
+                return failed("Could not open the page in \(place.name): \(error.localizedDescription)")
             }
             guard !keep else { return finish() }
             self.bridge(tab.browser).close([tab]) { [weak self] closed in
@@ -2006,8 +2222,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
     }
 
-    /// Opens an address in a place: Safari, Chrome as it is, or a Chrome profile, which Chrome is first switched to as
-    /// its own Profiles menu does. The page opens only once that profile's window is in front.
+    /// Opens an address in a place: a browser as it is, a Chrome profile, which Chrome is first switched to as its
+    /// own Profiles menu does, or one of Zen's spaces, switched to as its Spaces menu does. The page opens only
+    /// once that profile's window, or that space, is in front.
     private func open(_ url: String, in place: BrowserProfile, completion: @escaping (Result<Void, Error>) -> Void) {
         let openInFront = { [weak self] (front: BrowserTab?) in
             guard let self else { return }
@@ -2015,6 +2232,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             self.bridge(place.browser).open(.url(url), windowID: front?.windowID ?? 0,
                                             reusing: front.flatMap { $0.isBlank ? $0 : nil }) { result in
                 completion(result.map { _ in })
+            }
+        }
+        if place.browser == .zen, place.menuTitle != nil {
+            return zenSpaces.switchTo(place) { result in
+                if case .failure(let error) = result { return completion(.failure(error)) }
+                // Zen opens a new tab in the space it is in, so the page waits until Zen has arrived there.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { openInFront(nil) }
             }
         }
         guard place.browser == .chrome, place.menuTitle != nil || place.directory != nil else { return openInFront(nil) }
@@ -2245,6 +2469,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         // Closing the setup window gives up on adding the Chrome extension.
         guard notification.object as? NSWindow === settingsWindow else { return }
         chromeProfilesBeforeAdding = nil
+        addingExtension = nil
     }
 
     @objc private func toggleCapture(_ sender: Any?) {
@@ -2475,23 +2700,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         settingsModel.placesNote = note
     }
 
-    /// Reads Chrome's profiles again for the settings window. While Chrome is closed, the profiles it had when last
-    /// read stay listed.
+    /// Reads Chrome's profiles and Zen's spaces again for the settings window.
     private func reloadPlaces() {
         if preview {
             let menu = ["Personal", "Work", "Side project"].enumerated().map { ProfileMenuItem(title: $0.element, checked: $0.offset == 0) }
             knownPlaces = BrowserSpaces.combine(safari: true, chrome: ProfileMenu.state(menu: menu, local: [], lastUsed: nil),
-                                                chromeRunning: true, front: .safari).profiles
+                                                chromeRunning: true, others: [.firefox, .zen], front: .safari).profiles
             return syncPlaces(note: nil)
         }
-        chromeProfiles.read { [weak self] state in
+        readPlaces { [weak self] state, spaces in
             guard let self else { return }
             let running = self.isRunning(.chrome)
-            if state == nil, !running, self.knownPlaces.contains(where: { $0.browser == .chrome }) {
-                return self.syncPlaces(note: "Chrome is closed; its profiles are listed as they were when last read.")
-            }
-            self.knownPlaces = BrowserSpaces.combine(safari: true, chrome: state, chromeRunning: running, front: .safari).profiles
-            self.syncPlaces(note: running ? nil : "Open Chrome to list its profiles here.")
+            // While Chrome is closed, the profiles it had when last read stay listed.
+            let kept = self.knownPlaces.filter { $0.browser == .chrome }
+            let closed = state == nil && !running && !kept.isEmpty
+            self.knownPlaces = BrowserSpaces.combine(safari: true, chrome: closed ? ProfileState(profiles: kept, current: nil) : state,
+                                                     chromeRunning: running || closed, others: self.extensionPlaces, spaces: spaces,
+                                                     front: .safari).profiles
+            self.syncPlaces(note: closed ? "Chrome is closed; its profiles are listed as they were when last read."
+                            : running ? nil : "Open Chrome to list its profiles here.")
         }
     }
 
@@ -2508,6 +2735,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         case .safari: return "Safari"
         case .chrome: return "Google Chrome"
         case .chromeExtension: return "Chrome Extension (Optional)"
+        case .firefox: return "Firefox (Optional)"
+        case .zen: return "Zen (Optional)"
         case .history: return "Browser History (Optional)"
         }
     }
@@ -2517,6 +2746,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         case .keyboard: return "Open Settings"
         case .safari, .chrome: return "Allow Access"
         case .chromeExtension: return chromeExtensionAdded ? "Add to Profile" : "Add to Chrome"
+        case .firefox: return extensionAdded(.firefox) ? "Add Again" : "Add to Firefox"
+        case .zen: return extensionAdded(.zen) ? "Add Again" : "Add to Zen"
         case .history: return safariHistoryEnabled ? "Open Settings" : "Turn On"
         }
     }
@@ -2528,6 +2759,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         case .safari: requestAccess(.safari)
         case .chrome: requestAccess(.chrome)
         case .chromeExtension: addChromeExtension()
+        case .firefox: addFirefoxExtension(to: .firefox)
+        case .zen: addFirefoxExtension(to: .zen)
         case .history: if safariHistoryEnabled { openHistorySettings() } else { toggleSafariHistory(nil) }
         }
     }
@@ -2539,9 +2772,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             // Sample steps, so the Setup page can be looked at without asking macOS for anything.
             let states: [SetupStep: (SetupState, String)] = [.keyboard: (.done, "Allowed"), .safari: (.done, "Allowed"),
                 .chrome: (.needed, "Needed for Chrome tabs"), .chromeExtension: (.optional, "Lets `group, `ungroup and `mute work in Chrome"),
+                .firefox: (.optional, "Lets Cmd+T search Firefox's tabs, through Tab Scout's extension"),
+                .zen: (.done, "Added; Cmd+T searches Zen's tabs"),
                 .history: (.done, "Allowed; 3 of 3 profiles used")]
-            settingsModel.setup = SetupStep.allCases.map { step in
-                SettingsModel.SetupItem(id: step, title: setupTitle(step), detail: states[step]!.1, state: states[step]!.0, action: setupAction(step))
+            settingsModel.setup = SetupStep.allCases.compactMap { step in
+                states[step].map { SettingsModel.SetupItem(id: step, title: setupTitle(step), detail: $0.1, state: $0.0, action: setupAction(step)) }
             }
             settingsModel.setupStatus = "Cmd+T needs the steps below"
             return
@@ -2563,8 +2798,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         // Checking trust registers the executable with macOS. Preview builds must not do that.
         let trusted = AXIsProcessTrusted()
         showStep(.keyboard, !trusted ? .needed : eventTap == nil ? .problem : .done,
-                 !trusted ? "Required for Cmd+T in Safari and Chrome" : eventTap == nil ? "Access granted; shortcut unavailable" : "Allowed")
-        for browser in Browser.allCases {
+                 !trusted ? "Required for Cmd+T in your browsers" : eventTap == nil ? "Access granted; shortcut unavailable" : "Allowed")
+        for browser in Browser.allCases where browser.usesExtension {
+            // A browser that is not installed has no row.
+            guard NSWorkspace.shared.urlForApplication(withBundleIdentifier: browser.bundleID) != nil else { continue }
+            let step = extensionStep(browser)
+            showStep(SetupStep(browser), step.state, step.text)
+            steps[SetupStep(browser)]?.help = step.help
+        }
+        for browser in Browser.allCases where !browser.usesExtension {
             // Access is otherwise known only once Tab Scout has read the browser, but macOS can tell without asking.
             if !allowedBrowsers.contains(browser) && !deniedBrowsers.contains(browser) && isRunning(browser) {
                 switch automationAllowed(browser) {
@@ -2593,7 +2835,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
         let included = historyProfiles.filter { !Self.excludedProfiles.contains($0.id) }.count
         showStep(.history, !safariHistoryEnabled ? .optional : !historyLoaded ? .waiting : historyError != nil ? .problem : .done,
-                 !safariHistoryEnabled ? "Off; ranks tabs with Safari and Chrome history" : !historyLoaded ? "Checking..."
+                 !safariHistoryEnabled ? "Off; ranks tabs with your browsers' history" : !historyLoaded ? "Checking..."
                  : historyError != nil ? "Unavailable; local choices still work"
                  : historyProfiles.count > 1 ? "Allowed; \(included) of \(historyProfiles.count) profiles used" : "Allowed")
         steps[.chromeExtension]?.actionEnabled = chromeInstalled
@@ -2606,9 +2848,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let items = SetupStep.allCases.compactMap { steps[$0] }
         if model.setup != items { model.setup = items }
         if model.ready != ready { model.ready = ready }
-        let status = setupProblem?.text ?? (ready ? "Press Cmd+T in Safari or Chrome" : "Cmd+T needs the steps below")
+        let status = setupProblem?.text ?? (ready ? "Press Cmd+T in your browser" : "Cmd+T needs the steps below")
         if model.setupStatus != status { model.setupStatus = status }
         if model.setupStatusHelp != setupProblem?.help { model.setupStatusHelp = setupProblem?.help }
+    }
+
+    /// How far Tab Scout's extension is in a browser reached through it, for the Setup page.
+    private func extensionStep(_ browser: Browser) -> (state: SetupState, text: String, help: String?) {
+        let name = browser.name
+        if connectedExtensions.contains(browser) {
+            let outdated = firefoxLink.versions(in: browser).contains { $0 != FirefoxExtension.version }
+            return outdated ? (.problem, "Added, but an older version; add it again to update it", nil)
+                : (.done, "Added; Cmd+T searches \(name)'s tabs", nil)
+        }
+        if addingExtension == browser {
+            let signed = Self.firefoxPackage.flatMap { try? Data(contentsOf: $0) }.map(FirefoxExtension.isSigned) ?? false
+            if signed { return (.waiting, "\(name) asks whether to add Tab Scout; click Add there", nil) }
+            if browser == .zen {
+                // Zen takes an unsigned extension once its own setting allows it; Firefox never does.
+                return (.waiting, "Zen asks whether to add Tab Scout; click Add there. If it says the add-on is not verified, set xpinstall.signatures.required to false in about:config, then click Add to Zen again",
+                        "Tab Scout's extension is not signed by Mozilla, and Zen adds unsigned extensions only with that setting off. This step ticks itself off when the extension connects.")
+            }
+            return (.waiting, "In Firefox, click Load Temporary Add-on and choose the file shown in Finder",
+                    "Firefox adds for good only extensions Mozilla has signed, and this copy of Tab Scout's is not. Loaded from about:debugging it works until Firefox quits. docs/NATIVE_COMPANION.md says how to have it signed.")
+        }
+        if extensionAdded(browser) {
+            return isRunning(browser) ? (.problem, "Not connected; turn Tab Scout on in \(name)'s add-ons, or add it again", nil)
+                : (.done, "Added; connects when \(name) opens", nil)
+        }
+        return (.optional, "Lets Cmd+T search \(name)'s tabs, through Tab Scout's extension", nil)
+    }
+
+    private static var firefoxPackage: URL? { Bundle.main.url(forResource: "FirefoxExtension", withExtension: "xpi") }
+
+    /// Firefox and Zen list their tabs only to extensions, so Tab Scout needs its own in each. The browser asks
+    /// about adding it in its own window, and nothing is added until the person agrees there. The step ticks itself
+    /// off when the extension connects.
+    private func addFirefoxExtension(to browser: Browser) {
+        let alert = NSAlert()
+        guard let helper = Bundle.main.url(forAuxiliaryExecutable: "TabScoutFirefoxHost"), let package = Self.firefoxPackage,
+              let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: browser.bundleID) else {
+            alert.messageText = "The \(browser.name) extension is missing from this copy of Tab Scout"
+            alert.informativeText = "Rebuild the app using build.sh."
+            alert.runModal()
+            return
+        }
+        do {
+            // The browser starts the helper for the extension only once this tells it where the helper is.
+            try FirefoxHostManifest.install(helper: helper)
+        } catch {
+            alert.messageText = "Tab Scout could not set up its \(browser.name) extension"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+            return
+        }
+        addingExtension = browser
+        updateSetup()
+        let signed = (try? Data(contentsOf: package)).map(FirefoxExtension.isSigned) ?? false
+        if signed || browser == .zen {
+            // Opening the package makes the browser ask whether to add it.
+            NSWorkspace.shared.open([package], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+        } else if let page = URL(string: "about:debugging#/runtime/this-firefox") {
+            NSWorkspace.shared.activateFileViewerSelecting([package])
+            NSWorkspace.shared.open([page], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+        }
     }
 
     private func accessState(_ browser: Browser) -> (SetupState, String) {
@@ -2672,7 +2975,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private func openHistorySettings() {
         let alert = NSAlert()
         alert.messageText = "Browser History Access"
-        alert.informativeText = "macOS protects Safari and Chrome history with Full Disk Access, a broad permission. Tab Scout reads the history of every Safari and Chrome profile locally, never sends it to Google, and can leave out any profile under Settings > Browser History. System Settings opens on Full Disk Access with Tab Scout's icon below it to drag into the list. Tab search and local choices work without this permission."
+        alert.informativeText = "macOS protects browser history with Full Disk Access, a broad permission. Tab Scout reads the history of every Safari, Chrome, Firefox and Zen profile locally, never sends it to Google, and can leave out any profile under Settings > Browser History. System Settings opens on Full Disk Access with Tab Scout's icon below it to drag into the list. Tab search and local choices work without this permission."
         alert.addButton(withTitle: "Open Settings")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }

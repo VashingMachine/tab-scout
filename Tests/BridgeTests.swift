@@ -13,6 +13,7 @@ struct BridgeTests {
         try actionArguments()
         try blankTabArguments()
         try chromeArguments()
+        try extensionArguments()
         try closingAndReopening()
         try defaultPageArguments()
         try defaultPageFailures()
@@ -126,6 +127,37 @@ struct BridgeTests {
             [id, "switch", "7", "2", "chrome://newtab/", "New Tab"]
         ], "Chrome commands name the browser, search through Google, open Chrome's own new-tab page and reuse an empty tab")
         expect(calls.values.allSatisfy { $0.url == chromeURL }, "Chrome commands use Chrome's script")
+    }
+
+    static func extensionArguments() throws {
+        let calls = CallRecorder()
+        let bridge = BrowserBridge(browser: .zen, transport: { arguments in
+            expect(!Thread.isMainThread, "Ask the extension off the main thread")
+            calls.append(url: URL(fileURLWithPath: "/"), arguments: arguments)
+            if arguments[0] == "close" { return Data("[0]".utf8) }
+            return arguments[0] == "list" ? Data("[[3,1,\"Docs\",\"https://docs.example/\",true]]".utf8) : Data("ok".utf8)
+        })
+        let inventory = try awaitResult { bridge.list(completion: $0) }.get()
+        expect(inventory.tabs.map(\.browser) == [.zen] && inventory.active?.browser == .zen, "The extension's rows become that browser's tabs")
+        let blank = BrowserTab(browser: .zen, windowID: 3, index: 2, title: "New Tab", url: "about:newtab")
+        _ = try awaitResult { bridge.select(inventory.tabs[0], completion: $0) }.get()
+        _ = try awaitResult { bridge.open(.defaultPage, windowID: 3, completion: $0) }.get()
+        _ = try awaitResult { bridge.open(.url("https://example.org/"), windowID: 3, completion: $0) }.get()
+        _ = try awaitResult { bridge.open(.search("C++ & rust"), windowID: 0, reusing: blank, completion: $0) }.get()
+        _ = try awaitResult { bridge.open(.defaultPage, windowID: 3, reusing: blank, completion: $0) }.get()
+        let closed = try awaitResult { bridge.close(inventory.tabs, completion: $0) }.get()
+        expect(calls.values.map(\.arguments) == [
+            ["list"],
+            ["switch", "3", "1", "https://docs.example/", "Docs"],
+            ["new-tab", "3"],
+            ["url", "3", "https://example.org/"],
+            ["search", "3", "C++ & rust", "2", "about:newtab"],
+            ["switch", "3", "2", "about:newtab", "New Tab"],
+            ["close", "3", "1", "https://docs.example/"]
+        ], "A browser reached through the extension takes the scripts' commands without a browser's name, searches with its own engine and opens its own new-tab page")
+        expect(closed == inventory.tabs, "Closed tabs come back as the tabs they were")
+        let missing = BrowserBridge(browser: .firefox, transport: { _ in throw BridgeError.extensionMissing })
+        expectError(awaitResult { missing.list(completion: $0) }, matching: .extensionMissing, "A browser without the extension fails as such")
     }
 
     static func closingAndReopening() throws {

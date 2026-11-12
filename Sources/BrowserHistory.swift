@@ -3,20 +3,21 @@ import os
 import SQLite3
 
 /// A browser profile whose history Tab Scout can search: Safari's own, each further Safari profile and each
-/// Chrome profile. Its id stays the same across launches, so a profile turned off stays off.
+/// Chrome, Firefox and Zen profile. Its id stays the same across launches, so a profile turned off stays off.
 struct HistoryProfile: Hashable {
-    enum Kind: String { case safari, chrome }
+    enum Kind: String { case safari, chrome, firefox, zen }
     static let safariID = "safari"
 
     let kind: Kind
     let id: String
     let name: String
     let history: URL
-    /// Chrome's icon database beside its history. Safari's icon cache has no documented format.
+    /// Chrome's or Firefox's icon database beside its history. Safari's icon cache has no documented format.
     let icons: URL?
 }
 
-/// What one import found: the history of every profile read, Chrome's icons by site, and every profile there is.
+/// What one import found: the history of every profile read, the browsers' own icons by site, and every profile
+/// there is.
 struct BrowserImport {
     var snapshot = HistorySnapshot.empty
     var icons: [String: Data] = [:]
@@ -49,20 +50,26 @@ final class BrowserHistory {
         [HistoryProfile(kind: .safari, id: HistoryProfile.safariID, name: "Safari",
                         history: home.appendingPathComponent("Library/Safari/History.db"), icons: nil)]
             + safariProfiles() + chromeProfiles()
+            + firefoxProfiles(.firefox, folder: "Firefox") + firefoxProfiles(.zen, folder: "zen")
     }
 
     /// Reads every profile except Safari's own, which HistoryStore reads itself, and those in `excluded`.
     func read(excluding excluded: Set<String>, now: Date) -> BrowserImport {
         var result = BrowserImport()
         result.profiles = profiles()
-        Self.logger.notice("found \(result.profiles.filter { $0.kind == .safari }.count - 1, privacy: .public) more Safari profiles, \(result.profiles.filter { $0.kind == .chrome }.count, privacy: .public) Chrome profiles")
+        let count = { (kind: HistoryProfile.Kind) in result.profiles.filter { $0.kind == kind }.count }
+        Self.logger.notice("found \(count(.safari) - 1, privacy: .public) more Safari profiles, \(count(.chrome), privacy: .public) Chrome, \(count(.firefox), privacy: .public) Firefox and \(count(.zen), privacy: .public) Zen profiles")
         for (number, profile) in result.profiles.enumerated() where profile.id != HistoryProfile.safariID && !excluded.contains(profile.id) {
             let started = DispatchTime.now()
             do {
-                let history = profile.kind == .chrome ? try readChrome(at: profile.history, now: now)
-                    : try HistoryStore.readSafari(at: profile.history, now: now)
+                let history: HistorySnapshot
+                switch profile.kind {
+                case .safari: history = try HistoryStore.readSafari(at: profile.history, now: now)
+                case .chrome: history = try readChrome(at: profile.history, now: now)
+                case .firefox, .zen: history = try readFirefox(at: profile.history, now: now)
+                }
                 result.snapshot = HistoryStore.merge(result.snapshot, history, now: now, additive: true)
-                let icons = profile.icons.map { self.icons(for: profile.id, at: $0, now: now) } ?? [:]
+                let icons = profile.icons.map { self.icons(for: profile, at: $0, now: now) } ?? [:]
                 result.icons.merge(icons) { first, _ in first }
                 let milliseconds = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
                 Self.logger.notice("\(profile.kind.rawValue, privacy: .public) profile \(number, privacy: .public): \(history.visits.count, privacy: .public) pages, \(icons.count, privacy: .public) icons in \(milliseconds, privacy: .public) ms")
@@ -137,6 +144,91 @@ final class BrowserHistory {
         return result
     }
 
+    /// Firefox, and Zen in a folder of its own, list their profiles in profiles.ini: a name and a folder each, the
+    /// folder mostly inside the browser's own. Only profiles with history count.
+    private func firefoxProfiles(_ kind: HistoryProfile.Kind, folder: String) -> [HistoryProfile] {
+        let root = home.appendingPathComponent("Library/Application Support/" + folder)
+        let label = kind == .zen ? "Zen" : "Firefox"
+        var listed: [(name: String, directory: URL)] = []
+        if let size = try? root.appendingPathComponent("profiles.ini").resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 1 << 20,
+           let text = try? String(contentsOf: root.appendingPathComponent("profiles.ini"), encoding: .utf8) {
+            listed = Self.firefoxProfiles(inList: text).map { entry in
+                (entry.name, entry.relative ? root.appendingPathComponent(entry.path, isDirectory: true) : URL(fileURLWithPath: entry.path, isDirectory: true))
+            }
+        }
+        if listed.isEmpty {
+            // Without the list, the folders themselves: "x7k2abcd.default-release" is the profile default-release.
+            let profiles = root.appendingPathComponent("Profiles", isDirectory: true)
+            listed = ((try? FileManager.default.contentsOfDirectory(atPath: profiles.path)) ?? []).sorted().map { name in
+                (name.split(separator: ".", maxSplits: 1).last.map(String.init) ?? name, profiles.appendingPathComponent(name, isDirectory: true))
+            }
+        }
+        var result: [HistoryProfile] = []
+        for (name, directory) in listed {
+            let id = kind.rawValue + ":" + directory.lastPathComponent
+            let history = directory.appendingPathComponent("places.sqlite")
+            guard FileManager.default.fileExists(atPath: history.path), !result.contains(where: { $0.id == id }) else { continue }
+            result.append(HistoryProfile(kind: kind, id: id, name: label + " – " + String(name.prefix(64)),
+                                         history: history, icons: directory.appendingPathComponent("favicons.sqlite")))
+        }
+        return result
+    }
+
+    /// The profiles in the text of a profiles.ini: each [Profile…] section's name and folder, and whether the folder
+    /// is given from the browser's own. Sections about installations are skipped.
+    static func firefoxProfiles(inList text: String) -> [(name: String, path: String, relative: Bool)] {
+        var result: [(name: String, path: String, relative: Bool)] = []
+        var section: [String: String]?
+        func close() {
+            guard let section, let path = section["Path"], !path.isEmpty else { return }
+            let relative = section["IsRelative"] != "0"
+            // A folder given from the browser's own never leaves it.
+            guard !relative || !path.split(separator: "/").contains("..") else { return }
+            result.append((section["Name"] ?? URL(fileURLWithPath: path).lastPathComponent, path, relative))
+        }
+        for line in text.split(whereSeparator: \.isNewline).map({ $0.trimmingCharacters(in: .whitespaces) }) {
+            if line.hasPrefix("[") {
+                close()
+                section = line.hasPrefix("[Profile") ? [:] : nil
+            } else if section != nil, let equals = line.firstIndex(of: "=") {
+                section?[String(line[..<equals])] = String(line[line.index(after: equals)...])
+            }
+        }
+        close()
+        return result
+    }
+
+    /// Firefox counts microseconds from 1970. Pages it hides, such as those only passed through on the way to
+    /// another, downloads, and pages loaded inside frames are not pages the person visited.
+    func readFirefox(at url: URL, now: Date) throws -> HistorySnapshot {
+        try withCopy(of: url) { copy in
+            let sql = """
+            SELECT moz_places.url, COALESCE(moz_places.title, ''), moz_historyvisits.visit_date
+            FROM moz_historyvisits JOIN moz_places ON moz_places.id = moz_historyvisits.place_id
+            WHERE moz_historyvisits.visit_date >= ? AND moz_historyvisits.visit_date <= ?
+                  AND moz_places.hidden = 0 AND moz_historyvisits.visit_type NOT IN (4, 7, 8)
+            ORDER BY moz_historyvisits.visit_date DESC, moz_historyvisits.id DESC LIMIT ?
+            """
+            var rows = HistorySnapshot.empty
+            try HistoryStore.query(copy, readOnly: false, sql: sql, bind: { statement in
+                sqlite3_bind_int64(statement, 1, Self.firefoxTime(now.addingTimeInterval(-HistoryStore.retention)))
+                sqlite3_bind_int64(statement, 2, Self.firefoxTime(now))
+                sqlite3_bind_int(statement, 3, Int32(HistoryStore.maximumProfileRows))
+            }, row: { statement in
+                guard let rawURL = sqlite3_column_text(statement, 0), let rawTitle = sqlite3_column_text(statement, 1) else { return }
+                let time = sqlite3_column_int64(statement, 2)
+                rows.add(url: String(cString: rawURL), title: String(cString: rawTitle),
+                         at: Date(timeIntervalSince1970: Double(time / 1_000_000) + Double(time % 1_000_000) / 1_000_000))
+            })
+            return HistoryStore.merge(rows, .empty, now: now, additive: true)
+        }
+    }
+
+    static func firefoxTime(_ date: Date) -> Int64 {
+        let whole = date.timeIntervalSince1970.rounded(.down)
+        return Int64(whole) * 1_000_000 + Int64(((date.timeIntervalSince1970 - whole) * 1_000_000).rounded())
+    }
+
     func readChrome(at url: URL, now: Date) throws -> HistorySnapshot {
         try withCopy(of: url) { copy in
             // Pages loaded inside frames of another page are not pages the person visited.
@@ -172,10 +264,57 @@ final class BrowserHistory {
     }
 
     /// Icons change far less often than history, so they are read again at most every ten minutes.
-    private func icons(for profile: String, at url: URL, now: Date) -> [String: Data] {
-        if let cached = iconCache[profile], now >= cached.read, now.timeIntervalSince(cached.read) < 600 { return cached.icons }
-        let icons = (try? withCopy(of: url, Self.readChromeIcons)) ?? iconCache[profile]?.icons ?? [:]
-        iconCache[profile] = (now, icons)
+    private func icons(for profile: HistoryProfile, at url: URL, now: Date) -> [String: Data] {
+        if let cached = iconCache[profile.id], now >= cached.read, now.timeIntervalSince(cached.read) < 600 { return cached.icons }
+        let read = profile.kind == .chrome ? Self.readChromeIcons : Self.readFirefoxIcons
+        let icons = (try? withCopy(of: url, read)) ?? iconCache[profile.id]?.icons ?? [:]
+        iconCache[profile.id] = (now, icons)
+        return icons
+    }
+
+    /// The icon Firefox shows for each site, as PNG data by origin: the one most of the site's pages use, in the
+    /// size closest to 32 pixels, or the icon at the site's root when no page names one. Firefox keeps one row per
+    /// size; drawings, which have no size, are left out.
+    static func readFirefoxIcons(at url: URL) throws -> [String: Data] {
+        var bitmaps: [Int64: (width: Int32, png: Data)] = [:]
+        var roots: [String: Int64] = [:]
+        let nearer = { (first: Int32, second: Int32) in abs(first - 32) < abs(second - 32) || (abs(first - 32) == abs(second - 32) && first > second) }
+        try HistoryStore.query(url, readOnly: false, sql: """
+            SELECT id, width, data, root, icon_url FROM moz_icons WHERE width BETWEEN 1 AND 1024 AND length(data) BETWEEN 1 AND 65536
+            """, bind: { _ in }, row: { statement in
+            guard let bytes = sqlite3_column_blob(statement, 2) else { return }
+            let icon = sqlite3_column_int64(statement, 0)
+            let width = sqlite3_column_int(statement, 1)
+            bitmaps[icon] = (width, Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 2))))
+            guard sqlite3_column_int(statement, 3) == 1, let address = sqlite3_column_text(statement, 4),
+                  let origin = origin(of: String(cString: address)) else { return }
+            if let kept = roots[origin].flatMap({ bitmaps[$0] }), !nearer(width, kept.width) { return }
+            roots[origin] = icon
+        })
+        var uses: [String: [Int64: Int]] = [:]
+        try HistoryStore.query(url, readOnly: false, sql: """
+            SELECT moz_pages_w_icons.page_url, moz_icons_to_pages.icon_id
+            FROM moz_icons_to_pages JOIN moz_pages_w_icons ON moz_pages_w_icons.id = moz_icons_to_pages.page_id
+            """, bind: { _ in }, row: { statement in
+            let icon = sqlite3_column_int64(statement, 1)
+            guard bitmaps[icon] != nil, let page = sqlite3_column_text(statement, 0),
+                  let origin = origin(of: String(cString: page)) else { return }
+            uses[origin, default: [:]][icon, default: 0] += 1
+        })
+        for (origin, icon) in roots where uses[origin] == nil { uses[origin] = [icon: 0] }
+        let busiest = uses.sorted { first, second in
+            let (a, b) = (first.value.values.reduce(0, +), second.value.values.reduce(0, +))
+            return a == b ? first.key < second.key : a > b
+        }
+        var icons: [String: Data] = [:]
+        for (origin, counts) in busiest.prefix(maximumIcons) {
+            let best = counts.max { first, second in
+                if first.value != second.value { return first.value < second.value }
+                guard let a = bitmaps[first.key]?.width, let b = bitmaps[second.key]?.width, a != b else { return first.key < second.key }
+                return nearer(b, a)
+            }
+            if let best { icons[origin] = bitmaps[best.key]?.png }
+        }
         return icons
     }
 
@@ -225,9 +364,9 @@ final class BrowserHistory {
         return origin.string
     }
 
-    /// Chrome locks its databases while it runs, so they are read from a private copy, which APFS makes as a clone
-    /// that takes no time or space. The journal or write-ahead log beside the file is copied too, so the copy
-    /// opens as Chrome last saved it. The copy is deleted after reading.
+    /// Chrome and Firefox lock their databases while they run, so they are read from a private copy, which APFS
+    /// makes as a clone that takes no time or space. The journal or write-ahead log beside the file is copied too,
+    /// so the copy opens as the browser last saved it. The copy is deleted after reading.
     private func withCopy<T>(of url: URL, _ read: (URL) throws -> T) throws -> T {
         let folder = scratch.appendingPathComponent(UUID().uuidString, isDirectory: true)
         do {

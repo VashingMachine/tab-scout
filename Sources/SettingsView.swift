@@ -144,7 +144,7 @@ private struct GeneralPage: View {
 
     var body: some View {
         GlassSection("Shortcut", footer: "While off, Cmd+T opens a new tab as usual.") {
-            Toggle("Capture Cmd+T in Safari and Chrome", isOn: model.request(\.capture) { $0.setCapture })
+            Toggle("Capture Cmd+T in browsers", isOn: model.request(\.capture) { $0.setCapture })
         }
         GlassSection("Startup") {
             Toggle("Start at Login", isOn: model.request(\.login) { $0.setLogin })
@@ -173,7 +173,7 @@ private struct SetupPage: View {
         }
         .padding(18)
         .glassCard(tint: model.ready ? ProfileColor(hex: 0x34C759) : ProfileColor(hex: 0xFF9F0A), cornerRadius: 20)
-        GlassSection("Steps", footer: "Each step ticks itself off once it is done, also when you do it in System Settings or Chrome.") {
+        GlassSection("Steps", footer: "Each step ticks itself off once it is done, also when you do it in System Settings or a browser.") {
             ForEach(model.setup) { item in
                 SetupRowView(model: model, item: item)
                 if item.id != model.setup.last?.id { Divider() }
@@ -212,12 +212,14 @@ private struct SetupRowView: View {
 
 /// The steps of setup, in order. Cmd+T needs the keyboard step and at least one browser.
 enum SetupStep: CaseIterable {
-    case keyboard, safari, chrome, chromeExtension, history
+    case keyboard, safari, chrome, chromeExtension, firefox, zen, history
 
     init(_ browser: Browser) {
         switch browser {
         case .safari: self = .safari
         case .chrome: self = .chrome
+        case .firefox: self = .firefox
+        case .zen: self = .zen
         }
     }
 }
@@ -288,7 +290,7 @@ private struct HistoryPage: View {
                         DispatchQueue.main.async { model.actions.setHistorySource(source.id, wanted) }
                     })) {
                         HStack(spacing: 8) {
-                            Image(systemName: source.browser == "safari" ? "safari" : "globe")
+                            Image(systemName: Browser(rawValue: source.browser)?.placeSymbol ?? "globe")
                                 .foregroundStyle(.secondary)
                                 .frame(width: 18)
                             Text(source.name)
@@ -376,7 +378,8 @@ private struct PlaceCard: View {
                 Image(nsImage: ProfileArt.badge(styled, diameter: 36))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(place.name).font(.headline)
-                    Text(place.browser == .safari ? "Browser" : place.name == "Chrome" ? "All Chrome windows" : "Chrome profile")
+                    Text(place.id.hasPrefix("zen:") ? "Zen space" : place.browser != .chrome ? "Browser"
+                         : place.name == "Chrome" ? "All Chrome windows" : "Chrome profile")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

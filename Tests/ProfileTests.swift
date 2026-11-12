@@ -122,6 +122,29 @@ struct ProfileTests {
                "Without Safari, only Chrome's profiles are places")
         expect(BrowserSpaces.combine(safari: true, chrome: chrome, chromeRunning: false, front: .safari).profiles.count == 1,
                "A browser that is not running is no place to go")
+
+        let every = BrowserSpaces.combine(safari: true, chrome: chrome, chromeRunning: true, others: [.firefox, .zen], front: .zen)
+        expect(every.profiles.map(\.name) == ["Safari", "Personal", "Work", "Firefox", "Zen"] && every.current == 4,
+               "Firefox and Zen follow Chrome's profiles as places of their own, and the one in front is current")
+        expect(every.profiles.map(\.browser) == [.safari, .chrome, .chrome, .firefox, .zen] && every.profiles.suffix(2).map(\.id) == ["firefox", "zen"]
+               && every.profiles.suffix(2).map(\.symbol) == ["flame", "circle.circle"],
+               "Each is one place named after its browser, with a symbol of its own")
+        expect(Array(every.profiles.prefix(3)) == both.profiles, "Safari and Chrome's profiles look as they do without them")
+        let colors = every.profiles.map(\.color)
+        expect(colors.indices.allSatisfy { first in colors.indices.allSatisfy { first == $0 || colors[first].hueDistance(to: colors[$0]) >= 45 } },
+               "Every place's color keeps clear of the others'")
+        expect(Set(every.profiles.map(\.motif)).count == 5, "Every place gets a pattern of its own while there are enough")
+        let alone = BrowserSpaces.combine(safari: false, chrome: nil, chromeRunning: false, others: [.zen], front: .zen)
+        expect(alone.profiles.map(\.id) == ["zen"] && alone.current == 0 && alone.profiles[0].color == BrowserSpaces.zenColors[0]
+               && alone.profiles[0].motif == .dots, "Alone, Zen is the only place, in its first color and its own pattern")
+        expect(BrowserSpaces.combine(safari: true, chrome: nil, chromeRunning: false, others: [.firefox], front: .zen).current == nil
+               && BrowserSpaces.combine(safari: true, chrome: nil, chromeRunning: false, others: [.chrome, .safari], front: .safari).profiles.count == 1,
+               "A browser that is not among the places is nowhere, and only browsers reached through the extension are added this way")
+        expect(PlaceScope.listing([BrowserTab(browser: .zen, windowID: 3, index: 1, title: "Calm", url: "https://zen.example/"),
+                                   BrowserTab(windowID: 1, index: 1, title: "Docs", url: "https://docs.example/")],
+                                  in: .zen, chromeProfiles: 2, active: nil, owners: [:])
+               == PlaceScope.Listing(tabs: [BrowserTab(browser: .zen, windowID: 3, index: 1, title: "Calm", url: "https://zen.example/")], unseparated: false),
+               "Over Zen only Zen's tabs are listed, however many profiles Chrome has")
     }
 
     static func swipe() {

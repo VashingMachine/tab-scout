@@ -109,3 +109,22 @@ Measure rather than asserting a universal latency target. Safari inventory cost 
 2. Relaunch Tab Scout with Safari already running. Confirm caches and permission state initialize without reopening old search text.
 3. Quit the app. Verify Cmd+T returns to Safari immediately and no helper inventory process remains indefinitely.
 4. Remove only the fixture tabs and any fixture favicon data. Keep the user's existing Safari session and permissions intact unless the test explicitly changed them.
+
+## Firefox And Zen
+
+These need the browser itself and a person at the keyboard. Run `/usr/bin/python3 Tests/FirefoxLive/run.py` first, and again with `"/Applications/Zen Browser.app"`: it proves the extension's commands in a hidden copy of each browser.
+
+1. Before the extension is added, press Cmd+T in Firefox and in Zen. The browser's own new tab must open, and Tab Scout's palette must not.
+2. On the Setup page, click **Add to Zen** (after setting `xpinstall.signatures.required` to `false` in `about:config`, unless the extension is signed). Zen must ask whether to add Tab Scout, and the step must tick itself off once you agree. With an unsigned extension, **Add to Firefox** must open `about:debugging` and show the package in Finder.
+3. Press Cmd+T in the browser. The palette must list only that browser's tabs, the tab on screen left out, the previous tab first after switching tabs a few times.
+4. Pick a tab in another window, and in Zen one in another workspace. The window, and the workspace, must come forward with the tab on screen.
+5. Type an address, a search and nothing, with Enter each time: the address opens in a new tab, the search uses the browser's own search engine, and New tab opens its new-tab page. On an empty new tab, an address must open in that tab.
+6. Close a tab with Command+W in the palette, then run `` `undo ``. Run `` `dupes `` with a page open twice, and `` `mute `` with a tab playing sound.
+7. With Safari or Chrome open too, swipe sideways to and from Firefox and Zen, and move a tab with Option held. The page must open in the other browser and the original close.
+8. Open a private window with a few tabs. None of them may be listed, also after allowing the extension in private windows.
+9. Quit and reopen the browser. Cmd+T must work again without adding anything; in Firefox with a temporarily loaded extension it must be the browser's own until the extension is loaded again.
+10. Turn the extension off in the browser's add-ons. Cmd+T must become the browser's own within a moment, and the Setup page must say the extension is not connected.
+11. In Zen with two or more spaces and Full Disk Access granted, press Cmd+T. The pill must name the space in front, with one dot per space, and only that space's tabs and the essentials may be listed. Switch space in Zen and press Cmd+T again: the pill and the tabs must follow.
+12. Swipe to another space, and press Tab to go on to the next. Zen must go to each space as its own Spaces menu does, and the list must fade once to that space's tabs. Try a space with no tabs, a space with an emoji, and the first and last space.
+13. Run `` `move `` to another space, and again with Option+Enter. The page must open in the other space; the original must be gone without Option and still there with it.
+14. From Safari, move a tab to a Zen space that is not in front. Zen must switch to that space and open the page there.

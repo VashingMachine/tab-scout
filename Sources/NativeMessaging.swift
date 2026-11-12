@@ -2,8 +2,9 @@ import Darwin
 import Foundation
 import Security
 
-/// Chrome's native messaging frames: each JSON message follows its length as a 32-bit number in native byte order.
-/// TabScoutChromeHost and the app use the same frames on their socket, so the helper passes messages on whole.
+/// Native messaging frames, the same in Chrome and Firefox: each JSON message follows its length as a 32-bit number
+/// in native byte order. The helpers and the app use the same frames on their sockets, so a helper passes messages
+/// on whole.
 enum NativeMessage {
     static let hostName = "local.tabscout.chrome"
     /// Fixed by the public key in the extension's manifest.json.
@@ -11,10 +12,18 @@ enum NativeMessage {
     /// Far above anything Tab Scout and its extension exchange; Chrome refuses messages to it over 1 MB anyway.
     static let limit = 1 << 20
 
+    /// The helper's name for Firefox and the browsers built on it, and the ID in their extension's manifest.json.
+    static let firefoxHostName = "local.tabscout.firefox"
+    static let firefoxExtensionID = "tabscout@local.tabscout"
+
     /// Beside Tab Scout's learning data; the helper finds the app here.
-    static var socketURL: URL {
+    static var socketURL: URL { socketURL(named: "chrome") }
+    /// Firefox's helper is the same program under another name, and reaches the app through its own socket.
+    static var firefoxSocketURL: URL { socketURL(named: "firefox") }
+
+    private static func socketURL(named name: String) -> URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TabScout/chrome.sock")
+            .appendingPathComponent("TabScout/\(name).sock")
     }
 
     static func frame(_ message: Data) -> Data {

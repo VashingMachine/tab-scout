@@ -13,6 +13,9 @@ struct CommandTests {
                "Safari lists the commands that need nothing only Chrome offers")
         expect(PaletteCommand.matches("group", in: .safari).isEmpty && PaletteCommand.matches("mu", in: .safari).isEmpty,
                "Safari never lists a command it cannot run")
+        expect(PaletteCommand.matches("", in: .firefox) == [.move, .copy, .dupes, .sweep, .undo, .mute]
+               && PaletteCommand.matches("", in: .zen) == PaletteCommand.matches("", in: .firefox),
+               "Firefox and Zen also mute, through the extension they are reached by, but do not group")
         expect(PaletteCommand.matches("GR", in: .chrome) == [.group, .ungroup] && PaletteCommand.matches("sw", in: .chrome) == [.sweep],
                "Names match from their start, ignoring case, before summaries that mention the text")
         expect(PaletteCommand.matches("topic", in: .chrome) == [.group], "Summaries match too")
