@@ -129,33 +129,38 @@ enum ProfileArt {
             diagonals(rising: true, spacing: spacing)
             diagonals(rising: false, spacing: spacing)
             context.strokePath()
+        case .plain:
+            break
         }
     }
 
     /// A disc of the profile's color lit from the top left, woven with its pattern, holding the account's picture,
-    /// its symbol, such as Safari's compass, or its initial.
+    /// its symbol, such as Safari's compass, or its initial. Further colors follow the first toward the bottom right.
     static func badge(_ profile: BrowserProfile, diameter: CGFloat) -> NSImage {
-        let key = "\(profile.id)|\(profile.name)|\(profile.color)|\(profile.motif)|\(profile.symbol ?? "")|\(diameter)"
+        let key = "\(profile.id)|\(profile.name)|\(profile.color)|\(profile.accents)|\(profile.motif)|\(profile.texture)|\(profile.symbol ?? "")|\(diameter)"
         if let cached = badges[key] { return cached }
         let picture = profile.picture.flatMap { NSImage(contentsOf: $0) }
+        let texture = CGFloat(profile.texture)
         let image = NSImage(size: NSSize(width: diameter, height: diameter), flipped: false) { rect in
             guard let context = NSGraphicsContext.current?.cgContext else { return false }
             let disc = rect.insetBy(dx: 0.5, dy: 0.5)
             context.saveGState()
             context.addEllipse(in: disc)
             context.clip()
-            let colors = [profile.color.lit(hue: -14, saturation: 0.78, brightness: 1.25), profile.color.nsColor,
-                          profile.color.lit(hue: 14, saturation: 1.12, brightness: 0.66)].map(\.cgColor) as CFArray
-            if let gradient = CGGradient(colorsSpace: space, colors: colors, locations: [0, 0.48, 1]) {
+            let deepest = profile.accents.last ?? profile.color
+            let colors = [profile.color.lit(hue: -14, saturation: 0.78, brightness: 1.25), profile.color.nsColor]
+                + profile.accents.map(\.nsColor) + [deepest.lit(hue: 14, saturation: 1.12, brightness: 0.66)]
+            let stops: [CGFloat] = profile.accents.isEmpty ? [0, 0.48, 1] : profile.accents.count == 1 ? [0, 0.34, 0.74, 1] : [0, 0.28, 0.54, 0.8, 1]
+            if let gradient = CGGradient(colorsSpace: space, colors: colors.map(\.cgColor) as CFArray, locations: stops) {
                 context.drawLinearGradient(gradient, start: CGPoint(x: disc.minX, y: disc.maxY), end: CGPoint(x: disc.maxX, y: disc.minY), options: [])
             }
-            context.setStrokeColor(NSColor.white.withAlphaComponent(0.26).cgColor)
-            context.setFillColor(NSColor.white.withAlphaComponent(0.32).cgColor)
+            context.setStrokeColor(NSColor.white.withAlphaComponent(min(0.26 * texture, 0.8)).cgColor)
+            context.setFillColor(NSColor.white.withAlphaComponent(min(0.32 * texture, 0.8)).cgColor)
             draw(profile.motif, in: context, rect: disc, spacing: diameter / 4.5, line: max(diameter / 36, 0.5),
                  center: CGPoint(x: disc.maxX, y: disc.minY))
             if let grain = grain(width: 96, height: 96) {
                 context.setBlendMode(.overlay)
-                context.setAlpha(0.7)
+                context.setAlpha(min(0.7 * texture, 1))
                 context.draw(grain, in: disc)
                 context.setAlpha(1)
                 context.setBlendMode(.normal)
@@ -202,21 +207,44 @@ enum ProfileArt {
     }
 
     /// The wash for the top of the palette: the profile's color fading downward, a glow around `focus` where the
-    /// profile is named, its pattern faintly around the glow, and grain wherever there is color.
+    /// profile is named, its pattern faintly around the glow, and grain wherever there is color. Further colors
+    /// take over toward the side away from `focus`, each with a glow of its own.
     static func aura(_ profile: BrowserProfile, size: CGSize, focus: CGPoint, scale: CGFloat, dark: Bool) -> CGImage? {
         render(size, scale: scale) { context in
-            let strength: CGFloat = dark ? 0.34 : 0.24
-            let base = profile.color.nsColor
+            let strength = (dark ? 0.34 : 0.24) * CGFloat(profile.strength)
+            let texture = CGFloat(profile.texture)
             let top = CGPoint(x: 0, y: size.height)
             let bottom = CGPoint.zero
-            if let wash = CGGradient(colorsSpace: space, colors: [strength, strength * 0.55, strength * 0.18, 0]
-                .map { base.withAlphaComponent($0).cgColor } as CFArray, locations: [0, 0.24, 0.58, 1]) {
-                context.drawLinearGradient(wash, start: top, end: bottom, options: [])
+            let colors = [profile.color] + profile.accents.prefix(2)
+            // How far toward the far side each color sits, as a share of the way there from `focus`.
+            let shares: [CGFloat] = colors.count > 2 ? [0, 0.45, 0.85] : [0, 0.8]
+            let far: CGFloat = focus.x > size.width / 2 ? 0 : size.width
+            context.saveGState()
+            context.beginTransparencyLayer(auxiliaryInfo: nil)
+            if colors.count > 1, let blend = CGGradient(colorsSpace: space, colors: colors.map(\.nsColor.cgColor) as CFArray,
+                                                        locations: Array(shares.prefix(colors.count))) {
+                context.drawLinearGradient(blend, start: CGPoint(x: focus.x, y: 0), end: CGPoint(x: far, y: 0),
+                                           options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+            } else {
+                context.setFillColor(profile.color.nsColor.cgColor)
+                context.fill(CGRect(origin: .zero, size: size))
             }
-            let light = profile.color.lit(hue: -8, saturation: 0.85, brightness: 1.3)
-            if let glow = CGGradient(colorsSpace: space, colors: [light.withAlphaComponent(strength * 1.05).cgColor,
-                                                                  light.withAlphaComponent(0).cgColor] as CFArray, locations: [0, 1]) {
-                context.drawRadialGradient(glow, startCenter: focus, startRadius: 0, endCenter: focus, endRadius: 250, options: [])
+            context.setBlendMode(.destinationIn)
+            if let fall = CGGradient(colorsSpace: space, colors: [strength, strength * 0.55, strength * 0.18, 0]
+                .map { NSColor.black.withAlphaComponent(min($0, 1)).cgColor } as CFArray, locations: [0, 0.24, 0.58, 1]) {
+                context.drawLinearGradient(fall, start: top, end: bottom, options: [])
+            }
+            context.endTransparencyLayer()
+            context.restoreGState()
+            for (index, color) in colors.enumerated() {
+                let light = color.lit(hue: -8, saturation: 0.85, brightness: 1.3)
+                let center = CGPoint(x: focus.x + (far - focus.x) * shares[index], y: focus.y)
+                // The first color glows widest, around the name; the others keep to their own side.
+                let reach = index == 0 ? 250 : min(abs(far - focus.x) * 0.42, 250)
+                if let glow = CGGradient(colorsSpace: space, colors: [light.withAlphaComponent(min(strength * (index == 0 ? 1.05 : 0.8), 1)).cgColor,
+                                                                      light.withAlphaComponent(0).cgColor] as CFArray, locations: [0, 1]) {
+                    context.drawRadialGradient(glow, startCenter: center, startRadius: 0, endCenter: center, endRadius: reach, options: [])
+                }
             }
             let fade = { (inner: CGFloat, outer: CGFloat) in
                 if let gradient = CGGradient(colorsSpace: space, colors: [NSColor.black.cgColor, NSColor.black.withAlphaComponent(0).cgColor] as CFArray,
@@ -229,8 +257,8 @@ enum ProfileArt {
             // The pattern shows around the glow and fades out before the results.
             context.saveGState()
             context.beginTransparencyLayer(auxiliaryInfo: nil)
-            let thread = dark ? profile.color.lit(saturation: 0.55, brightness: 1.5).withAlphaComponent(0.2)
-                : profile.color.lit(saturation: 1.1, brightness: 0.6).withAlphaComponent(0.2)
+            let thread = (dark ? profile.color.lit(saturation: 0.55, brightness: 1.5) : profile.color.lit(saturation: 1.1, brightness: 0.6))
+                .withAlphaComponent(min(0.2 * texture, 0.6))
             context.setStrokeColor(thread.cgColor)
             context.setFillColor(thread.cgColor)
             draw(profile.motif, in: context, rect: CGRect(origin: .zero, size: size), spacing: 14, line: 0.8, center: focus)
@@ -245,7 +273,7 @@ enum ProfileArt {
             if let grain = grain(width: Int(size.width * scale), height: Int(size.height * scale)) {
                 context.saveGState()
                 context.beginTransparencyLayer(auxiliaryInfo: nil)
-                context.setAlpha(dark ? 0.2 : 0.16)
+                context.setAlpha(min((dark ? 0.2 : 0.16) * texture, 0.6))
                 context.draw(grain, in: CGRect(origin: .zero, size: size))
                 context.setAlpha(1)
                 context.setBlendMode(.destinationIn)
@@ -427,7 +455,7 @@ final class ProfilePillView: NSView {
         grain.contents = ProfileArt.grain(width: Int(220 * scale), height: Int(Self.height * scale))
         grain.contentsGravity = .topLeft
         grain.contentsScale = scale
-        grain.opacity = isDark ? 0.35 : 0.25
+        arrange()
     }
 
     /// Where the profile's badge sits once the capsule has settled on it, in this view's coordinates.
@@ -445,12 +473,14 @@ final class ProfilePillView: NSView {
         // Pulled past either end, the capsule gives a little, like the content inside it.
         let width = pages[lower].width + (pages[upper].width - pages[lower].width) * CGFloat(share) + CGFloat(abs(position - clamped)) * 18
         let color = profiles[lower].color.mixed(with: profiles[upper].color, share).nsColor
+        let texture = profiles[lower].texture + (profiles[upper].texture - profiles[lower].texture) * share
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         capsule.frame = NSRect(x: bounds.width - width, y: ((bounds.height - Self.height) / 2).rounded(), width: width, height: Self.height)
         capsule.layer?.backgroundColor = color.withAlphaComponent((isDark ? 0.26 : 0.16) + (hovering ? 0.08 : 0)).cgColor
         capsule.layer?.borderColor = color.withAlphaComponent(isDark ? 0.55 : 0.42).cgColor
         grain.frame = capsule.bounds
+        grain.opacity = Float(min((isDark ? 0.35 : 0.25) * texture, 1))
         for (index, page) in pages.enumerated() {
             let distance = CGFloat(Double(index) - position)
             page.view.frame = NSRect(x: distance * Self.slide, y: 0, width: page.width, height: Self.height)

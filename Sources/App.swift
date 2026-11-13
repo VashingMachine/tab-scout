@@ -331,12 +331,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         if preview, let index = CommandLine.arguments.firstIndex(of: "--appearance"), index + 1 < CommandLine.arguments.count {
             NSApp.appearance = NSAppearance(named: CommandLine.arguments[index + 1] == "light" ? .aqua : .darkAqua)
         }
-        if preview, let index = CommandLine.arguments.firstIndex(of: "--snapshot"), index + 1 < CommandLine.arguments.count {
-            renderSnapshot(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+        let snapshot = CommandLine.arguments.firstIndex(of: "--snapshot").flatMap {
+            $0 + 1 < CommandLine.arguments.count ? URL(fileURLWithPath: CommandLine.arguments[$0 + 1]) : nil
+        }
+        if preview, CommandLine.arguments.contains("--settings") {
+            openSettings(on: CommandLine.arguments.contains("--setup") ? .setup : nil)
+            // --edit 1 opens the second place's look for editing.
+            if let index = CommandLine.arguments.firstIndex(of: "--edit"), index + 1 < CommandLine.arguments.count,
+               let place = Int(CommandLine.arguments[index + 1]), knownPlaces.indices.contains(place) {
+                settingsModel.editing = knownPlaces[place].id
+            }
+            if let snapshot { renderSettingsSnapshot(to: snapshot) }
+        } else if preview, let snapshot {
+            renderSnapshot(to: snapshot)
         } else if preview, CommandLine.arguments.contains("--drag-guide") {
             showKeyboardGuide()
-        } else if preview, CommandLine.arguments.contains("--settings") {
-            openSettings(on: CommandLine.arguments.contains("--setup") ? .setup : nil)
         } else if preview {
             showSearch(nil)
         } else {
@@ -918,6 +927,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
         try? image?.representation(using: .png, properties: [:])?.write(to: url)
         NSApp.terminate(nil)
+    }
+
+    /// Saves a picture of the settings window, for looking at a page from a program that may not capture the screen:
+    /// a program's own windows are always its to capture. SwiftUI's pages cannot be drawn offscreen.
+    private func renderSettingsSnapshot(to url: URL) {
+        guard let window = settingsWindow else { return NSApp.terminate(nil) }
+        // SwiftUI lays the page out over a few turns of the run loop.
+        RunLoop.main.run(until: Date().addingTimeInterval(1.5))
+        performPreviewDrags(in: window)
+        // CGWindowListCreateImage, which newer SDKs no longer declare: this window alone, at full resolution.
+        typealias Capture = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
+        if let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage"),
+           let image = unsafeBitCast(symbol, to: Capture.self)(.null, 1 << 3, UInt32(window.windowNumber), 1 << 0 | 1 << 3)?.takeRetainedValue() {
+            try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: url)
+        }
+        NSApp.terminate(nil)
+    }
+
+    /// --drag "480,683>560,620;347,748" presses the mouse at each first point, drags to the second when there is one
+    /// and lets go, so a picture can show a page after it was used. Points count from the window's top left.
+    private func performPreviewDrags(in window: NSWindow) {
+        guard let index = CommandLine.arguments.firstIndex(of: "--drag"), index + 1 < CommandLine.arguments.count else { return }
+        let pump = { (seconds: TimeInterval) in
+            let end = Date().addingTimeInterval(seconds)
+            while Date() < end {
+                if let event = NSApp.nextEvent(matching: .any, until: Date().addingTimeInterval(0.02), inMode: .default, dequeue: true) {
+                    NSApp.sendEvent(event)
+                }
+            }
+        }
+        for gesture in CommandLine.arguments[index + 1].split(separator: ";") {
+            let points = gesture.split(separator: ">").compactMap { text -> NSPoint? in
+                let parts = text.split(separator: ",").compactMap { Double($0) }
+                return parts.count == 2 ? NSPoint(x: parts[0], y: Double(window.frame.height) - parts[1]) : nil
+            }
+            guard let start = points.first, let end = points.last else { continue }
+            var steps: [(NSEvent.EventType, NSPoint)] = [(.leftMouseDown, start)]
+            if end != start {
+                steps += (1...8).map { step in
+                    (.leftMouseDragged, NSPoint(x: start.x + (end.x - start.x) * CGFloat(step) / 8, y: start.y + (end.y - start.y) * CGFloat(step) / 8))
+                }
+            }
+            steps.append((.leftMouseUp, end))
+            // All are queued before any is handled: a control that follows the mouse itself then finds the rest.
+            for (type, point) in steps {
+                if let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                                                  pressure: type == .leftMouseUp ? 0 : 1) {
+                    NSApp.postEvent(event, atStart: false)
+                }
+            }
+            pump(0.5)
+        }
     }
 
     private func loadTabs(force: Bool = false) {

@@ -44,6 +44,7 @@ Use a throwaway Safari window and public fixture pages. Record the macOS/Safari 
 27. In Chrome with the extension: play sound in two tabs and run `` `mute ``: both are muted and the footer counts them; run it again with nothing playing: both get their sound back, and a tab muted by hand stays muted. Run `` `group ``, then `` `ungroup ``: the groups are gone and the tabs are where they were. With an extension loaded before the update, both commands say to reload it.
 28. With Chrome in front, start a second copy that hands over and exits (`open -na "Google Chrome" --args --profile-directory=Default`), then press Cmd+T: the palette still opens over Chrome with its tabs listed at once and the previous-tab row intact.
 29. Press Cmd+T, Enter in Chrome while Safari is slow or showing a dialog: the switch must not wait for Safari.
+30. In **Settings > Profiles & Swipe**, press **Customize** on a place. Drag its dot over the field: the strip above, the badge and the card follow at once. Add a second and third color, drag each, press the harmony button a few times, pick a blend from the last page of swatches, move **Strength** and **Texture** to both ends and choose each pattern. Open the palette: its wash blends the colors from the place's name outward, as the strip showed, in light and dark. **Automatic** brings the first look back; a look survives quitting Tab Scout.
 
 ## Native Panel Placement
 

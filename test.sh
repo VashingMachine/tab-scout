@@ -77,7 +77,7 @@ GROUPING=("$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/RelatedTabs.swif
     "$SOURCE_DIR/Sources/TabFocusHistory.swift" "$SOURCE_DIR/Tests/TabFocusHistoryTests.swift" -o "$WORK_DIR/TabFocusHistoryTests"
 "$WORK_DIR/TabFocusHistoryTests"
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/BrowserProfiles.swift" "$SOURCE_DIR/Sources/ProfileSwipe.swift" \
-    "$SOURCE_DIR/Sources/PlaceSettings.swift" "$SOURCE_DIR/Tests/ProfileTests.swift" -o "$WORK_DIR/ProfileTests"
+    "$SOURCE_DIR/Sources/PlaceSettings.swift" "$SOURCE_DIR/Sources/PlaceColors.swift" "$SOURCE_DIR/Tests/ProfileTests.swift" -o "$WORK_DIR/ProfileTests"
 "$WORK_DIR/ProfileTests"
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/BrowserProfiles.swift" \
     "$SOURCE_DIR/Sources/ZenSession.swift" "$SOURCE_DIR/Tests/ZenSessionTests.swift" -o "$WORK_DIR/ZenSessionTests"

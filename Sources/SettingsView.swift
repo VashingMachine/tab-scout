@@ -50,6 +50,8 @@ final class SettingsModel: ObservableObject {
     /// Every place the palette can swipe to, with the automatic colors and patterns.
     @Published var places: [BrowserProfile] = []
     @Published var placesNote: String?
+    /// The place whose look is open for editing, by its id.
+    @Published var editing: String?
     @Published var placeSettings = PlaceSettings() {
         didSet { if placeSettings != oldValue { actions.placesChanged(placeSettings) } }
     }
@@ -370,20 +372,30 @@ private struct PlaceCard: View {
 
     private var styled: BrowserProfile { model.placeSettings.styled(place) }
     private var shown: Bool { !model.placeSettings.hidden.contains(place.id) }
-    private var customized: Bool { model.placeSettings.colors[place.id] != nil || model.placeSettings.motifs[place.id] != nil }
+    private var editing: Bool { shown && model.editing == place.id }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
                 Image(nsImage: ProfileArt.badge(styled, diameter: 36))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(place.name).font(.headline)
+                    Text(place.name).font(.headline).lineLimit(1)
                     Text(place.id.hasPrefix("zen:") ? "Zen space" : place.browser != .chrome ? "Browser"
                          : place.name == "Chrome" ? "All Chrome windows" : "Chrome profile")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                if editing && model.placeSettings.isCustom(place.id) {
+                    GlassButton("Automatic", symbol: "arrow.uturn.backward") { model.placeSettings.reset(place.id) }
+                        .help("Go back to the look Tab Scout picks")
+                }
+                if shown {
+                    GlassButton(editing ? "Done" : "Customize", symbol: editing ? "checkmark" : "paintpalette") {
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) { model.editing = editing ? nil : place.id }
+                    }
+                    .help(editing ? "Close the editor" : "Change this place's colors, pattern and grain")
+                }
                 Toggle("Show", isOn: Binding(get: { shown }, set: { show in
                     if show { model.placeSettings.hidden.remove(place.id) } else { model.placeSettings.hidden.insert(place.id) }
                 }))
@@ -391,35 +403,8 @@ private struct PlaceCard: View {
                 .labelsHidden()
                 .help(shown ? "Shown when swiping" : "Skipped when swiping")
             }
-            if shown {
-                HStack(spacing: 8) {
-                    Text("Color").font(.subheadline).foregroundStyle(.secondary).frame(width: 52, alignment: .leading)
-                    ForEach(ProfilePalette.colors, id: \.hexString) { color in
-                        Swatch(color: color, selected: styled.color == color) { model.placeSettings.colors[place.id] = color }
-                    }
-                    ColorPicker("Custom color", selection: Binding(get: { Color(nsColor: styled.color.nsColor) }, set: { picked in
-                        guard let rgb = NSColor(picked).usingColorSpace(.sRGB) else { return }
-                        model.placeSettings.colors[place.id] = ProfileColor(red: rgb.redComponent, green: rgb.greenComponent, blue: rgb.blueComponent)
-                    }), supportsOpacity: false)
-                    .labelsHidden()
-                    .help("Pick any color")
-                }
-                HStack(spacing: 8) {
-                    Text("Pattern").font(.subheadline).foregroundStyle(.secondary).frame(width: 52, alignment: .leading)
-                    ForEach(ProfileMotif.allCases, id: \.self) { motif in
-                        MotifChip(place: styled, motif: motif, selected: styled.motif == motif) {
-                            model.placeSettings.motifs[place.id] = motif
-                        }
-                    }
-                    Spacer()
-                    if customized {
-                        GlassButton("Automatic", symbol: "arrow.uturn.backward") {
-                            model.placeSettings.colors[place.id] = nil
-                            model.placeSettings.motifs[place.id] = nil
-                        }
-                        .help("Go back to the color and pattern Tab Scout picks")
-                    }
-                }
+            if editing {
+                ThemeEditor(model: model, place: place)
             }
         }
         .padding(16)
@@ -431,37 +416,40 @@ private struct PlaceCard: View {
 
 // MARK: - Pieces
 
-private struct Swatch: View {
-    let color: ProfileColor
+/// A color to pick, or a blend of several side by side.
+struct Swatch: View {
+    let colors: [ProfileColor]
     let selected: Bool
     let pick: () -> Void
 
     var body: some View {
+        let first = Color(nsColor: (colors.first ?? ProfilePalette.colors[0]).nsColor)
         Button(action: pick) {
             Circle()
-                .fill(Color(nsColor: color.nsColor).gradient)
+                .fill(colors.count > 1 ? AnyShapeStyle(LinearGradient(colors: colors.map { Color(nsColor: $0.nsColor) }, startPoint: .leading, endPoint: .trailing))
+                      : AnyShapeStyle(first.gradient))
                 .frame(width: 20, height: 20)
                 .overlay(Circle().strokeBorder(.white.opacity(selected ? 0.95 : 0.25), lineWidth: selected ? 2 : 0.5))
                 .padding(2)
-                .overlay(Circle().strokeBorder(Color(nsColor: color.nsColor).opacity(selected ? 0.9 : 0), lineWidth: 1.5))
+                .overlay(Circle().strokeBorder(first.opacity(selected ? 0.9 : 0), lineWidth: 1.5))
                 .scaleEffect(selected ? 1.12 : 1)
                 .animation(.spring(response: 0.25, dampingFraction: 0.7), value: selected)
         }
         .buttonStyle(.plain)
-        .help(color.hexString)
+        .help(colors.map(\.hexString).joined(separator: " → "))
     }
 }
 
-private struct MotifChip: View {
+struct MotifChip: View {
     let place: BrowserProfile
     let motif: ProfileMotif
     let selected: Bool
     let pick: () -> Void
 
-    /// The pattern alone, without an account picture, symbol or initial over it.
+    /// The pattern alone, in the place's colors, without an account picture, symbol or initial over it.
     private var sample: BrowserProfile {
         BrowserProfile(id: place.id + "#" + motif.name, browser: place.browser, name: " ", menuTitle: nil, directory: nil,
-                       color: place.color, motif: motif, picture: nil)
+                       color: place.color, motif: motif, picture: nil, accents: place.accents, texture: place.texture)
     }
 
     var body: some View {
@@ -472,6 +460,7 @@ private struct MotifChip: View {
         }
         .buttonStyle(.plain)
         .help(motif.name)
+        .accessibilityLabel(motif.name)
     }
 }
 
@@ -483,6 +472,7 @@ extension ProfileMotif {
         case .waves: return "Waves"
         case .rings: return "Ripples"
         case .weave: return "Weave"
+        case .plain: return "Grain only"
         }
     }
 }
@@ -530,7 +520,7 @@ private struct LabeledRow<Content: View>: View {
     }
 }
 
-private struct GlassButton: View {
+struct GlassButton: View {
     let title: String
     var symbol: String?
     var role: ButtonRole?
@@ -544,18 +534,10 @@ private struct GlassButton: View {
     }
 
     var body: some View {
-        let button = Button(role: role, action: action) {
+        Button(role: role, action: action) {
             if let symbol { Label(title, systemImage: symbol) } else { Text(title) }
         }
-        #if compiler(>=6.2)
-        if #available(macOS 26.0, *) {
-            button.buttonStyle(.glass)
-        } else {
-            button.buttonStyle(.bordered)
-        }
-        #else
-        button.buttonStyle(.bordered)
-        #endif
+        .glassButton()
     }
 }
 
@@ -584,6 +566,20 @@ private struct PlaceGlow: View {
 }
 
 extension View {
+    /// The glass button style on macOS 26 and later, a bordered one before it.
+    @ViewBuilder
+    func glassButton() -> some View {
+        #if compiler(>=6.2)
+        if #available(macOS 26.0, *) {
+            buttonStyle(.glass)
+        } else {
+            buttonStyle(.bordered)
+        }
+        #else
+        buttonStyle(.bordered)
+        #endif
+    }
+
     /// Liquid Glass on macOS 26 and later, a material card before it.
     @ViewBuilder
     func glassCard(tint: ProfileColor?, cornerRadius: CGFloat) -> some View {

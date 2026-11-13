@@ -56,7 +56,7 @@ The shortcut hook starts automatically after permission is granted. Permissions 
 - Escape or Cmd+T closes the search panel without an action.
 - Tab goes to the next place (Safari, or a Chrome profile) and Shift+Tab to the one before, as a sideways swipe does. With Option held, Tab or the end of a swipe moves the tab on screen there.
 - Command+W closes the selected tab in its browser. The palette stays open on the row that follows, and `` `undo `` reopens the tab. While nothing is typed, Command+Delete does the same; with text in the field it deletes to the start of the line as usual.
-- The refresh icon requests updated results. The menu-bar menu provides search, shortcut capture, **Settings…**, and quit. **Settings…** holds **Google Suggestions**, **Use Browser History** and its sources, **Search Page Text**, **Clear Tab Scout History**, **Start at Login**, and the palette's places: which are shown, their colors and patterns, the swipe mode and its sensitivity.
+- The refresh icon requests updated results. The menu-bar menu provides search, shortcut capture, **Settings…**, and quit. **Settings…** holds **Google Suggestions**, **Use Browser History** and its sources, **Search Page Text**, **Clear Tab Scout History**, **Start at Login**, and the palette's places: which are shown, their looks, the swipe mode and its sensitivity. **Customize** on a place opens its look: dots to drag over a field of colors, the first the place's own and up to two more that its wash and badge blend into, ready-made colors and blends, a harmony that sets the other colors around the first, the wash's strength, how much pattern and grain show, and the pattern, with the top of the palette shown as it changes. **Automatic** goes back to the look Tab Scout picks.
 - Cmd+T is captured only while Safari or Chrome is active, or Firefox or Zen with Tab Scout's extension connected. Cmd+Shift+T and shortcuts in other apps retain their normal behavior.
 
 ## Suggestions And History
@@ -142,7 +142,7 @@ Zen shows an extension only the tabs of the space in front, and tells it nothing
 - The space in front is the one holding the tabs Zen lists; when that settles nothing, as for an empty space, it is the one `prefs.js` names as last switched to.
 - Switching presses the space's item in Zen's **Spaces** menu through the accessibility access the keyboard permission gives, as for Chrome's profiles. The menu is recognized by its layout, in any language. A space the menu does not list is reached with its **Next Space** and **Previous Space** commands. The palette then reads Zen's tabs again and lists the new space's.
 - `` `move `` to another space closes the tab first and opens its page again in the other space, because the first space's tabs are out of reach once Zen has left it; if the page then fails to open, `` `undo `` brings the tab back. Option+Enter keeps the original. Moving to a space from another browser opens the page there after Zen has switched.
-- Spaces named alike are numbered by their place. A space's color and pattern can be changed, and the space hidden from swiping, under **Settings > Profiles & Swipe**.
+- Spaces named alike are numbered by their place. A space's look can be changed, and the space hidden from swiping, under **Settings > Profiles & Swipe**.
 
 **Adding it.** The Setup page lists **Firefox** and **Zen** when they are installed. Clicking **Add to Firefox** or **Add to Zen** writes `~/Library/Application Support/Mozilla/NativeMessagingHosts/local.tabscout.firefox.json`, which tells the browser where `TabScoutFirefoxHost` is (Firefox and Zen read the same folder), and then hands the packaged extension, `Tab Scout.app/Contents/Resources/FirefoxExtension.xpi`, to the browser, which asks in its own window whether to add it. Nothing is added until you agree there. The step ticks itself off when the extension connects.
 
@@ -228,6 +228,8 @@ Preview takes keyboard focus. To check the layout without that, render the previ
 ```
 
 Add `--query` with text to type, and `--browser chrome` or `--browser safari` to open the palette over that browser, for example `--browser chrome --query '`'` for Chrome's commands.
+
+`--preview --settings` opens Settings instead, on Setup with `--setup`, and `--edit 1` opens the second place's look. With `--snapshot` it saves a picture of that window, which is on screen for a moment, and quits. `--drag "480,683>400,640;347,748"` first presses at each point, counted from the window's top left, and drags to the second where there is one, so the picture shows the page after it was used. A place's look can be given for the run alone, as in `-PlaceColors '{safari = "#14B8A6,#6E63FF";}'`.
 
 `--preview --drag-guide` opens the keyboard permission's list in System Settings with the drag panel below it; it never closes by itself, and nothing should be dropped into the list from a preview build.
 

@@ -14,6 +14,7 @@ struct ProfileTests {
         swipe()
         swipeModes()
         settings()
+        looks()
         print("Passed \(checks) profile checks")
     }
 
@@ -268,22 +269,84 @@ struct ProfileTests {
         let places = BrowserSpaces.combine(safari: true, chrome: chrome, chromeRunning: true, front: .chrome)
         var chosen = PlaceSettings()
         chosen.hidden = [places.profiles[1].id, places.profiles[2].id]
-        chosen.colors[places.profiles[3].id] = ProfileColor(hex: 0x112233)
+        chosen.colors[places.profiles[3].id] = [ProfileColor(hex: 0x112233)]
+        chosen.colors["safari"] = [0x14B8A6, 0x6E63FF, 0xD946EF, 0xFF7A45].map(ProfileColor.init(hex:))
         chosen.motifs["safari"] = .weave
+        chosen.strengths["safari"] = 1.4
+        chosen.textures["safari"] = 0
         let applied = chosen.apply(to: places)
         expect(applied.profiles.map(\.name) == ["Safari", "Work", "Side"] && applied.current == 1,
                "Hidden places are left out, except the one in front")
         expect(applied.profiles[2].color == ProfileColor(hex: 0x112233) && applied.profiles[0].motif == .weave,
                "Chosen colors and patterns replace the automatic ones")
+        expect(applied.profiles[0].color == ProfileColor(hex: 0x14B8A6)
+               && applied.profiles[0].accents == [ProfileColor(hex: 0x6E63FF), ProfileColor(hex: 0xD946EF)],
+               "The first chosen color is the place's own and two more are blended in")
+        expect(applied.profiles[0].strength == 1.4 && applied.profiles[0].texture == 0, "A chosen strength and texture are the place's")
+        expect(applied.profiles[2].accents.isEmpty && applied.profiles[2].strength == 1 && applied.profiles[2].texture == 1,
+               "A place given one color keeps the usual wash and texture")
+        expect(chosen.isCustom("safari") && !chosen.isCustom(places.profiles[1].id), "A place with anything chosen counts as customized")
+        var cleared = chosen
+        cleared.reset("safari")
+        expect(!cleared.isCustom("safari") && cleared.styled(places.profiles[0]) == places.profiles[0] && cleared.hidden == chosen.hidden,
+               "Going back to automatic drops every choice about the look and nothing else")
 
         let defaults = UserDefaults(suiteName: "ProfileTests-\(UUID().uuidString)")!
         chosen.swipeMode = .single
         chosen.sensitivity = 0.7
         chosen.save(to: defaults)
-        expect(PlaceSettings(defaults: defaults) == chosen, "Place settings survive a save and load")
+        chosen.colors["safari"]?.removeLast()
+        expect(PlaceSettings(defaults: defaults) == chosen, "Place settings survive a save and load, with no more colors than a place shows")
+        defaults.set(["safari": "#3B8CF6", "zen": "nonsense"], forKey: "PlaceColors")
+        defaults.set(["safari": 9.0], forKey: "PlaceStrengths")
+        defaults.set(["safari": -1.0], forKey: "PlaceTextures")
+        let stored = PlaceSettings(defaults: defaults)
+        expect(stored.colors == ["safari": [ProfileColor(hex: 0x3B8CF6)]], "A single color stored by an earlier version still reads, and nonsense is dropped")
+        expect(stored.strengths["safari"] == PlaceSettings.strengthRange.upperBound && stored.textures["safari"] == 0,
+               "Stored strengths and textures are kept in range")
         defaults.set(9.0, forKey: "SwipeSensitivity")
         expect(PlaceSettings(defaults: defaults).sensitivity == PlaceSettings.sensitivityRange.upperBound, "A stored sensitivity is kept in range")
         expect(ProfileColor(hexString: ProfileColor(hex: 0x3B8CF6).hexString) == ProfileColor(hex: 0x3B8CF6), "Colors round-trip through hex")
+    }
+
+    static func looks() {
+        for color in ProfilePalette.colors {
+            expect(ProfileColor(hue: color.hue, saturation: color.saturation, brightness: color.brightness).hexString == color.hexString,
+                   "A color is the same again from its hue, saturation and brightness")
+        }
+        expect(ProfileColor(hue: -120, saturation: 1, brightness: 1).hexString == "#0000FF"
+               && ProfileColor(hue: 480, saturation: 1, brightness: 1).hexString == "#00FF00", "Hue wraps around both ways")
+        expect(!ProfilePalette.motifs(ids: (0..<12).map(String.init)).contains(.plain), "No place is given the grain-only pattern by itself")
+
+        for (x, y) in [(0.1, 0.2), (0.5, 0.5), (0.8, 0.9), (0.0, 0.0), (0.33, 1.0)] {
+            let point = ColorField.point(for: ColorField.color(x: x, y: y))
+            expect(abs(point.x - x) < 0.001 && abs(point.y - y) < 0.001, "A color picked on the field sits where it was picked")
+        }
+        let pale = ColorField.color(x: 0.5, y: 0)
+        let deep = ColorField.color(x: 0.5, y: 1)
+        expect(abs(pale.saturation - ColorField.paleSaturation) < 0.001 && pale.brightness == 1
+               && abs(deep.brightness - ColorField.deepBrightness) < 0.001 && abs(deep.saturation - 1) < 0.001,
+               "The field runs from pale at the top to deep at the bottom")
+        expect(ColorField.color(x: 1, y: 0.5).hue > 350, "The right edge stops short of the left edge's red")
+        expect(ColorField.color(x: -3, y: 9) == ColorField.color(x: 0, y: 1), "A point outside the field counts as its edge")
+        expect(ColorField.point(for: ProfileColor(hex: 0x14B8A6)).y > 0.5 && ColorField.point(for: ProfileColor(hex: 0x6E63FF)).y < 0.5,
+               "A deep color sits below the middle and a pale one above")
+
+        let base = [ProfileColor(hex: 0x3B8CF6), ProfileColor(hue: 10, saturation: 0.5, brightness: 0.9), ProfileColor(hex: 0x7CB518)]
+        let triad = ColorHarmony.triad.arranged(base)
+        expect(triad[0] == base[0] && abs(triad[1].hueDistance(to: base[0]) - 120) < 0.5 && abs(triad[2].hueDistance(to: base[0]) - 120) < 0.5
+               && abs(triad[1].hueDistance(to: triad[2]) - 120) < 0.5, "A triad spreads the other colors evenly around the first")
+        expect(abs(triad[1].saturation - 0.5) < 0.001 && abs(triad[1].brightness - 0.9) < 0.001, "A harmony keeps how pale or deep each color was")
+        expect(abs(ColorHarmony.complement.arranged(Array(base.prefix(2)))[1].hueDistance(to: base[0]) - 180) < 0.5,
+               "The opposite of a color is across the wheel")
+        expect(ColorHarmony.split.arranged([base[0]]) == [base[0]], "A single color has nothing to arrange")
+        let second = ColorHarmony.added(to: [base[0]])
+        let third = ColorHarmony.added(to: [base[0], second])
+        expect(second.hueDistance(to: base[0]) >= 20 && third.hueDistance(to: base[0]) >= 20 && third.hueDistance(to: second) >= 20,
+               "An added color is a neighbor of the first, clear of the colors already there")
+        expect(ThemePresets.pages.count == 4 && ThemePresets.pages.allSatisfy { page in
+            page.themes.count == 8 && page.themes.allSatisfy { (1...PlaceSettings.colorLimit).contains($0.count) }
+        }, "Every page of ready-made looks holds eight, none with more colors than a place shows")
     }
 
     static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {

@@ -21,6 +21,26 @@ struct ProfileColor: Equatable {
         self.init(hex: UInt32(truncatingIfNeeded: value) & 0xFF_FFFF)
     }
 
+    /// From a hue in degrees, which wraps around, and a saturation and brightness from 0 to 1.
+    init(hue: Double, saturation: Double, brightness: Double) {
+        let hue = (hue.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
+        let brightness = min(max(brightness, 0), 1)
+        let chroma = brightness * min(max(saturation, 0), 1)
+        let sector = hue / 60
+        let second = chroma * (1 - abs(sector.truncatingRemainder(dividingBy: 2) - 1))
+        let parts: (Double, Double, Double)
+        switch Int(sector) {
+        case 0: parts = (chroma, second, 0)
+        case 1: parts = (second, chroma, 0)
+        case 2: parts = (0, chroma, second)
+        case 3: parts = (0, second, chroma)
+        case 4: parts = (second, 0, chroma)
+        default: parts = (chroma, 0, second)
+        }
+        let low = brightness - chroma
+        self.init(red: parts.0 + low, green: parts.1 + low, blue: parts.2 + low)
+    }
+
     private var extremes: (high: Double, low: Double) { (max(red, green, blue), min(red, green, blue)) }
 
     /// Degrees from 0 to 360.
@@ -55,6 +75,11 @@ struct ProfileColor: Equatable {
 /// some colors alike.
 enum ProfileMotif: Int, CaseIterable {
     case strands, dots, waves, rings, weave
+    /// No pattern, only grain. People choose it; no place gets it by itself.
+    case plain
+
+    /// The patterns places get by themselves.
+    static let assigned: [ProfileMotif] = [.strands, .dots, .waves, .rings, .weave]
 }
 
 /// A place to swipe to in the palette: Safari, one Chrome profile, Firefox, Zen or one of Zen's spaces. Each lists
@@ -76,6 +101,12 @@ struct BrowserProfile: Equatable {
     var symbol: String?
     /// An emoji drawn on the badge instead of the initial, such as the one a Zen space was given.
     var emblem: String?
+    /// Up to two more colors the place's wash and badge blend into, when people chose some.
+    var accents: [ProfileColor] = []
+    /// How strongly the colors wash the palette: 1 is the usual wash.
+    var strength = 1.0
+    /// How much pattern and grain show: 1 is the usual amount, 0 none.
+    var texture = 1.0
 
     var initial: String { emblem ?? name.first.map { String($0).uppercased() } ?? "?" }
 }
@@ -243,7 +274,7 @@ enum BrowserSpaces {
             let nearest = { (color: ProfileColor) in taken.map { color.hueDistance(to: $0) }.min() ?? 360 }
             let color = colors.first { nearest($0) >= 45 } ?? colors.max { nearest($0) < nearest($1) } ?? colors[0]
             // Ripples suit a compass; another pattern stands in when a place before has them.
-            let motif = used.contains(wanted) ? ProfileMotif.allCases.first { !used.contains($0) } ?? wanted : wanted
+            let motif = used.contains(wanted) ? ProfileMotif.assigned.first { !used.contains($0) } ?? wanted : wanted
             taken.append(color)
             used.insert(motif)
             return BrowserProfile(id: browser.rawValue, browser: browser, name: browser.name, menuTitle: nil, directory: nil,
@@ -327,7 +358,7 @@ enum ProfilePalette {
     static func motifs(ids: [String]) -> [ProfileMotif] {
         let order = ids.indices.sorted { ids[$0] < ids[$1] }
         var result = Array(repeating: ProfileMotif.strands, count: ids.count)
-        for (rank, index) in order.enumerated() { result[index] = ProfileMotif.allCases[rank % ProfileMotif.allCases.count] }
+        for (rank, index) in order.enumerated() { result[index] = ProfileMotif.assigned[rank % ProfileMotif.assigned.count] }
         return result
     }
 }
