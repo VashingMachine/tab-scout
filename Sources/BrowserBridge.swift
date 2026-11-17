@@ -6,6 +6,7 @@ import Darwin
 final class BrowserBridge {
     typealias ScriptExecutor = (URL, [String]) throws -> Data
     typealias NewTabExecutor = () throws -> Data
+    typealias PageOpener = (String, Browser) throws -> Data
 
     let browser: Browser
     // Tab-list reads run beside actions, so Enter never waits for a background refresh to finish.
@@ -14,20 +15,28 @@ final class BrowserBridge {
     private let scriptURL: URL
     private let newTabExecutor: NewTabExecutor
     private let executor: ScriptExecutor
+    private let pageOpener: PageOpener
 
-    /// `newTabExecutor` opens Safari's configured new-tab page; Chrome's script opens its own.
-    init(browser: Browser = .safari, scriptURL: URL, newTabExecutor: @escaping NewTabExecutor = SafariNativeNewTab.open,
+    /// `newTabExecutor` opens Safari's configured new-tab page; Chrome's script opens its own. `pageOpener` opens
+    /// one of the browser's own pages, such as about:config, in a browser that has them.
+    init(browser: Browser = .safari, scriptURL: URL,
+         pageOpener: @escaping PageOpener = { _, _ in throw BridgeError.unavailable },
+         newTabExecutor: @escaping NewTabExecutor = SafariNativeNewTab.open,
          executor: @escaping ScriptExecutor = ScriptProcess.execute) {
         self.browser = browser
         self.scriptURL = scriptURL
         self.newTabExecutor = newTabExecutor
+        self.pageOpener = pageOpener
         self.executor = executor
     }
 
     /// For a browser reached through Tab Scout's extension: `transport` runs one command there and answers what
-    /// the browser's script would print.
-    convenience init(browser: Browser, transport: @escaping ([String]) throws -> Data) {
-        self.init(browser: browser, scriptURL: URL(fileURLWithPath: "/dev/null"), executor: { _, arguments in try transport(arguments) })
+    /// the browser's script would print. Firefox lets no extension open the browser's own pages, so those go to
+    /// `pageOpener` instead.
+    convenience init(browser: Browser, transport: @escaping ([String]) throws -> Data,
+                     pageOpener: @escaping PageOpener = { _, _ in throw BridgeError.unavailable }) {
+        self.init(browser: browser, scriptURL: URL(fileURLWithPath: "/dev/null"), pageOpener: pageOpener,
+                  executor: { _, arguments in try transport(arguments) })
     }
 
     func list(completion: @escaping (Result<TabInventory, Error>) -> Void) {
@@ -80,13 +89,15 @@ final class BrowserBridge {
     }
 
     /// Opens `destination` in a new tab, or in `blank`, an empty tab on screen, so that no empty tab is left behind.
-    /// The script still opens a new tab when `blank` has navigated away meanwhile.
+    /// The script still opens a new tab when `blank` has navigated away meanwhile. One of the browser's own pages,
+    /// such as about:config, always opens in a new tab of the window in front.
     func open(_ destination: NewTabDestination, windowID: Int, reusing blank: BrowserTab? = nil,
               completion: @escaping (Result<Data, Error>) -> Void) {
         let windowID = String(blank?.windowID ?? windowID)
         let reuse = blank.map { [String($0.index), $0.url] } ?? []
         if destination == .defaultPage, let blank { return select(blank, completion: completion) }
         switch (destination, browser) {
+        case (.url(let url), _) where browser.ownsAddress(url): openPage(url, completion: completion)
         case (.defaultPage, .safari):
             execute(["prepare-new-tab", windowID], on: actionQueue, after: newTabExecutor, completion: completion)
         case (.defaultPage, _): execute(["new-tab", windowID], on: actionQueue, completion: completion)
@@ -95,6 +106,15 @@ final class BrowserBridge {
             execute(["url", windowID, Browser.googleSearch(query)] + reuse, on: actionQueue, completion: completion)
         // Safari's script and the Firefox extension search with the browser's own engine.
         case (.search(let query), _): execute(["search", windowID, query] + reuse, on: actionQueue, completion: completion)
+        }
+    }
+
+    private func openPage(_ url: String, completion: @escaping (Result<Data, Error>) -> Void) {
+        let submitted = DispatchTime.now()
+        actionQueue.async { [browser, pageOpener] in
+            let result = Result { try pageOpener(url, browser) }
+            Timing.log("\(browser.rawValue) page", since: submitted)
+            DispatchQueue.main.async { completion(result) }
         }
     }
 

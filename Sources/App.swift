@@ -246,7 +246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                     DispatchQueue.main.async { self?.bringForward(browser) { _ in } }
                 }
                 return data
-            })
+            }, pageOpener: Self.openOwnPage)
         }
         for browser in Browser.allCases {
             let store = TabStore { [weak self] completion in self?.bridges[browser]?.list(completion: completion) }
@@ -567,6 +567,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     private func bridge(_ browser: Browser) -> BrowserBridge { bridges[browser]! }
+
+    /// Hands `browser` one of its own pages, such as about:config, the way macOS hands it a link clicked in
+    /// another app. Firefox and the browsers built on it let no extension open these pages; an address arriving
+    /// this way they open in a new tab of the window in front, and they come forward. Never called on the main thread.
+    private static func openOwnPage(_ address: String, in browser: Browser) throws -> Data {
+        guard let page = URL(string: address) else { throw BridgeError.script("\(browser.name) cannot open \(address).") }
+        let done = DispatchSemaphore(value: 0)
+        var outcome: Result<Data, Error> = .failure(BridgeError.timeout)
+        DispatchQueue.main.async {
+            // The copy that is running, where the browser is installed more than once.
+            let running = NSRunningApplication.runningApplications(withBundleIdentifier: browser.bundleID).first?.bundleURL
+            guard let app = running ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: browser.bundleID) else {
+                outcome = .failure(BridgeError.unavailable)
+                done.signal()
+                return
+            }
+            NSWorkspace.shared.open([page], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                outcome = error.map { .failure($0) } ?? .success(Data("ok".utf8))
+                done.signal()
+            }
+        }
+        // Past the wait, a late answer changes nothing.
+        guard done.wait(timeout: .now() + 10) == .success else { throw BridgeError.timeout }
+        return try outcome.get()
+    }
 
     private func describe(_ error: Error, _ browser: Browser) -> String {
         (error as? BridgeError)?.message(for: browser) ?? error.localizedDescription
@@ -1176,8 +1201,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     private func requestSuggestions() {
         let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Requests for the on-device model are personal and commands are not searches; neither is sent to Google.
-        guard AssistantPrompt.question(in: query) == nil, PaletteCommand.query(in: query) == nil else {
+        // Requests for the on-device model are personal, and commands and addresses of the browser's own pages are
+        // not searches; none of them is sent to Google.
+        guard AssistantPrompt.question(in: query) == nil, PaletteCommand.query(in: query) == nil,
+              !lastBrowser.ownsAddress(query) else {
             googleSuggestions.cancel()
             return
         }
@@ -1255,8 +1282,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         context.weights = learning.state.ranking.weights
         let results = SearchResultBuilder.build(query: query, matches: matches, allTabs: tabs, history: historyIndex,
                                                 suggestions: remoteSuggestions, now: now, openTabs: openTabs,
-                                                previousTab: previousTab, activeTab: activeTab, context: context)
-        rows = newTabFirst ? SearchRow.newTabFirst(NewTabDestination.from(query), in: results.rows) : results.rows
+                                                previousTab: previousTab, activeTab: activeTab, context: context,
+                                                browser: lastBrowser)
+        rows = newTabFirst ? SearchRow.newTabFirst(NewTabDestination.from(query, in: lastBrowser), in: results.rows) : results.rows
         shownFeatures = results.features
         table.reloadData()
         if let row = selected.flatMap({ SearchRow.retainedSelection(of: $0, in: rows) }) ?? ResultNavigation.first(in: rows) {
@@ -1268,7 +1296,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let tabCount = "\(tabs.count) \(tabs.count == 1 ? "tab" : "tabs")"
         let windowCount = "\(windows) \(windows == 1 ? "window" : "windows")"
         let localCount = rows.filter { row in
-            switch row { case .previousTab, .tab, .history, .recentSearch: return true; default: return false }
+            switch row { case .previousTab, .tab, .page, .history, .recentSearch: return true; default: return false }
         }.count
         let suggestionCount = rows.filter { if case .suggestion = $0 { return true }; return false }.count
         footer.stringValue = query.isEmpty ? "\(tabCount) in \(windowCount)" : "\(localCount) local \(localCount == 1 ? "result" : "results")" + (suggestionCount > 0 ? " | \(suggestionCount) Google suggestions" : "")
@@ -1372,13 +1400,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 cell.configure(title: "New tab", detail: "\(lastBrowser.name)'s new-tab page", url: nil,
                                image: symbol("plus.square"), tint: .systemBlue)
             case .url(let url):
+                // One of the browser's own pages never loads in the empty tab on screen.
+                let reused = blankActiveTab != nil && !lastBrowser.ownsAddress(url)
                 cell.configure(title: url == "about:blank" ? "New tab" : "Open \(url)",
-                               detail: blankActiveTab == nil ? "New \(lastBrowser.name) tab" : "This empty tab", url: nil,
+                               detail: reused ? "This empty tab" : "New \(lastBrowser.name) tab", url: nil,
                                image: symbol("plus.square"), tint: .systemBlue)
             case .search(let query):
                 cell.configure(title: "Search for \(query)", detail: lastBrowser.searchEngine, url: nil,
                                image: symbol("magnifyingglass"), tint: .systemBlue)
             }
+        case .page(let page):
+            cell.configure(title: page.url, detail: "\(page.title) | New \(lastBrowser.name) tab", url: nil,
+                           image: symbol("gearshape"), tint: .systemBlue)
         case .recentSearch(let search):
             cell.configure(title: search.query, detail: relativeDate.localizedString(for: search.lastUsed, relativeTo: Date()),
                            url: nil, image: symbol("clock"), tint: .secondaryLabelColor)
@@ -1922,7 +1955,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
         let shown = shownTabs.map { shownFeatures[$0] ?? RankingFeatures() }
         let row: SearchRow
-        if forceNew { row = .newTab(NewTabDestination.from(AssistantPrompt.question(in: typed) ?? typed)) }
+        if forceNew { row = .newTab(NewTabDestination.from(AssistantPrompt.question(in: typed) ?? typed, in: lastBrowser)) }
         else {
             guard rows.indices.contains(table.selectedRow) else { return }
             row = rows[table.selectedRow]
@@ -1941,6 +1974,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         case .previousTab: "previous tab"
         case .tab: "tab"
         case .newTab: "new tab"
+        case .page: "browser page"
         case .history: "history page"
         default: "search"
         }

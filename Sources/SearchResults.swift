@@ -4,6 +4,8 @@ enum SearchRow: Equatable {
     case previousTab(BrowserTab)
     case tab(BrowserTab)
     case newTab(NewTabDestination)
+    /// One of the browser's own pages, suggested for typed text such as "about:" in Firefox.
+    case page(BrowserPage)
     case recentSearch(PastSearch)
     case history(HistoryVisit)
     case suggestion(String)
@@ -19,6 +21,7 @@ enum SearchRow: Equatable {
         switch self {
         case .previousTab, .tab, .section, .command: return nil
         case .newTab(let destination): return destination
+        case .page(let page): return .url(page.url)
         case .recentSearch(let item): return .search(item.query)
         case .history(let item): return .url(item.url)
         case .suggestion(let query): return .search(query)

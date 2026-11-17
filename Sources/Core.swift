@@ -70,6 +70,119 @@ enum Browser: String, CaseIterable {
     }
 }
 
+/// One of a browser's own pages, such as Firefox's about:config.
+struct BrowserPage: Equatable {
+    /// The page's address, in lowercase.
+    let url: String
+    /// What the page is, as the browser titles it.
+    let title: String
+
+    /// Whether a tab at `address` shows this page, also at one of its parts, as about:preferences#privacy does.
+    func isShown(at address: String) -> Bool {
+        let address = address.lowercased()
+        return address == url || address.hasPrefix(url + "#") || address.hasPrefix(url + "?")
+    }
+
+    /// The pages of `browser` that `typed` asks for, the likeliest first, or nil when `typed` is not an address
+    /// of the browser's own pages. "about:" alone lists every page. Text after it finds the page of that name,
+    /// then the pages whose name begins with it, those whose name contains it, and those whose title has a word
+    /// beginning with it, so "about:pass" finds about:logins, titled Passwords. Text naming a part of a page, as
+    /// "about:preferences#privacy" does, finds that page alone.
+    static func suggestions(for typed: String, in browser: Browser) -> [BrowserPage]? {
+        let text = typed.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard browser.ownsAddress(text) else { return nil }
+        let rest = String(text.dropFirst(Browser.pageScheme.count))
+        let name = String(rest.prefix { !Self.partMarks.contains($0) })
+        if name.count < rest.count { return browser.pages.filter { $0.url == Browser.pageScheme + name } }
+        guard !name.isEmpty else { return browser.pages }
+        let ranked = browser.pages.enumerated().compactMap { offset, page -> (Int, Int, BrowserPage)? in
+            let own = page.url.dropFirst(Browser.pageScheme.count)
+            if own == name { return (0, offset, page) }
+            if own.hasPrefix(name) { return (1, offset, page) }
+            if own.contains(name) { return (2, offset, page) }
+            let words = page.title.lowercased().split { !$0.isLetter && !$0.isNumber }
+            return words.contains { $0.hasPrefix(name) } ? (3, offset, page) : nil
+        }
+        return ranked.sorted { ($0.0, $0.1) < ($1.0, $1.1) }.map(\.2)
+    }
+
+    /// Whether `typed` names more than a page: one of its parts, or what it is to show.
+    static func namesPart(_ typed: String) -> Bool { typed.contains(where: partMarks.contains) }
+
+    private static let partMarks: Set<Character> = ["#", "?", "/"]
+}
+
+extension Browser {
+    /// How the addresses of Firefox's own pages begin, and of those of the browsers built on it.
+    static let pageScheme = "about:"
+
+    /// Whether `text` is an address of one of this browser's own pages, such as about:config in Firefox. Only
+    /// Firefox and the browsers built on it have pages Tab Scout opens; in Safari and Chrome such text is searched.
+    func ownsAddress(_ text: String) -> Bool {
+        usesExtension && !text.contains(where: \.isWhitespace) && text.lowercased().hasPrefix(Self.pageScheme)
+    }
+
+    /// The browser's own pages that Tab Scout suggests: the ones the browser itself lists at about:about, with
+    /// the pages for settings first. Zen has Firefox's but for the crash reports, which it does not collect.
+    /// Pages the browser leaves out of that list, such as about:blank, still open when typed in full.
+    var pages: [BrowserPage] {
+        switch self {
+        case .safari, .chrome: return []
+        case .firefox: return Self.firefoxPages
+        case .zen: return Self.firefoxPages.filter { $0.url != "about:crashes" }
+        }
+    }
+
+    /// Read from Firefox 159's about:about, with each page's own title.
+    private static let firefoxPages: [BrowserPage] = [
+        ("config", "Advanced Preferences"),
+        ("preferences", "Settings"),
+        ("addons", "Add-ons Manager: extensions and themes"),
+        ("debugging", "Debugging: temporary extensions, tabs and workers"),
+        ("profiles", "Profiles"),
+        ("support", "Troubleshooting Information"),
+        ("policies", "Enterprise Policies"),
+        ("keyboard", "Keyboard Shortcuts"),
+        ("logins", "Passwords"),
+        ("downloads", "Downloads"),
+        ("protections", "Protections Dashboard"),
+        ("processes", "Process Manager"),
+        ("memory", "Memory use"),
+        ("profiling", "Profiler settings"),
+        ("unloads", "Tab Unloading"),
+        ("networking", "Networking"),
+        ("cache", "Network Cache"),
+        ("serviceworkers", "Service Workers"),
+        ("certificate", "Certificates"),
+        ("webauthn", "WebAuthn: passkeys and security keys"),
+        ("webrtc", "WebRTC Internals"),
+        ("url-classifier", "URL Classifier: tracking protection lists"),
+        ("compat", "Web Compatibility"),
+        ("translations", "Translations"),
+        ("pdf", "PDF editor"),
+        ("telemetry", "Telemetry Data"),
+        ("studies", "Studies"),
+        ("crashes", "Crash Reports"),
+        ("logging", "Logging"),
+        ("sync-log", "Sync logs"),
+        ("checkerboard", "Checkerboard Analyzer"),
+        ("loginsimportreport", "Password Import Summary"),
+        ("buildconfig", "Build Configuration"),
+        ("firefoxview", "Firefox View: recent and open tabs"),
+        ("home", "Home page"),
+        ("newtab", "New-tab page"),
+        ("privatebrowsing", "Private Browsing start page"),
+        ("welcome", "Welcome page"),
+        ("about", "Every about: page"),
+        ("license", "Licenses"),
+        ("rights", "Your Rights"),
+        ("credits", "Contributors"),
+        ("mozilla", "The Book of Mozilla"),
+        ("robots", "Gort! Klaatu barada nikto!"),
+        ("logo", "Logo")
+    ].map { BrowserPage(url: pageScheme + $0.0, title: $0.1) }
+}
+
 struct BrowserTab: Hashable {
     let browser: Browser
     let windowID: Int
@@ -427,10 +540,13 @@ enum NewTabDestination: Equatable {
     case url(String)
     case search(String)
 
-    static func from(_ input: String) -> NewTabDestination {
+    /// What typed text opens in `browser`: one of the browser's own pages, such as about:config in Firefox, is an
+    /// address there and search text in every other browser.
+    static func from(_ input: String, in browser: Browser = .safari) -> NewTabDestination {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return .defaultPage }
         guard !text.contains(where: \.isWhitespace) else { return .search(text) }
+        if browser.ownsAddress(text) { return .url(text) }
 
         if let url = URL(string: text), let scheme = url.scheme?.lowercased(),
            ["http", "https"].contains(scheme), let host = url.host, !host.isEmpty {

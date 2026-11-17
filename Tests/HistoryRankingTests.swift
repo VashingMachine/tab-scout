@@ -19,6 +19,7 @@ struct HistoryRankingTests {
         navigation()
         clickActivation()
         selectionRetention()
+        ownPages()
         print("Passed \(checks) history ranking and result navigation checks")
     }
 
@@ -44,12 +45,49 @@ struct HistoryRankingTests {
 
     static func rows(_ query: String, tabs: [BrowserTab] = [], visits: [HistoryVisit] = [],
                      searches: [PastSearch] = [], suggestions: [String] = [], previous: BrowserTab? = nil,
-                     active: BrowserTab? = nil, context: RankingContext = RankingContext()) -> [SearchRow] {
+                     active: BrowserTab? = nil, context: RankingContext = RankingContext(),
+                     browser: Browser = .safari) -> [SearchRow] {
         SearchResultBuilder.rows(query: query, matches: TabSearchIndex(tabs).matches(query: query),
                                  allTabs: tabs,
                                  history: HistorySearchIndex(HistorySnapshot(visits: visits, searches: searches)),
                                  suggestions: suggestions, now: now, previousTab: previous, activeTab: active,
-                                 context: context)
+                                 context: context, browser: browser)
+    }
+
+    /// Typed text that is an address of the browser's own pages, such as "about:" in Zen.
+    static func ownPages() {
+        let page = { (name: String) in SearchRow.page(Browser.zen.pages.first { $0.url == "about:" + name }!) }
+        let zen = { (title: String, url: String, index: Int) in BrowserTab(browser: .zen, windowID: 1, index: index, title: title, url: url) }
+        let docs = zen("About config files", "https://docs.example/about-config", 1)
+        let searched = [search("about:config"), search("about:blank")]
+        let all = rows("about:", tabs: [docs], searches: searched, suggestions: ["about: blank"], browser: .zen)
+        expect(all == Browser.zen.pages.map(SearchRow.page) + [.newTab(.url("about:")), .tab(docs)] && all.first == page("config"),
+               "\"about:\" lists every page of the browser, then the typed text as an address, then matching tabs")
+        expect(rows("about:config", tabs: [docs], searches: searched, suggestions: ["about:config firefox"], browser: .zen)
+               == [page("config"), page("buildconfig")],
+               "A page's whole address lists it first with no row for the typed text, and no earlier search or suggestion")
+        expect(rows("about:conf", browser: .zen) == [page("config"), page("buildconfig"), .newTab(.url("about:conf"))]
+               && rows("about:blank", browser: .zen) == [.newTab(.url("about:blank"))],
+               "Unfinished text and a page the browser does not list are offered as typed, after the pages found")
+        expect(rows("about:preferences#privacy", browser: .zen) == [.newTab(.url("about:preferences#privacy")), page("preferences")],
+               "Text naming a part of a page comes before the page itself")
+        let open = zen("Advanced Preferences", "about:config", 2)
+        let settings = zen("Settings", "about:preferences#general", 3)
+        expect(rows("about:config", tabs: [docs, open, settings], browser: .zen) == [.tab(open), page("buildconfig")],
+               "A page already open in a tab is listed as that tab, once")
+        expect(Array(rows("about:", tabs: [open, settings], browser: .zen).prefix(3)) == [.tab(open), .tab(settings), page("addons")]
+               && Array(rows("about:", tabs: [open, settings], active: open, browser: .zen).prefix(2)) == [page("config"), .tab(settings)],
+               "Open pages keep their place among the pages, and the tab on screen is not one to switch to")
+        let elsewhere = BrowserTab(browser: .safari, windowID: 1, index: 4, title: "Blank", url: "about:config")
+        expect(rows("about:config", tabs: [elsewhere], browser: .zen).first == page("config"), "Another browser's tab does not stand in for the page")
+        expect(rows("about:config", tabs: [docs], searches: searched, suggestions: ["about:config firefox"], browser: .chrome)
+               == rows("about:config", tabs: [docs], searches: searched, suggestions: ["about:config firefox"])
+               && rows("about:config", searches: searched).contains(.newTab(.search("about:config")))
+               && rows("about:config", searches: searched).contains(.recentSearch(searched[0])),
+               "In Chrome and Safari the same text stays a search, with its earlier searches")
+        expect(page("config").destination == .url("about:config") && page("config").isSelectable
+               && SearchRow.retainedSelection(of: page("config"), in: [page("preferences"), page("config")]) == 1,
+               "A page row opens its address and keeps the selection when the list changes")
     }
 
     static func displayedTabs(_ rows: [SearchRow]) -> [BrowserTab] {

@@ -99,15 +99,35 @@ enum SearchResultBuilder {
     static func rows(query: String, matches: [TabSearchIndex.Match], allTabs: [BrowserTab],
                      history: HistorySearchIndex, suggestions: [String], now: Date,
                      openTabs: OpenTabLookup? = nil, previousTab: BrowserTab? = nil,
-                     activeTab: BrowserTab? = nil, context: RankingContext = RankingContext()) -> [SearchRow] {
+                     activeTab: BrowserTab? = nil, context: RankingContext = RankingContext(),
+                     browser: Browser = .safari) -> [SearchRow] {
         build(query: query, matches: matches, allTabs: allTabs, history: history, suggestions: suggestions, now: now,
-              openTabs: openTabs, previousTab: previousTab, activeTab: activeTab, context: context).rows
+              openTabs: openTabs, previousTab: previousTab, activeTab: activeTab, context: context, browser: browser).rows
+    }
+
+    /// The rows for typed text that is an address of `browser`'s own pages, such as "about:" in Firefox: the
+    /// pages it asks for, the likeliest first, each as its open tab when one shows it, so that page is switched
+    /// to and not opened twice. The typed text itself is offered last, for a page the browser does not list;
+    /// first when it names a part of a page; and not at all when it is a listed page's address.
+    static func pageRows(query: String, pages: [BrowserPage], allTabs: [BrowserTab], activeTab: BrowserTab?,
+                         browser: Browser) -> [SearchRow] {
+        var taken = Set<BrowserTab>()
+        let offered = pages.map { page -> SearchRow in
+            let open = allTabs.first { $0.browser == browser && $0 != activeTab && !taken.contains($0) && page.isShown(at: $0.url) }
+            guard let open else { return .page(page) }
+            taken.insert(open)
+            return .tab(open)
+        }
+        let typed = SearchRow.newTab(NewTabDestination.from(query, in: browser))
+        if BrowserPage.namesPart(query) { return [typed] + offered }
+        return pages.first?.url == query.lowercased() ? offered : offered + [typed]
     }
 
     static func build(query: String, matches: [TabSearchIndex.Match], allTabs: [BrowserTab],
                       history: HistorySearchIndex, suggestions: [String], now: Date,
                       openTabs: OpenTabLookup? = nil, previousTab: BrowserTab? = nil,
-                      activeTab: BrowserTab? = nil, context: RankingContext = RankingContext()) -> SearchResults {
+                      activeTab: BrowserTab? = nil, context: RankingContext = RankingContext(),
+                      browser: Browser = .safari) -> SearchResults {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         var rows: [SearchRow] = []
         // The tab on screen is never a destination. With empty input, Enter returns to the previously
@@ -118,20 +138,26 @@ enum SearchResultBuilder {
         let everything = TabRanker.rank(typed: !query.isEmpty, matches: matches, allTabs: allTabs, history: history,
                                         context: context, now: now)
         let ranked = everything.filter { $0.tab != previous && $0.tab != activeTab }
-        let tabs = ranked.map(\.tab)
         if let previous { rows.append(.previousTab(previous)) }
+        // An address of the browser's own pages, such as "about:" in Firefox, lists those pages first. It is not
+        // a search, so no earlier search and no suggestion is listed for it.
+        let pages = BrowserPage.suggestions(for: query, in: browser)
+        let typedRows = pages.map { pageRows(query: query, pages: $0, allTabs: allTabs, activeTab: activeTab, browser: browser) }
+            ?? [.newTab(NewTabDestination.from(query, in: browser))]
+        let tabs = ranked.map(\.tab).filter { !typedRows.contains(.tab($0)) }
         // A guess from a typo or initials, or a weak match for a question, is offered while Enter keeps
         // meaning the typed text.
-        let typedFirst = TabRanker.prefersTyped(query: query, best: ranked.first, context: context)
-        if typedFirst { rows.append(.newTab(NewTabDestination.from(query))) }
+        let typedFirst = pages != nil || TabRanker.prefersTyped(query: query, best: ranked.first, context: context)
+        if typedFirst { rows += typedRows }
         rows += tabs.map(SearchRow.tab)
         if query.isEmpty { rows.append(.newTab(.defaultPage)) }
-        let recent = history.recentSearches(query: query, now: now)
+        let recent = pages == nil ? history.recentSearches(query: query, now: now) : []
         if !recent.isEmpty {
             rows.append(.section(.recent))
             rows += recent.map(SearchRow.recentSearch)
         }
-        var seenURLs = Set(tabs.compactMap { HistoryIdentity.url($0.url) })
+        var seenURLs = Set((tabs + typedRows.compactMap { if case .tab(let tab) = $0 { return tab }; return nil })
+            .compactMap { HistoryIdentity.url($0.url) })
         let openByURL = openTabs ?? OpenTabLookup(allTabs)
         let browsing = history.browsingMatches(query: query, now: now).compactMap { visit -> SearchRow? in
             guard let key = HistoryIdentity.url(visit.url) else { return nil }
@@ -143,14 +169,14 @@ enum SearchResultBuilder {
             rows.append(.section(.history))
             rows += browsing
         }
-        if !query.isEmpty && !typedFirst { rows.append(.newTab(NewTabDestination.from(query))) }
+        if !query.isEmpty && !typedFirst { rows += typedRows }
         var seenQueries = Set(recent.map { HistoryIdentity.query($0.query) })
         seenQueries.insert(HistoryIdentity.query(query))
         let remote = suggestions.compactMap { suggestion -> SearchRow? in
             guard seenQueries.insert(HistoryIdentity.query(suggestion)).inserted else { return nil }
             return .suggestion(suggestion)
         }
-        if !query.isEmpty && !remote.isEmpty {
+        if !query.isEmpty && !remote.isEmpty && pages == nil {
             rows.append(.section(.google))
             rows += remote.prefix(8)
         }

@@ -47,6 +47,7 @@ struct CoreTests {
         try expect(TabInventory.decode(Data("[]".utf8)) == TabInventory(tabs: []), "Empty Safari session")
 
         try browsers()
+        ownPages()
         expect(capture(), "Capture Safari Cmd+T")
         expect(!capture(browser: false), "Leave other apps' Cmd+T alone")
         expect(!capture(shift: true), "Preserve Safari reopen-tab shortcut")
@@ -54,6 +55,50 @@ struct CoreTests {
         expect(!capture(enabled: false), "Pause restores normal Cmd+T")
         expect(!capture(code: 16), "Leave other keys alone")
         print("Passed \(checks) core checks")
+    }
+
+    /// Firefox's own pages, such as about:config, and the browsers built on it.
+    static func ownPages() {
+        for browser in [Browser.firefox, .zen] {
+            expect(NewTabDestination.from(" about:config ", in: browser) == .url("about:config"), "One of \(browser.name)'s own pages is an address there")
+            expect(NewTabDestination.from("about:", in: browser) == .url("about:") && NewTabDestination.from("About:Preferences#privacy", in: browser) == .url("About:Preferences#privacy"),
+                   "The address goes as it was typed, also unfinished and at a part of a page")
+            expect(NewTabDestination.from("about: time", in: browser) == .search("about: time") && NewTabDestination.from("about", in: browser) == .search("about")
+                   && NewTabDestination.from("javascript:alert(1)", in: browser) == .search("javascript:alert(1)")
+                   && NewTabDestination.from("file:///etc/passwd", in: browser) == .search("file:///etc/passwd")
+                   && NewTabDestination.from("chrome://settings", in: browser) == .search("chrome://settings"),
+                   "Words after the colon, the word alone and other schemes stay search text")
+            expect(NewTabDestination.from("example.com/docs", in: browser) == .url("https://example.com/docs") && NewTabDestination.from("", in: browser) == .defaultPage,
+                   "Web addresses and empty input mean what they mean everywhere")
+        }
+        for browser in [Browser.safari, .chrome] {
+            expect(NewTabDestination.from("about:config", in: browser) == .search("about:config") && BrowserPage.suggestions(for: "about:", in: browser) == nil
+                   && browser.pages.isEmpty, "\(browser.name) has no pages of its own to open, so the text is searched")
+        }
+        let names = { (typed: String, browser: Browser) in BrowserPage.suggestions(for: typed, in: browser)?.map(\.url) }
+        expect(names("about:", .firefox)?.count == 45 && names("about:", .firefox)?.prefix(3) == ["about:config", "about:preferences", "about:addons"],
+               "\"about:\" alone lists every page, the ones for settings first")
+        expect(Set(names("about:", .firefox) ?? []).count == 45 && Browser.firefox.pages.allSatisfy { $0.url == $0.url.lowercased() && !$0.title.isEmpty },
+               "No page is listed twice, and each has a lowercase address and a title")
+        expect(names(" ABOUT: ", .zen) == names("about:", .firefox)?.filter { $0 != "about:crashes" }, "Zen has Firefox's pages but for the crash reports, in any case of letters")
+        expect(names("about:config", .zen) == ["about:config", "about:buildconfig"], "The page of the typed name comes first, then those whose name contains it")
+        expect(names("about:c", .zen)?.prefix(4) == ["about:config", "about:cache", "about:certificate", "about:compat"],
+               "Names beginning with the text come in the list's order")
+        expect(names("about:log", .zen) == ["about:logins", "about:logging", "about:loginsimportreport", "about:logo", "about:sync-log"],
+               "Names containing the text follow those beginning with it")
+        expect(names("about:pass", .zen) == ["about:logins", "about:webauthn", "about:loginsimportreport"] && names("about:settings", .zen) == ["about:preferences", "about:profiling"]
+               && names("about:ext", .zen) == ["about:addons", "about:debugging"], "A word of a page's title finds it too")
+        expect(names("about:pro", .zen) == ["about:profiles", "about:protections", "about:processes", "about:profiling", "about:url-classifier"],
+               "Pages found by their title come after those found by their name")
+        expect(names("about:nosuchpage", .zen) == [] && names("about config", .zen) == nil && names("config", .zen) == nil,
+               "An unknown name finds no page, and text that is no such address is not about pages at all")
+        expect(names("about:preferences#privacy", .zen) == ["about:preferences"] && names("about:reader?url=https://example.org/", .zen) == []
+               && BrowserPage.namesPart("about:preferences#privacy") && !BrowserPage.namesPart("about:preferences"),
+               "Text naming a part of a page finds that page alone")
+        let settings = BrowserPage(url: "about:preferences", title: "Settings")
+        expect(settings.isShown(at: "about:preferences") && settings.isShown(at: "about:preferences#privacy") && settings.isShown(at: "About:Preferences?x")
+               && !settings.isShown(at: "about:preferencesx") && !settings.isShown(at: "https://example.org/about:preferences"),
+               "A tab shows a page at its address, also at one of its parts")
     }
 
     static func browsers() throws {

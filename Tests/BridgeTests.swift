@@ -158,6 +158,41 @@ struct BridgeTests {
         expect(closed == inventory.tabs, "Closed tabs come back as the tabs they were")
         let missing = BrowserBridge(browser: .firefox, transport: { _ in throw BridgeError.extensionMissing })
         expectError(awaitResult { missing.list(completion: $0) }, matching: .extensionMissing, "A browser without the extension fails as such")
+        try ownPages()
+    }
+
+    /// Firefox lets no extension open pages such as about:config, so those never go to the extension.
+    static func ownPages() throws {
+        let calls = CallRecorder()
+        let bridge = BrowserBridge(browser: .zen, transport: { arguments in
+            calls.append(url: URL(fileURLWithPath: "/extension"), arguments: arguments)
+            return Data("ok".utf8)
+        }, pageOpener: { address, browser in
+            expect(!Thread.isMainThread, "Hand the browser its page off the main thread")
+            calls.append(url: URL(fileURLWithPath: "/" + browser.rawValue), arguments: [address])
+            if address == "about:fails" { throw BridgeError.unavailable }
+            return Data("ok".utf8)
+        })
+        let blank = BrowserTab(browser: .zen, windowID: 3, index: 2, title: "New Tab", url: "about:newtab")
+        _ = try awaitResult { bridge.open(.url("about:config"), windowID: 3, completion: $0) }.get()
+        _ = try awaitResult { bridge.open(.url("About:Preferences#privacy"), windowID: 3, reusing: blank, completion: $0) }.get()
+        _ = try awaitResult { bridge.open(.url("https://example.org/about:config"), windowID: 3, completion: $0) }.get()
+        expectError(awaitResult { bridge.open(.url("about:fails"), windowID: 3, completion: $0) }, matching: .unavailable,
+                    "A page the browser could not be handed fails the action")
+        expect(calls.values == [
+            Call(url: URL(fileURLWithPath: "/zen"), arguments: ["about:config"]),
+            Call(url: URL(fileURLWithPath: "/zen"), arguments: ["About:Preferences#privacy"]),
+            Call(url: URL(fileURLWithPath: "/extension"), arguments: ["url", "3", "https://example.org/about:config"]),
+            Call(url: URL(fileURLWithPath: "/zen"), arguments: ["about:fails"])
+        ], "One of the browser's own pages goes to the browser itself as typed, never to the extension or into the empty tab; a web address still goes to the extension")
+        let chrome = BrowserBridge(browser: .chrome, scriptURL: chromeURL, pageOpener: { _, _ in fatalError("Chrome has no such pages") },
+                                   executor: { url, arguments in
+            calls.append(url: url, arguments: arguments)
+            return Data("ok".utf8)
+        })
+        _ = try awaitResult { chrome.open(.url("about:config"), windowID: 7, completion: $0) }.get()
+        expect(calls.values.last == Call(url: chromeURL, arguments: ["com.google.Chrome", "url", "7", "about:config"]),
+               "A browser reached through its script is given every address through it")
     }
 
     static func closingAndReopening() throws {
