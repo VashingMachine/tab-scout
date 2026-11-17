@@ -14,8 +14,15 @@ struct CommandTests {
         expect(PaletteCommand.matches("group", in: .safari).isEmpty && PaletteCommand.matches("mu", in: .safari).isEmpty,
                "Safari never lists a command it cannot run")
         expect(PaletteCommand.matches("", in: .firefox) == [.move, .copy, .dupes, .sweep, .undo, .mute]
-               && PaletteCommand.matches("", in: .zen) == PaletteCommand.matches("", in: .firefox),
-               "Firefox and Zen also mute, through the extension they are reached by, but do not group")
+               && PaletteCommand.matches("", in: .zen) == PaletteCommand.allCases,
+               "Firefox also mutes, through the extension it is reached by; Zen groups too, into its folders")
+        expect(PaletteCommand.matches("folders", in: .zen) == [.group, .ungroup] && PaletteCommand.matches("folders", in: .chrome).isEmpty
+               && PaletteCommand.matches("topic", in: .zen) == [.group],
+               "In Zen the commands describe themselves by its folders")
+        expect(PaletteCommand.choices("group", context: CommandContext(browser: .zen)).first?.detail == "Sort this space's loose tabs into folders by topic"
+               && PaletteCommand.choices("ungroup", context: CommandContext(browser: .zen)).map(\.detail) == ["Unpack the folders `group made; their tabs are loose again"]
+               && PaletteCommand.choices("group", context: CommandContext(browser: .chrome)).first?.detail == PaletteCommand.group.summary,
+               "Their rows say what they do in the browser the palette is over")
         expect(PaletteCommand.matches("GR", in: .chrome) == [.group, .ungroup] && PaletteCommand.matches("sw", in: .chrome) == [.sweep],
                "Names match from their start, ignoring case, before summaries that mention the text")
         expect(PaletteCommand.matches("topic", in: .chrome) == [.group], "Summaries match too")

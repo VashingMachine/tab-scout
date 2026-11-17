@@ -1,6 +1,7 @@
 // Checks the Firefox extension's tab handling without Firefox:
-// osascript -l JavaScript FirefoxExtensionTests.js <path to the FirefoxExtension folder>
-// What it does in a real Firefox is checked by Tests/FirefoxLive/run.py, which is not part of test.sh.
+// osascript -l JavaScript FirefoxExtensionTests.js <path to the FirefoxExtension folder> <path to the ZenExtension folder>
+// What it does in a real Firefox or Zen, folders included, is checked by Tests/FirefoxLive/run.py, which is not
+// part of test.sh.
 ObjC.import('Foundation');
 
 function run(argv) {
@@ -56,15 +57,51 @@ function run(argv) {
     expect(same(muting([sound(2, false, {muted: false}), sound(3, true, mine), sound(6, true, {muted: true, reason: 'user'})], me), {muted: false, tabIds: [3]}),
            'With nothing playing, only the tabs this extension muted get their sound back');
 
+    const page = (id, windowId, pinned, groupId) => ({id, windowId, pinned, groupId, title: 'Page ' + id, url: 'https://p.example/' + id});
+    expect(same(listed([page(1, 5, false, -1), page(2, 5, true, -1), page(3, 5, true, 1794900990166082), {id: 4}]),
+                [{id: 1, title: 'Page 1', url: 'https://p.example/1', pinned: false, grouped: false},
+                 {id: 2, title: 'Page 2', url: 'https://p.example/2', pinned: true, grouped: false},
+                 {id: 3, title: 'Page 3', url: 'https://p.example/3', pinned: true, grouped: true},
+                 {id: 4, title: '', url: '', pinned: false, grouped: false}]),
+           'Tabs are listed for sorting as the Chrome extension lists them; a tab in a folder counts as grouped');
+    expect(same(movable([page(1, 5, false, -1), null, page(2, 6, false, -1), page(3, 5, true, -1), page(4, 5, true, 1794900990166082),
+                         page(5, 5, false, undefined)], 5), [1, 5]),
+           'Only tabs still loose in the window go into a folder: not one closed, pinned, in a folder or in another window');
+
     const manifest = JSON.parse(read('manifest.json'));
     const source = read('background.js');
+    const zenFile = name => $.NSString.stringWithContentsOfFileEncodingError(argv[1] + '/' + name, $.NSUTF8StringEncoding, null).js;
+    const zen = JSON.parse(zenFile('manifest.json'));
+    expect(zen.version === manifest.version && same(zen.browser_specific_settings, manifest.browser_specific_settings)
+           && same(zen.background, manifest.background) && zen.manifest_version === manifest.manifest_version,
+           'Zen\'s package is the same extension: one ID, one version, one background script');
+    expect(same(zen.permissions.slice().sort(), ['nativeMessaging', 'search', 'storage', 'tabs']),
+           'In Zen it also remembers which folders it made, and asks for nothing else');
+    const piece = zen.experiment_apis.tabScoutFolders;
+    expect(manifest.experiment_apis === undefined && same(Object.keys(zen.experiment_apis), ['tabScoutFolders'])
+           && piece.schema === 'folders.json' && piece.parent.script === 'folders.js' && same(piece.parent.paths, [['tabScoutFolders']]),
+           'Only Zen\'s package carries the piece that runs inside the browser; Firefox would turn the whole extension away for it');
+    const schema = JSON.parse(zenFile('folders.json'));
+    expect(schema.length === 1 && schema[0].namespace === 'tabScoutFolders'
+           && same(schema[0].functions.map(entry => [entry.name, entry.async, entry.parameters.map(parameter => parameter.type)]),
+                   [['create', true, ['array', 'string']], ['unpack', true, ['integer']]]),
+           'That piece offers two things: making a folder from tab ids and a name, and unpacking a folder by its id');
+    const inside = zenFile('folders.js');
+    expect(inside.includes('this.tabScoutFolders = class extends ExtensionAPI') && inside.includes('folders.createFolder(loose, {label: title})')
+           && inside.includes('await folder.unpackTabs()'),
+           'It asks Zen\'s own folder code, as Zen\'s New Folder and Unpack Folder do');
+    expect(!/\beval\b|new Function|Services\.|ChromeUtils|\.prefs\b|fetch\(|XMLHttpRequest|nsIFile|IOUtils/.test(inside),
+           'Running inside the browser, it touches nothing but tabs and folders');
+    expect(source.includes("browser.tabScoutFolders.create(") && source.includes("browser.tabScoutFolders.unpack(")
+           && source.includes("return Boolean(browser.tabScoutFolders)") && source.split("error: 'no-folders'").length === 4,
+           'Without that piece, as in Firefox or in Zen before its setting is on, sorting into folders is answered as unavailable');
     expect(manifest.manifest_version === 2 && same(manifest.background, {scripts: ['background.js']}),
            'The background page stays loaded, so the connection to Tab Scout stays open');
     expect(same(manifest.permissions.slice().sort(), ['nativeMessaging', 'search', 'tabs']), 'The extension asks only for what it uses, and for no site');
     expect(same(manifest.browser_specific_settings.gecko.data_collection_permissions, {required: ['browsingActivity']}),
            'The extension says that it passes tab titles and addresses on, which Firefox shows before adding it');
     expect(source.includes("const HOST = 'local.tabscout.firefox';"), 'The extension connects to the helper Tab Scout installs');
-    expect(['bridge', 'mute', 'version'].every(type => source.includes("message.type === '" + type + "'"))
+    expect(['bridge', 'mute', 'version', 'tabs', 'group', 'ungroup'].every(type => source.includes("message.type === '" + type + "'"))
            && ['list', 'active', 'switch', 'url', 'search', 'new-tab', 'close', 'reopen'].every(command => source.includes("operation === '" + command + "'")),
            'The extension answers the commands Tab Scout\'s browser scripts take');
     expect(source.includes("error: 'unknown request'") && source.includes("throw new Error('unknown request')"),

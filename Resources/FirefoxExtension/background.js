@@ -2,10 +2,14 @@
 // such as Zen, offer other apps no scripting for tabs, so this extension answers what Safari and Chrome answer
 // through theirs: it lists the tabs, says which is on screen, switches to one, opens an address, a search or a
 // new tab, and closes or reopens tabs. It also mutes tabs playing sound. Private windows are never read or used.
+// In Zen it sorts tabs into folders as well, which Zen has where other browsers have tab groups; that part needs
+// the folder code packaged with the extension for Zen (Resources/ZenExtension).
 // Messages pass through TabScoutFirefoxHost, the helper in Tab Scout.app that the browser starts for native
 // messaging. Nothing is sent anywhere else.
 
 const HOST = 'local.tabscout.firefox';
+// What a tab outside every group or folder has for a group id.
+const NO_GROUP = -1;
 let port = null;
 let announcing = {};
 
@@ -46,8 +50,12 @@ async function handle(message) {
     try {
         if (message.type === 'bridge') return {id: message.id, result: await dispatch(message.command, message.args || [])};
         if (message.type === 'mute') return Object.assign({id: message.id}, await mute());
-        // Tab Scout asks when it connects, and offers the extension again when it has a newer one.
-        if (message.type === 'version') return {id: message.id, version: browser.runtime.getManifest().version};
+        if (message.type === 'tabs') return Object.assign({id: message.id}, await groupable(message.windowId));
+        if (message.type === 'group') return Object.assign({id: message.id}, await group(message.windowId, message.groups || []));
+        if (message.type === 'ungroup') return Object.assign({id: message.id}, await ungroup());
+        // Tab Scout asks when it connects, and offers the extension again when it has a newer one. It also learns
+        // whether this browser lets the extension make folders.
+        if (message.type === 'version') return {id: message.id, version: browser.runtime.getManifest().version, folders: canFolder()};
         return {id: message.id, error: 'unknown request'};
     } catch (error) {
         return {id: message.id, error: String((error && error.message) || error)};
@@ -211,6 +219,97 @@ function muting(tabs, extensionId) {
     if (sounding.length > 0) return {muted: true, tabIds: sounding.map(tab => tab.id)};
     const own = tabs.filter(tab => silenced(tab) && tab.mutedInfo.reason === 'extension' && tab.mutedInfo.extensionId === extensionId);
     return {muted: false, tabIds: own.map(tab => tab.id)};
+}
+
+// Whether this browser has folders and lets the extension make them: only Zen does, and only while its
+// extensions.experiments.enabled setting is on, which is what lets it load the folder code.
+function canFolder() {
+    return Boolean(browser.tabScoutFolders);
+}
+
+// A window's tabs as Tab Scout plans folders from them, the way its Chrome extension lists them for groups.
+// In Zen these are the tabs of the space in front; an extension sees no others.
+async function groupable(windowId) {
+    if (!canFolder()) return {error: 'no-folders'};
+    const window = await normalWindow(windowId) || (await normalWindows())[0];
+    return window ? {windowId: window.id, tabs: listed(window.tabs || [])} : {error: 'no-window'};
+}
+
+function listed(tabs) {
+    return tabs.map(tab => ({
+        id: tab.id,
+        title: tab.title || '',
+        url: tab.url || '',
+        pinned: Boolean(tab.pinned),
+        grouped: !loose(tab)
+    }));
+}
+
+// Not in a folder, a split view or a tab group.
+function loose(tab) {
+    return tab.groupId === undefined || tab.groupId === NO_GROUP;
+}
+
+// Makes a folder for each planned group out of its tabs that are still loose in the window. Zen keeps folders
+// among its pinned tabs, so the tabs become pinned. The folders are remembered, so that `ungroup takes apart
+// those and no folder made by hand. Answers how many folders it made.
+async function group(windowId, groups) {
+    if (!canFolder()) return {error: 'no-folders'};
+    const window = await normalWindow(windowId);
+    if (!window) return {error: 'no-window'};
+    const made = [];
+    for (const planned of groups) {
+        const tabs = await Promise.all((planned.tabIds || []).map(id => browser.tabs.get(id).catch(() => null)));
+        const tabIds = movable(tabs, window.id);
+        if (tabIds.length < 2) continue;
+        await browser.tabScoutFolders.create(tabIds, String(planned.title).slice(0, 40));
+        // A tab now in the folder says which folder that is.
+        const placed = await browser.tabs.get(tabIds[0]).catch(() => null);
+        if (placed && !loose(placed)) made.push(placed.groupId);
+    }
+    if (made.length > 0) await browser.storage.local.set({folders: (await remembered()).concat(made)});
+    return {grouped: made.length};
+}
+
+// Tabs closed, pinned, put in a folder or moved to another window since Tab Scout listed them stay where they are.
+function movable(tabs, windowId) {
+    return tabs.filter(tab => tab && tab.windowId === windowId && !tab.pinned && loose(tab)).map(tab => tab.id);
+}
+
+// The folders `group made, by the ids their tabs name them with. Zen keeps a folder's id when it restarts.
+async function remembered() {
+    const stored = await browser.storage.local.get('folders').catch(() => ({}));
+    return (Array.isArray(stored.folders) ? stored.folders : []).filter(Number.isInteger);
+}
+
+// Unpacks the folders `group made in the space in front and unpins their tabs, so they are loose tabs again as
+// before. A folder deleted meanwhile is forgotten; one in another space waits until that space is in front.
+// Answers how many folders it unpacked and how many tabs were in them.
+async function ungroup() {
+    if (!canFolder()) return {error: 'no-folders'};
+    const kept = [];
+    const tabIds = [];
+    let folders = 0;
+    for (const folder of await remembered()) {
+        const unpacked = await browser.tabScoutFolders.unpack(folder);
+        if (!unpacked.found) continue;
+        if (!unpacked.tabIds) {
+            kept.push(folder);
+            continue;
+        }
+        folders += 1;
+        tabIds.push(...unpacked.tabIds);
+    }
+    await browser.storage.local.set({folders: kept});
+    let tabs = 0;
+    // Zen puts a tab it unpins above the other loose tabs, so the last goes first and the order stays.
+    for (const id of tabIds.reverse()) {
+        try {
+            await browser.tabs.update(id, {pinned: false});
+            tabs += 1;
+        } catch (error) { /* Closed meanwhile. */ }
+    }
+    return {ungrouped: tabs, folders: folders};
 }
 
 if (typeof browser !== 'undefined' && browser.runtime) {

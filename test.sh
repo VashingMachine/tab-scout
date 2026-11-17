@@ -37,7 +37,7 @@ GROUPING=("$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/RelatedTabs.swif
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/NativeMessaging.swift" \
     "$SOURCE_DIR/Sources/ExtensionLink.swift" "$SOURCE_DIR/Sources/FirefoxLink.swift" "$SOURCE_DIR/Tests/FirefoxLinkTests.swift" \
     -o "$WORK_DIR/FirefoxLinkTests"
-"$WORK_DIR/FirefoxLinkTests" "$SOURCE_DIR/Resources/FirefoxExtension/manifest.json"
+"$WORK_DIR/FirefoxLinkTests" "$SOURCE_DIR/Resources/FirefoxExtension/manifest.json" "$SOURCE_DIR/Resources/ZenExtension/manifest.json"
 # The helper only passes messages on, so it is just built here; the link tests cover its framing.
 /usr/bin/xcrun swiftc -swift-version 5 "$SOURCE_DIR/Sources/ChromeHost/main.swift" "$SOURCE_DIR/Sources/NativeMessaging.swift" \
     -o "$WORK_DIR/TabScoutChromeHost"
@@ -114,5 +114,5 @@ GROUPING=("$SOURCE_DIR/Sources/Core.swift" "$SOURCE_DIR/Sources/RelatedTabs.swif
 # Runs the script against a stand-in for Chrome; no browser is touched.
 /usr/bin/osascript -l JavaScript "$SOURCE_DIR/Tests/ChromeBridgeTests.js" "$SOURCE_DIR/Resources/ChromeBridge.js"
 /usr/bin/osascript -l JavaScript "$SOURCE_DIR/Tests/ChromeExtensionTests.js" "$SOURCE_DIR/Resources/ChromeExtension"
-/usr/bin/osascript -l JavaScript "$SOURCE_DIR/Tests/FirefoxExtensionTests.js" "$SOURCE_DIR/Resources/FirefoxExtension"
+/usr/bin/osascript -l JavaScript "$SOURCE_DIR/Tests/FirefoxExtensionTests.js" "$SOURCE_DIR/Resources/FirefoxExtension" "$SOURCE_DIR/Resources/ZenExtension"
 /usr/bin/plutil -lint "$SOURCE_DIR/Resources/Info.plist" "$SOURCE_DIR/Resources/Entitlements.plist"

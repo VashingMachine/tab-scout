@@ -4,14 +4,17 @@
 #   /usr/bin/python3 Tests/FirefoxLive/run.py "/Applications/Zen Browser.app"
 # It starts a second, hidden copy of the browser on a throwaway profile, loads the extension from
 # Resources/FirefoxExtension into it as a temporary add-on over the browser's remote debugging protocol, and lets
-# host.py, standing in for Tab Scout, run every command against pages served from this Mac. Your own profile is
-# not opened. While it runs, the file that tells the browser where Tab Scout's helper is points at host.py; it is
-# put back afterwards.
+# host.py, standing in for Tab Scout, run every command against pages served from this Mac. Zen gets its own
+# package, put together as build.sh does, with the setting on that lets it make folders; there the folders are
+# checked too, and that a folder made by hand outlasts `ungroup. Your own profile is not opened. While it runs,
+# the file that tells the browser where Tab Scout's helper is points at host.py; it is put back afterwards.
 import http.server, json, os, re, shutil, socket, subprocess, sys, tempfile, threading, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXTENSION = os.path.normpath(os.path.join(HERE, "../../Resources/FirefoxExtension"))
+ZEN_EXTENSION = os.path.normpath(os.path.join(HERE, "../../Resources/ZenExtension"))
 APP = sys.argv[1] if len(sys.argv) > 1 else "/Applications/Firefox.app"
+ZEN = "zen" in os.path.basename(APP).lower()
 MANIFEST = os.path.expanduser("~/Library/Application Support/Mozilla/NativeMessagingHosts/local.tabscout.firefox.json")
 DEBUG_PORT = 6789
 # A fresh profile greets with dialogs that block tab switching, and would report to the browser's maker.
@@ -25,6 +28,8 @@ PREFERENCES = {
     "startup.homepage_welcome_url.additional": "", "app.update.auto": False, "browser.tabs.warnOnClose": False,
     "browser.sessionstore.resume_from_crash": False, "zen.welcome-screen.seen": True,
 }
+# What lets Zen load the piece of the extension that makes folders. Firefox pays it no attention.
+if ZEN: PREFERENCES["extensions.experiments.enabled"] = True
 
 if not os.path.isdir(APP): sys.exit("No browser at " + APP)
 work = tempfile.mkdtemp(prefix="TabScout-FirefoxLive-")
@@ -37,6 +42,13 @@ for name in "abc":
     with open(os.path.join(work, "site", name + ".html"), "w") as file: file.write("<!doctype html><title>Page %s</title><h1>%s</h1>" % (name, name))
 host = shutil.copy(os.path.join(HERE, "host.py"), os.path.join(work, "host.py"))
 os.chmod(host, 0o755)
+if ZEN:
+    # Zen's package: its own manifest and folder code around the same background script.
+    package = os.path.join(work, "extension")
+    os.makedirs(package)
+    for name in ("manifest.json", "folders.js", "folders.json"): shutil.copy(os.path.join(ZEN_EXTENSION, name), package)
+    shutil.copy(os.path.join(EXTENSION, "background.js"), package)
+    EXTENSION = package
 
 class Pages(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *arguments, **options): super().__init__(*arguments, directory=os.path.join(work, "site"), **options)
@@ -45,7 +57,7 @@ class Pages(http.server.SimpleHTTPRequestHandler):
 server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Pages)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 with open(os.path.join(work, "config.json"), "w") as file:
-    json.dump({"profile": profile, "base": "http://127.0.0.1:%d/" % server.server_address[1]}, file)
+    json.dump({"profile": profile, "base": "http://127.0.0.1:%d/" % server.server_address[1], "folders": ZEN}, file)
 
 def packet(connection, message=None):
     # Firefox's remote debugging protocol: each JSON message follows its length and a colon.
@@ -60,6 +72,21 @@ def packet(connection, message=None):
     body = b""
     while len(body) < int(size[:-1]): body += connection.recv(int(size[:-1]) - len(body))
     return json.loads(body)
+
+def inside(connection, code):
+    # Runs `code` in the browser's own window, as its developer tools do, and answers what it returns as JSON.
+    def ask(message, wanted):
+        reply = packet(connection, message)
+        while not wanted(reply): reply = packet(connection)
+        return reply
+    process = ask({"to": "root", "type": "getProcess", "id": 0}, lambda r: "processDescriptor" in r or "error" in r)
+    target = ask({"to": process["processDescriptor"]["actor"], "type": "getTarget"}, lambda r: "process" in r or "error" in r)
+    text = "(async () => JSON.stringify(await (async () => {" + code + "})()))()"
+    started = ask({"to": target["process"]["consoleActor"], "type": "evaluateJSAsync", "text": text, "mapped": {"await": True}},
+                  lambda r: "resultID" in r or "error" in r)
+    done = ask(None, lambda r: r.get("type") == "evaluationResult" and r.get("resultID") == started.get("resultID")) if "resultID" in started else {}
+    if done.get("hasException") or not isinstance(done.get("result"), str): raise RuntimeError("the browser could not run: " + code[:80])
+    return json.loads(done["result"])
 
 def browser_processes():
     found = subprocess.run(["/usr/bin/pgrep", "-f", "--", "--profile " + re.escape(profile)], capture_output=True, text=True).stdout.split()
@@ -98,6 +125,10 @@ try:
     connection.settimeout(30)
     packet(connection)
     root = packet(connection, {"to": "root", "type": "getRoot"})
+    # A folder made by hand, as from Zen's own menu, which `ungroup must leave alone.
+    if ZEN:
+        inside(connection, 'for (let tries = 0; tries < 100 && !(window.gZenFolders && window.gZenWorkspaces && gZenWorkspaces.activeWorkspace); tries++) '
+               'await new Promise(resolve => setTimeout(resolve, 100)); gZenFolders.createFolder([], {label: "Made by hand"}); return true;')
     installed = packet(connection, {"to": root["addonsActor"], "type": "installTemporaryAddon", "addonPath": EXTENSION, "openDevTools": False})
     if "addon" not in installed: raise RuntimeError("the browser refused the extension: " + json.dumps(installed)[:300])
     for _ in range(120):
@@ -106,6 +137,11 @@ try:
             outcome = json.load(open(os.path.join(work, "result.json")))
             break
         time.sleep(0.5)
+    if ZEN and "passed" in outcome:
+        time.sleep(1)
+        left = inside(connection, 'return Array.from(document.querySelectorAll("zen-folder")).map(folder => folder.label);')
+        if left == ["Made by hand"]: outcome["passed"] += 1
+        else: outcome = {"failure": "after `ungroup the folders left are %s" % json.dumps(left), "after": "the folder checks"}
 except Exception as error:
     outcome = {"failure": repr(error)}
 finally:

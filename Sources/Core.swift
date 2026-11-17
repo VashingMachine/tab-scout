@@ -151,6 +151,8 @@ enum BridgeError: LocalizedError, Equatable {
     case permission
     /// The browser is reached through Tab Scout's extension, which is not added to it or not running.
     case extensionMissing
+    /// Zen lets Tab Scout's extension make folders only while its extensions.experiments.enabled setting is on.
+    case foldersOff
     case staleTab
     case timeout
     case script(String)
@@ -165,6 +167,7 @@ enum BridgeError: LocalizedError, Equatable {
         case .unavailable: return "\(name) is not running."
         case .permission: return "Allow \(browser?.name ?? "browser") access in System Settings > Privacy & Security > Automation."
         case .extensionMissing: return "\(name) needs Tab Scout's extension. Add it in Tab Scout's Settings > Setup."
+        case .foldersOff: return "\(name) lets Tab Scout make folders only with a setting turned on. Tab Scout's Settings > Setup says which."
         case .staleTab: return "That tab was closed or moved. Refresh the tab list."
         case .timeout: return "\(name) took too long to respond. Try again."
         case .script(let message): return message

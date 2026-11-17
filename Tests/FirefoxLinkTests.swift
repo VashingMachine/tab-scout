@@ -2,14 +2,15 @@ import Darwin
 import Foundation
 
 /// Covers the app's end of the link to Tab Scout's extension in Firefox and Zen, with stand-in extensions on a
-/// private socket; no browser is touched. FirefoxLinkTests <path to the extension's manifest.json>
+/// private socket; no browser is touched.
+/// FirefoxLinkTests <path to the Firefox extension's manifest.json> <path to the Zen extension's manifest.json>
 @main
 struct FirefoxLinkTests {
     static var checks = 0
 
     static func main() {
         signal(SIGPIPE, SIG_IGN)
-        manifests(extensionManifest: URL(fileURLWithPath: CommandLine.arguments[1]))
+        for path in CommandLine.arguments.dropFirst() { manifests(extensionManifest: URL(fileURLWithPath: path)) }
         browsers()
         answers()
         link()
@@ -170,10 +171,13 @@ struct FirefoxLinkTests {
         expect(link.connectedBrowsers.isEmpty, "A helper turned away is no browser")
 
         func rows(_ title: String) -> String { "[[3,1,\"\(title)\",\"https://\(title.lowercased()).example/\",true]]" }
-        func stand(_ rows: String, version: String?) -> ([String: Any]) -> [String: Any]? {
+        func stand(_ rows: String, version: String?, folders: Bool = false) -> ([String: Any]) -> [String: Any]? {
             { request in
                 switch (request["type"] as? String, request["command"] as? String) {
-                case ("version", _): return version.map { ["version": $0] } ?? ["error": "unknown request"]
+                case ("version", _): return version.map { ["version": $0, "folders": folders] } ?? ["error": "unknown request"]
+                // An extension from before folders does not know the request; one whose browser has none says so.
+                case ("group", _) where version != nil:
+                    return folders ? ["grouped": (request["groups"] as? [[String: Any]])?.count ?? 0] : ["error": "no-folders"]
                 case ("bridge", "list"): return ["result": rows]
                 case ("bridge", "switch"): return ["error": "TAB_SCOUT_STALE"]
                 case ("bridge", "text"): return ["error": "unknown request"]
@@ -226,6 +230,14 @@ struct FirefoxLinkTests {
         } else {
             fatalError("An unknown request succeeded")
         }
+        var unable: Result<[String: Any], Error>?
+        link.perform("group", ["groups": [["title": "Trip", "tabIds": [1, 2]]]], in: .firefox) { unable = $0 }
+        if case .failure(let failure) = wait({ unable }) {
+            expect(failure as? BridgeError == .foldersOff && !link.makesFolders(in: .firefox) && !link.makesFolders(in: .zen),
+                   "A browser that lets the extension make no folders says so, which is not an outdated extension")
+        } else {
+            fatalError("Folders were made where there are none")
+        }
 
         // Firefox runs once per profile, each copy with its own extension and its own window numbers.
         arriving = [FirefoxLink.Peer(browser: .firefox, process: 300)]
@@ -244,6 +256,20 @@ struct FirefoxLinkTests {
         shutdown(zen.socket, SHUT_RDWR)
         expect(wait { link.connectedBrowsers == [.firefox] ? true : nil }, "A browser whose extension went away is no longer served")
         expect(error { try link.run(["list"], in: .zen) } == .extensionMissing, "Its tabs can no longer be asked for")
+
+        // Zen with its setting on lets the extension make folders, and the extension says so with its version.
+        arriving = [FirefoxLink.Peer(browser: .zen, process: 400)]
+        guard let folding = FakeExtension(at: url, answer: stand(rows("Zen"), version: FirefoxExtension.version, folders: true)) else { fatalError("The second Zen stand-in could not connect") }
+        expect(wait { link.makesFolders(in: .zen) ? true : nil } && !link.makesFolders(in: .firefox), "Tab Scout knows which browser's extension can make folders")
+        var made: Result<[String: Any], Error>?
+        link.perform("group", ["windowId": 3, "groups": [["title": "Trip", "tabIds": [1, 2]], ["title": "Reading", "tabIds": [4, 5]]]], in: .zen) { made = $0 }
+        expect((try? wait { made }.get())?["grouped"] as? Int == 2, "The groups Tab Scout planned are made into folders")
+        let asked = folding.received.first { $0["type"] as? String == "group" }
+        expect(asked?["windowId"] as? Int == 3 && ((asked?["groups"] as? [[String: Any]])?.first?["tabIds"] as? [Int]) == [1, 2]
+               && ((asked?["groups"] as? [[String: Any]])?.last?["title"] as? String) == "Reading",
+               "A request travels with its details: the window, and each group's name and tabs")
+        shutdown(folding.socket, SHUT_RDWR)
+        expect(wait { !link.makesFolders(in: .zen) && link.connectedBrowsers == [.firefox] ? true : nil }, "A browser that left makes no folders")
 
         link.stop()
         expect(!FileManager.default.fileExists(atPath: url.path) && NativeMessage.connect(to: url) < 0, "Stopping removes the socket")

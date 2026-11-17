@@ -1,0 +1,27 @@
+[
+  {
+    "namespace": "tabScoutFolders",
+    "description": "Makes and unpacks Zen's folders for Tab Scout. Zen offers this only while its extensions.experiments.enabled setting is on.",
+    "functions": [
+      {
+        "name": "create",
+        "type": "function",
+        "async": true,
+        "description": "Puts the loose tabs among tabIds into a new folder named title, in the space in front. Answers how many tabs went in.",
+        "parameters": [
+          {"name": "tabIds", "type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 1},
+          {"name": "title", "type": "string"}
+        ]
+      },
+      {
+        "name": "unpack",
+        "type": "function",
+        "async": true,
+        "description": "Unpacks the folder with this tab group id, as Zen's Unpack Folder does. Answers {found, tabIds}: found is false when no such folder is left, and tabIds are the tabs that were in it, or null while the folder is in a space that is not in front and so stays as it is.",
+        "parameters": [
+          {"name": "groupId", "type": "integer"}
+        ]
+      }
+    ]
+  }
+]

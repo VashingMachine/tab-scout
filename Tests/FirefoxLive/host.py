@@ -101,6 +101,49 @@ def scenario(base):
     kinds = {event.get("event") for event in events if event.get("type") == "event"}
     expect(kinds == {"focus", "tabs"}, "The extension says when the tab on screen and the tabs change")
 
+def tabs(window):
+    return {tab["id"]: tab for tab in ask({"type": "tabs", "windowId": window})["tabs"]}
+
+def folders(base, window):
+    # Zen, with the setting on that lets the extension run its folder code.
+    expect(ask({"type": "version"}).get("folders") is True, "Where the browser lets it, the extension says it can make folders")
+    expect(bridge("reopen", window, base + "a.html", window, base + "b.html").get("result") == "2", "Two more pages open")
+    settle(lambda r: all(any(x[2] == name for x in r) for name in ("Page a", "Page b", "Page c")))
+    reply = ask({"type": "tabs", "windowId": window})
+    expect(reply.get("windowId") == window and all(set(tab) == {"id", "title", "url", "pinned", "grouped"} for tab in reply["tabs"])
+           and not any(tab["pinned"] or tab["grouped"] for tab in reply["tabs"]), "The window's tabs are listed for sorting, all of them loose")
+    a, b, c = (next(tab["id"] for tab in reply["tabs"] if tab["title"] == name) for name in ("Page a", "Page b", "Page c"))
+    made = ask({"type": "group", "windowId": window, "groups": [{"title": "Letters", "tabIds": [a, b, 999999]}, {"title": "Alone", "tabIds": [c]}]}, 30)
+    expect(made.get("grouped") == 1, "A planned group of two loose tabs becomes a folder; a lone tab and a tab that is gone make none")
+    now = tabs(window)
+    expect(all(now[tab]["pinned"] and now[tab]["grouped"] for tab in (a, b)) and not now[c]["pinned"] and not now[c]["grouped"],
+           "Its tabs are in the folder, pinned as Zen keeps a folder's tabs, and the others stay loose")
+    expect(sum(1 for x in rows() if x[2] in ("Page a", "Page b")) == 2, "Tabs in a folder are still listed for searching")
+    expect(ask({"type": "group", "windowId": window, "groups": [{"title": "Again", "tabIds": [a, b]}]}, 30).get("grouped") == 0,
+           "Tabs already in a folder are not sorted again")
+    expect(ask({"type": "group", "windowId": 99999, "groups": [{"title": "Nowhere", "tabIds": [c, a]}]}).get("error") == "no-window",
+           "A window that is gone gets no folders")
+    undone = ask({"type": "ungroup"}, 30)
+    expect(undone.get("folders") == 1 and undone.get("ungrouped") == 2, "The folder is unpacked again")
+    now = settle_tabs(window, lambda found: not any(found[tab]["pinned"] or found[tab]["grouped"] for tab in (a, b)))
+    expect(not any(now[tab]["pinned"] or now[tab]["grouped"] for tab in (a, b, c)), "Its tabs are loose again, as they were")
+    again = ask({"type": "ungroup"}, 30)
+    expect(again.get("folders") == 0 and again.get("ungrouped") == 0, "With no folder of its own left, nothing is unpacked")
+
+def settle_tabs(window, done, seconds=10):
+    end = time.time() + seconds
+    while time.time() < end:
+        now = tabs(window)
+        if done(now): return now
+        time.sleep(0.3)
+    return tabs(window)
+
+def no_folders():
+    # Firefox, or Zen without the setting: the rest works, and sorting into folders is said to be unavailable.
+    expect(ask({"type": "version"}).get("folders") is False, "Where the browser has no folders for it, the extension says so")
+    expect(all(ask(request).get("error") == "no-folders" for request in ({"type": "tabs"}, {"type": "group", "groups": []}, {"type": "ungroup"})),
+           "Sorting into folders is answered as unavailable")
+
 def main():
     config = json.load(open(os.path.join(HERE, "config.json")))
     # Another browser of the person's may start this too, while the helper's file points here. It gets no answer
@@ -111,6 +154,8 @@ def main():
     reader.start()
     try:
         scenario(config["base"])
+        if config.get("folders"): folders(config["base"], rows()[0][0])
+        else: no_folders()
         out["passed"] = len(checks)
     except Exception as error:
         out["failure"] = repr(error)

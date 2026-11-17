@@ -51,6 +51,13 @@ else
     [[ ! -f "$FIREFOX_SIGNED" ]] || echo "warning: FirefoxExtension.signed.xpi no longer matches Resources/FirefoxExtension; run sign-firefox.sh" >&2
     (cd "$FIREFOX_DIR" && /usr/bin/zip -q -X "$FIREFOX_PACKAGE" manifest.json background.js)
 fi
+# Zen gets the same extension with the piece that makes its folders, which runs inside Zen itself. Firefox turns
+# away a whole extension that carries such a piece, and Mozilla signs none, so this package is always unsigned;
+# Zen adds it once its xpinstall.signatures.required setting is off.
+ZEN_DIR="$SOURCE_DIR/Resources/ZenExtension"
+ZEN_PACKAGE="$APP_DIR/Contents/Resources/ZenExtension.xpi"
+/bin/rm -f "$ZEN_PACKAGE"
+/usr/bin/zip -q -X -j "$ZEN_PACKAGE" "$ZEN_DIR/manifest.json" "$FIREFOX_DIR/background.js" "$ZEN_DIR/folders.js" "$ZEN_DIR/folders.json"
 # Interrupted codesign runs can leave a temporary executable that must not be sealed as a resource.
 if [[ -f "$APP_DIR/Contents/MacOS/TabScout.cstemp" ]]; then
     mv "$APP_DIR/Contents/MacOS/TabScout.cstemp" "$WORK_DIR/TabScout-interrupted.cstemp"

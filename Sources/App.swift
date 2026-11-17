@@ -2008,6 +2008,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         case .ungroup:
             askExtension("ungroup", working: "Ungrouping tabs...") { reply in
                 let count = reply["ungrouped"] as? Int ?? 0
+                // Zen's extension unpacks the folders `group made and says how many those were.
+                if let folders = reply["folders"] as? Int {
+                    return folders == 0 ? "No folder in this space was made by `group"
+                        : "Unpacked \(PaletteCommand.counted(folders, "folder")); \(PaletteCommand.counted(count, "tab")) \(count == 1 ? "is" : "are") loose again"
+                }
                 return count == 0 ? "No tab in this window is in a group"
                     : "Took \(PaletteCommand.counted(count, "tab")) out of \(count == 1 ? "its group" : "their groups")"
             }
@@ -2333,12 +2338,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
     }
 
-    /// Sorts the front Chrome window's loose tabs into named groups: Apple Intelligence picks the topics on this Mac,
-    /// and Tab Scout's extension makes the groups, since Chrome lets only extensions do that.
+    /// Sorts the front window's loose tabs into named groups: Apple Intelligence picks the topics on this Mac, and
+    /// Tab Scout's extension makes the groups, since Chrome lets only extensions do that. In Zen the extension makes
+    /// folders instead, out of the loose tabs of the space in front.
     private func groupTabs() {
+        let browser = lastBrowser
         // Tabs are listed front window first.
-        guard let windowID = frontWindow(of: .chrome) else {
-            footer.stringValue = "Open a Chrome window to group its tabs"
+        guard let windowID = frontWindow(of: browser) else {
+            footer.stringValue = "Open a \(browser.name) window to group its tabs"
             return
         }
         acting = true
@@ -2364,17 +2371,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             switch result {
             case .success(let made) where made > 0:
                 // Grouping moves tabs, so the listed positions are out of date.
-                self.stores[.chrome]?.invalidate()
+                self.stores[browser]?.invalidate()
                 self.dismiss(restoreFocus: false)
-                self.stores[.chrome]?.prewarm()
-            case .success: reopen("No tabs in this window belong together")
+                self.stores[browser]?.prewarm()
+            case .success: reopen(browser == .zen ? "No loose tabs in this space belong together" : "No tabs in this window belong together")
             case .failure(ChromeExtensionLink.LinkError.notConnected), .failure(ChromeExtensionLink.LinkError.windowNotFound):
                 // Chrome is open, so with no profile connected the extension is gone; the setup window offers it again.
                 if self.chromeLink.connectedProfiles == 0 { self.chromeExtensionAdded = false }
                 self.dismiss(restoreFocus: false)
                 self.showSetup(nil)
-            case .failure(let error): reopen(error.localizedDescription)
+            case .failure(BridgeError.foldersOff):
+                // Zen has not let the extension make folders; the setup window says which setting does.
+                self.dismiss(restoreFocus: false)
+                self.showSetup(nil)
+            case .failure(let error): reopen(self.describe(error, browser))
             }
+        }
+        if browser.usesExtension {
+            firefoxLink.perform("tabs", ["windowId": windowID], in: browser) { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case .failure(let error): finish(.failure(error))
+                case .success(let reply):
+                    let listed = (reply["tabs"] as? [[String: Any]] ?? []).compactMap(GroupableTab.init(json:))
+                    let window = reply["windowId"] as? Int ?? windowID
+                    self.grouper.plan(listed) { groups in
+                        guard !groups.isEmpty else { return finish(.success(0)) }
+                        let planned: [[String: Any]] = groups.map { ["title": $0.title, "tabIds": $0.tabIDs] }
+                        // Zen pins each tab and animates each folder into its sidebar, so this takes longer than a list.
+                        self.firefoxLink.perform("group", ["windowId": window, "groups": planned], in: browser, timeout: 20) { made in
+                            finish(made.map { $0["grouped"] as? Int ?? 0 })
+                        }
+                    }
+                }
+            }
+            return
         }
         chromeLink.tabs(inWindow: windowID) { [weak self] result in
             guard let self else { return }
@@ -2835,7 +2866,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             let states: [SetupStep: (SetupState, String)] = [.keyboard: (.done, "Allowed"), .safari: (.done, "Allowed"),
                 .chrome: (.needed, "Needed for Chrome tabs"), .chromeExtension: (.optional, "Lets `group, `ungroup and `mute work in Chrome"),
                 .firefox: (.optional, "Lets Cmd+T search Firefox's tabs, through Tab Scout's extension"),
-                .zen: (.done, "Added; Cmd+T searches Zen's tabs"),
+                .zen: (.done, "Added; Cmd+T searches Zen's tabs, and `group sorts them into folders"),
                 .history: (.done, "Allowed; 3 of 3 profiles used")]
             settingsModel.setup = SetupStep.allCases.compactMap { step in
                 states[step].map { SettingsModel.SetupItem(id: step, title: setupTitle(step), detail: $0.1, state: $0.0, action: setupAction(step)) }
@@ -2920,11 +2951,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let name = browser.name
         if connectedExtensions.contains(browser) {
             let outdated = firefoxLink.versions(in: browser).contains { $0 != FirefoxExtension.version }
-            return outdated ? (.problem, "Added, but an older version; add it again to update it", nil)
-                : (.done, "Added; Cmd+T searches \(name)'s tabs", nil)
+            if outdated { return (.problem, "Added, but an older version; add it again to update it", nil) }
+            guard browser == .zen else { return (.done, "Added; Cmd+T searches \(name)'s tabs", nil) }
+            // Zen has folders where other browsers have tab groups, and lets an extension make them only with a
+            // setting of its own turned on. The setting is the person's to change; this row only says so.
+            if firefoxLink.makesFolders(in: .zen) { return (.done, "Added; Cmd+T searches Zen's tabs, and `group sorts them into folders", nil) }
+            return (.done, "Added; Cmd+T searches Zen's tabs. For `group, set extensions.experiments.enabled to true in about:config, then restart Zen",
+                    "Zen gives extensions no way to make its folders, so Tab Scout's carries a small piece that asks Zen's own folder code, and Zen runs such a piece only with that setting on. The setting lets any extension you add from a file do the same, so add only ones you trust. Everything except `group and `ungroup works without it.")
         }
         if addingExtension == browser {
-            let signed = Self.firefoxPackage.flatMap { try? Data(contentsOf: $0) }.map(FirefoxExtension.isSigned) ?? false
+            let signed = Self.package(for: browser).flatMap { try? Data(contentsOf: $0) }.map(FirefoxExtension.isSigned) ?? false
             if signed { return (.waiting, "\(name) asks whether to add Tab Scout; click Add there", nil) }
             if browser == .zen {
                 // Zen takes an unsigned extension once its own setting allows it; Firefox never does.
@@ -2941,14 +2977,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         return (.optional, "Lets Cmd+T search \(name)'s tabs, through Tab Scout's extension", nil)
     }
 
-    private static var firefoxPackage: URL? { Bundle.main.url(forResource: "FirefoxExtension", withExtension: "xpi") }
+    /// Tab Scout's extension as `browser` adds it. Zen's package also carries the piece that makes folders, which
+    /// Firefox would refuse the whole extension for.
+    private static func package(for browser: Browser) -> URL? {
+        Bundle.main.url(forResource: browser == .zen ? "ZenExtension" : "FirefoxExtension", withExtension: "xpi")
+    }
 
     /// Firefox and Zen list their tabs only to extensions, so Tab Scout needs its own in each. The browser asks
     /// about adding it in its own window, and nothing is added until the person agrees there. The step ticks itself
     /// off when the extension connects.
     private func addFirefoxExtension(to browser: Browser) {
         let alert = NSAlert()
-        guard let helper = Bundle.main.url(forAuxiliaryExecutable: "TabScoutFirefoxHost"), let package = Self.firefoxPackage,
+        guard let helper = Bundle.main.url(forAuxiliaryExecutable: "TabScoutFirefoxHost"), let package = Self.package(for: browser),
               let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: browser.bundleID) else {
             alert.messageText = "The \(browser.name) extension is missing from this copy of Tab Scout"
             alert.informativeText = "Rebuild the app using build.sh."

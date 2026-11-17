@@ -24,11 +24,22 @@ enum PaletteCommand: String, CaseIterable {
         }
     }
 
+    /// What the command does in `browser`. Zen has folders where Chrome has tab groups, and an extension there
+    /// reaches only the space in front.
+    func summary(in browser: Browser) -> String {
+        switch (self, browser) {
+        case (.group, .zen): return "Sort this space's loose tabs into folders by topic"
+        case (.ungroup, .zen): return "Unpack the folders `group made; their tabs are loose again"
+        default: return summary
+        }
+    }
+
     var browsers: Set<Browser> {
         switch self {
         // Chrome lets only extensions group and mute tabs; Safari lets no other app do either. Firefox and Zen
-        // are reached through Tab Scout's extension anyway, which mutes there too.
-        case .group, .ungroup: return [.chrome]
+        // are reached through Tab Scout's extension anyway, which mutes there too, and in Zen makes folders,
+        // the nearest thing it has to tab groups. Firefox's own tab groups are not handled.
+        case .group, .ungroup: return [.chrome, .zen]
         case .mute: return [.chrome, .firefox, .zen]
         case .move, .copy, .dupes, .sweep, .undo: return Set(Browser.allCases)
         }
@@ -62,7 +73,7 @@ enum PaletteCommand: String, CaseIterable {
         let supported = allCases.filter { $0.browsers.contains(browser) }
         guard let first = text.split(whereSeparator: \.isWhitespace).first.map(String.init) else { return supported }
         let named = supported.filter { $0.name.hasPrefix(first) }
-        return named + supported.filter { !named.contains($0) && $0.summary.lowercased().contains(text) }
+        return named + supported.filter { !named.contains($0) && $0.summary(in: browser).lowercased().contains(text) }
     }
 
     /// The rows listed for the typed text. Words after a command's name pick among its rows: a place for `move`,
@@ -110,7 +121,7 @@ enum PaletteCommand: String, CaseIterable {
             return [CommandChoice(command: self, title: name, detail: context.undoable == 0 ? "Nothing to reopen"
                                   : "Reopen \(Self.counted(context.undoable, "tab")) Tab Scout closed")]
         case .group, .ungroup, .mute:
-            return [CommandChoice(command: self, title: name, detail: summary)]
+            return [CommandChoice(command: self, title: name, detail: summary(in: context.browser))]
         }
     }
 

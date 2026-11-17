@@ -18,6 +18,8 @@ final class FirefoxLink {
     // Owned by the link's queue.
     private var peers: [Int: Peer] = [:]
     private var versions: [Int: String] = [:]
+    /// The copies that say their browser lets them make folders, as Zen does with the setting for it on.
+    private var folders: Set<Int> = []
     private var frontProcess: pid_t = 0
     /// The copy last in front of each browser, when the browser runs more than once, as Firefox does per profile.
     private var preferred: [Browser: Int] = [:]
@@ -45,7 +47,9 @@ final class FirefoxLink {
             self.link.queue.async {
                 self.link.request(["type": "version"], on: id, timeout: 5) { result in
                     guard self.peers[id] != nil else { return }
-                    self.versions[id] = (try? result.get())?["version"] as? String ?? ""
+                    let reply = try? result.get()
+                    self.versions[id] = reply?["version"] as? String ?? ""
+                    if reply?["folders"] as? Bool == true { self.folders.insert(id) }
                     self.changed()
                 }
             }
@@ -56,6 +60,7 @@ final class FirefoxLink {
             guard let self else { return }
             self.peers[id] = nil
             self.versions[id] = nil
+            self.folders.remove(id)
             self.changed()
         }
         link.onMessage = { [weak self] id, message in
@@ -76,6 +81,12 @@ final class FirefoxLink {
     /// The versions of `browser`'s connected extensions that have said theirs; empty text for one too old to say.
     func versions(in browser: Browser) -> [String] {
         link.queue.sync { link.connected.filter { peers[$0]?.browser == browser }.compactMap { versions[$0] } }
+    }
+
+    /// Whether `browser`'s connected extension can make folders, which only Zen has, and only for an extension
+    /// it lets run its folder code.
+    func makesFolders(in browser: Browser) -> Bool {
+        link.queue.sync { link.connected.contains { peers[$0]?.browser == browser && folders.contains($0) } }
     }
 
     /// Notes which process is in front, so a browser running more than once is asked about the copy on screen.
@@ -104,13 +115,14 @@ final class FirefoxLink {
         return try outcome.get()
     }
 
-    /// Has `browser`'s extension do `type`, such as "mute", and answers its reply on the main queue.
-    func perform(_ type: String, in browser: Browser, timeout: TimeInterval = 5,
+    /// Has `browser`'s extension do `type`, such as "mute", or "group" with the groups to make as `details`, and
+    /// answers its reply on the main queue.
+    func perform(_ type: String, _ details: [String: Any] = [:], in browser: Browser, timeout: TimeInterval = 5,
                  completion: @escaping (Result<[String: Any], Error>) -> Void) {
         link.queue.async { [self] in
             let finish = { (result: Result<[String: Any], Error>) in DispatchQueue.main.async { completion(result) } }
             guard let connection = connection(for: browser) else { return finish(.failure(BridgeError.extensionMissing)) }
-            link.request(["type": type], on: connection, timeout: timeout) { result in
+            link.request(details.merging(["type": type]) { _, type in type }, on: connection, timeout: timeout) { result in
                 switch result {
                 case .success(let reply) where reply["error"] == nil: finish(.success(reply))
                 default: finish(Self.answer(result, browser: browser).map { _ in [:] })
@@ -126,6 +138,8 @@ final class FirefoxLink {
             if let text = reply["result"] as? String { return .success(Data(text.utf8)) }
             switch reply["error"] as? String {
             case "TAB_SCOUT_STALE"?: return .failure(BridgeError.staleTab)
+            // Zen has not let the extension load its folder code, or this is a browser without folders.
+            case "no-folders"?: return .failure(BridgeError.foldersOff)
             // An extension from before the command existed does not know it.
             case "unknown request"?:
                 return .failure(BridgeError.script("Tab Scout's extension in \(browser.name) is out of date. Add it again in Settings > Setup."))
@@ -208,8 +222,9 @@ enum FirefoxHostManifest {
 
 /// Tab Scout's extension for Firefox and the browsers built on it, as packaged inside Tab Scout.app.
 enum FirefoxExtension {
-    /// The version in the extension's manifest.json. A connected extension that says another is offered again.
-    static let version = "1.0"
+    /// The version in the extension's manifest.json, the same for Firefox's package and Zen's. A connected
+    /// extension that says another is offered again.
+    static let version = "1.1"
 
     /// Mozilla's signature is a file of this name inside the package. Firefox installs no extension without one;
     /// Zen does once its xpinstall.signatures.required setting is turned off.
