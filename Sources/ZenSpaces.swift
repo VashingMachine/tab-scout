@@ -81,6 +81,15 @@ final class ZenSpaces {
         }
     }
 
+    /// The container of the space in front, as last read or switched to: Zen opens its own new tabs there, but
+    /// gives the tabs an extension opens no container, so Tab Scout names it. Nil when the space is not known.
+    func containerInFront(completion: @escaping (Int?) -> Void) {
+        queue.async { [self] in
+            let container = last.flatMap { known in known.session.spaces.first { $0.id == known.current }?.container }
+            DispatchQueue.main.async { completion(container) }
+        }
+    }
+
     /// Notes in the log how Zen's Spaces menu is laid out, as counts and shapes only, so a switch that fails can
     /// be traced to a menu Tab Scout could not read.
     func noteMenu() {

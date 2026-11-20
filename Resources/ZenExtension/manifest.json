@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Tab Scout",
-  "version": "1.1",
+  "version": "1.2",
   "description": "Lets the Tab Scout app on this Mac search, switch to, open and close this browser's tabs when you press Cmd+T, and sort them into folders.",
   "browser_specific_settings": {
     "gecko": {
@@ -10,7 +10,7 @@
       "data_collection_permissions": {"required": ["browsingActivity"]}
     }
   },
-  "permissions": ["tabs", "nativeMessaging", "search", "storage"],
+  "permissions": ["tabs", "nativeMessaging", "search", "storage", "cookies"],
   "background": {"scripts": ["background.js"]},
   "experiment_apis": {
     "tabScoutFolders": {

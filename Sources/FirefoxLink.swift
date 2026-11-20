@@ -224,7 +224,7 @@ enum FirefoxHostManifest {
 enum FirefoxExtension {
     /// The version in the extension's manifest.json, the same for Firefox's package and Zen's. A connected
     /// extension that says another is offered again.
-    static let version = "1.1"
+    static let version = "1.2"
 
     /// Mozilla's signature is a file of this name inside the package. Firefox installs no extension without one;
     /// Zen does once its xpinstall.signatures.required setting is turned off.

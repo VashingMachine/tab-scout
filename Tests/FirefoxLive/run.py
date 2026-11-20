@@ -27,6 +27,8 @@ PREFERENCES = {
     "browser.startup.homepage_override.mstone": "ignore", "startup.homepage_welcome_url": "about:blank",
     "startup.homepage_welcome_url.additional": "", "app.update.auto": False, "browser.tabs.warnOnClose": False,
     "browser.sessionstore.resume_from_crash": False, "zen.welcome-screen.seen": True,
+    # Containers, with the four a fresh profile starts with.
+    "privacy.userContext.enabled": True,
 }
 # What lets Zen load the piece of the extension that makes folders. Firefox pays it no attention.
 if ZEN: PREFERENCES["extensions.experiments.enabled"] = True
@@ -129,7 +131,14 @@ try:
     if ZEN:
         inside(connection, 'for (let tries = 0; tries < 100 && !(window.gZenFolders && window.gZenWorkspaces && gZenWorkspaces.activeWorkspace); tries++) '
                'await new Promise(resolve => setTimeout(resolve, 100)); gZenFolders.createFolder([], {label: "Made by hand"}); return true;')
+    # Three containers to open pages in; a fresh profile may have none.
+    boxes = inside(connection, 'return ["One", "Two", "Three"].map(name => ContextualIdentityService.create("Live " + name, "fingerprint", "blue").userContextId);')
+    config = json.load(open(os.path.join(work, "config.json")))
+    config["containers"] = boxes
+    with open(os.path.join(work, "config.json"), "w") as file: json.dump(config, file)
     installed = packet(connection, {"to": root["addonsActor"], "type": "installTemporaryAddon", "addonPath": EXTENSION, "openDevTools": False})
+    # Events of the browser's window, as after running code there, may come first.
+    while installed.get("from") != root["addonsActor"]: installed = packet(connection)
     if "addon" not in installed: raise RuntimeError("the browser refused the extension: " + json.dumps(installed)[:300])
     for _ in range(120):
         if os.path.exists(os.path.join(work, "result.json")):
@@ -137,6 +146,15 @@ try:
             outcome = json.load(open(os.path.join(work, "result.json")))
             break
         time.sleep(0.5)
+    if "passed" in outcome:
+        # Zen's package may put pages in containers; Firefox's has no permission for it, so they open in none.
+        opened = inside(connection, 'return gBrowser.tabs.map(tab => [tab.linkedBrowser.currentURI.spec, tab.userContextId]);')
+        found = {key: [box for spec, box in opened if key in spec] for key in ("box=one", "box+two", "box=gone", "box=reuse")}
+        found["new tab"] = [box for spec, box in opened if spec.startswith("about:") and box == boxes[2]]
+        wanted = {"box=one": [boxes[0]], "box+two": [boxes[1]], "box=gone": [0], "box=reuse": [boxes[0]], "new tab": [boxes[2]]} if ZEN else \
+                 {"box=one": [0], "box+two": [0], "box=gone": [0], "box=reuse": [0], "new tab": []}
+        if found == wanted: outcome["passed"] += 1
+        else: outcome = {"failure": "the containers are %s, not %s" % (json.dumps(found), json.dumps(wanted)), "after": "the container checks"}
     if ZEN and "passed" in outcome:
         time.sleep(1)
         left = inside(connection, 'return Array.from(document.querySelectorAll("zen-folder")).map(folder => folder.label);')

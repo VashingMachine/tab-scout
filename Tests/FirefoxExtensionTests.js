@@ -49,6 +49,11 @@ function run(argv) {
            && unchanged(open, 4, 'https://news.example/') === null && unchanged([{id: 5, index: 0}], 1, '').id === 5,
            'A tab is closed or reused only while its position still shows its address; a missing address counts as empty');
 
+    expect(inContainer({cookieStoreId: 'firefox-container-7'}, 'firefox-container-7') && inContainer({}, 'firefox-default')
+           && inContainer({cookieStoreId: 'firefox-container-2'}, undefined) && !inContainer({cookieStoreId: 'firefox-default'}, 'firefox-container-7')
+           && !inContainer({}, 'firefox-container-7'),
+           'An empty tab is reused for a page only while it is in the container the page asks for, or none is asked for');
+
     const me = 'tabscout@local.tabscout';
     const sound = (id, audible, mutedInfo) => ({id, audible, mutedInfo});
     const mine = {muted: true, reason: 'extension', extensionId: me};
@@ -75,8 +80,8 @@ function run(argv) {
     expect(zen.version === manifest.version && same(zen.browser_specific_settings, manifest.browser_specific_settings)
            && same(zen.background, manifest.background) && zen.manifest_version === manifest.manifest_version,
            'Zen\'s package is the same extension: one ID, one version, one background script');
-    expect(same(zen.permissions.slice().sort(), ['nativeMessaging', 'search', 'storage', 'tabs']),
-           'In Zen it also remembers which folders it made, and asks for nothing else');
+    expect(same(zen.permissions.slice().sort(), ['cookies', 'nativeMessaging', 'search', 'storage', 'tabs']),
+           'In Zen it also remembers which folders it made and opens pages in a space\'s container, and asks for nothing else');
     const piece = zen.experiment_apis.tabScoutFolders;
     expect(manifest.experiment_apis === undefined && same(Object.keys(zen.experiment_apis), ['tabScoutFolders'])
            && piece.schema === 'folders.json' && piece.parent.script === 'folders.js' && same(piece.parent.paths, [['tabScoutFolders']]),

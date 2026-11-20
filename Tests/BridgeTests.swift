@@ -145,6 +145,10 @@ struct BridgeTests {
         _ = try awaitResult { bridge.open(.url("https://example.org/"), windowID: 3, completion: $0) }.get()
         _ = try awaitResult { bridge.open(.search("C++ & rust"), windowID: 0, reusing: blank, completion: $0) }.get()
         _ = try awaitResult { bridge.open(.defaultPage, windowID: 3, reusing: blank, completion: $0) }.get()
+        _ = try awaitResult { bridge.open(.url("https://example.org/"), windowID: 3, container: 7, completion: $0) }.get()
+        _ = try awaitResult { bridge.open(.search("rust"), windowID: 3, reusing: blank, container: 2, completion: $0) }.get()
+        _ = try awaitResult { bridge.open(.defaultPage, windowID: 3, reusing: blank, container: 2, completion: $0) }.get()
+        _ = try awaitResult { bridge.open(.url("https://example.org/"), windowID: 3, container: 0, completion: $0) }.get()
         let closed = try awaitResult { bridge.close(inventory.tabs, completion: $0) }.get()
         expect(calls.values.map(\.arguments) == [
             ["list"],
@@ -153,8 +157,12 @@ struct BridgeTests {
             ["url", "3", "https://example.org/"],
             ["search", "3", "C++ & rust", "2", "about:newtab"],
             ["switch", "3", "2", "about:newtab", "New Tab"],
+            ["url", "3", "https://example.org/", "0", "", "firefox-container-7"],
+            ["search", "3", "rust", "2", "about:newtab", "firefox-container-2"],
+            ["new-tab", "3", "2", "about:newtab", "firefox-container-2"],
+            ["url", "3", "https://example.org/"],
             ["close", "3", "1", "https://docs.example/"]
-        ], "A browser reached through the extension takes the scripts' commands without a browser's name, searches with its own engine and opens its own new-tab page")
+        ], "A browser reached through the extension takes the scripts' commands without a browser's name, searches with its own engine, opens its own new-tab page and names the container a page opens in")
         expect(closed == inventory.tabs, "Closed tabs come back as the tabs they were")
         let missing = BrowserBridge(browser: .firefox, transport: { _ in throw BridgeError.extensionMissing })
         expectError(awaitResult { missing.list(completion: $0) }, matching: .extensionMissing, "A browser without the extension fails as such")

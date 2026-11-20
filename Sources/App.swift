@@ -2028,8 +2028,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         default:
             if let destination = row.destination {
                 // Tabs are listed front window first, so this is the browser's front window.
-                bridge(target).open(destination, windowID: frontWindow(of: target) ?? 0,
-                                    reusing: blankActiveTab, completion: completion)
+                let windowID = frontWindow(of: target) ?? 0
+                let blank = blankActiveTab
+                guard target == .zen else {
+                    return bridge(target).open(destination, windowID: windowID, reusing: blank, completion: completion)
+                }
+                // In Zen the page opens in the container of the space in front, as Zen's own new tabs do.
+                zenSpaces.containerInFront { [weak self] container in
+                    self?.bridge(.zen).open(destination, windowID: windowID, reusing: blank, container: container, completion: completion)
+                }
             }
         }
     }
@@ -2327,26 +2334,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     /// own Profiles menu does, or one of Zen's spaces, switched to as its Spaces menu does. The page opens only
     /// once that profile's window, or that space, is in front.
     private func open(_ url: String, in place: BrowserProfile, completion: @escaping (Result<Void, Error>) -> Void) {
-        let openInFront = { [weak self] (front: BrowserTab?) in
+        let openInFront = { [weak self] (front: BrowserTab?, container: Int?) in
             guard let self else { return }
             // An empty tab on screen there takes the page instead of a second tab beside it.
             self.bridge(place.browser).open(.url(url), windowID: front?.windowID ?? 0,
-                                            reusing: front.flatMap { $0.isBlank ? $0 : nil }) { result in
+                                            reusing: front.flatMap { $0.isBlank ? $0 : nil }, container: container) { result in
                 completion(result.map { _ in })
             }
         }
         if place.browser == .zen, place.menuTitle != nil {
-            return zenSpaces.switchTo(place) { result in
+            return zenSpaces.switchTo(place) { [weak self] result in
                 if case .failure(let error) = result { return completion(.failure(error)) }
-                // Zen opens a new tab in the space it is in, so the page waits until Zen has arrived there.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { openInFront(nil) }
+                // Zen opens a new tab in the space it is in, so the page waits until Zen has arrived there. It takes
+                // that space's container, which an extension's tab only gets when it is named.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    self?.zenSpaces.containerInFront { container in openInFront(nil, container) }
+                }
             }
         }
-        guard place.browser == .chrome, place.menuTitle != nil || place.directory != nil else { return openInFront(nil) }
+        if place.browser == .zen { return zenSpaces.containerInFront { container in openInFront(nil, container) } }
+        guard place.browser == .chrome, place.menuTitle != nil || place.directory != nil else { return openInFront(nil, nil) }
         chromeProfiles.switchTo(place) { [weak self] result in
             guard let self else { return }
             if case .failure(let error) = result { return completion(.failure(error)) }
-            let openThere = { self.bridge(.chrome).active { front in openInFront((try? front.get()) ?? nil) } }
+            let openThere = { self.bridge(.chrome).active { front in openInFront((try? front.get()) ?? nil, nil) } }
             // Without its menu, Chrome was started for the profile's folder and is given a moment to open the window.
             guard place.menuTitle != nil else {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: openThere)

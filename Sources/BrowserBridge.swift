@@ -91,21 +91,31 @@ final class BrowserBridge {
     /// Opens `destination` in a new tab, or in `blank`, an empty tab on screen, so that no empty tab is left behind.
     /// The script still opens a new tab when `blank` has navigated away meanwhile. One of the browser's own pages,
     /// such as about:config, always opens in a new tab of the window in front.
-    func open(_ destination: NewTabDestination, windowID: Int, reusing blank: BrowserTab? = nil,
+    ///
+    /// `container` is the Firefox container the page opens in, by its number, for a browser reached through the
+    /// extension: Zen gives each space's new tabs the space's container, but not the tabs an extension opens.
+    /// No container, or 0, leaves the browser's own choice; `blank` is then reused whatever its container.
+    func open(_ destination: NewTabDestination, windowID: Int, reusing blank: BrowserTab? = nil, container: Int? = nil,
               completion: @escaping (Result<Data, Error>) -> Void) {
         let windowID = String(blank?.windowID ?? windowID)
-        let reuse = blank.map { [String($0.index), $0.url] } ?? []
-        if destination == .defaultPage, let blank { return select(blank, completion: completion) }
+        let store = browser.usesExtension ? container.flatMap { $0 > 0 ? "firefox-container-\($0)" : nil } : nil
+        // The container follows the empty tab's position and address, which are left blank without one.
+        let reuse = blank.map { [String($0.index), $0.url] } ?? (store == nil ? [] : ["0", ""])
+        let contained = store.map { [$0] } ?? []
+        // A browser's own empty tab is picked as it is only when the page needs no particular container.
+        if destination == .defaultPage, let blank, store == nil { return select(blank, completion: completion) }
         switch (destination, browser) {
         case (.url(let url), _) where browser.ownsAddress(url): openPage(url, completion: completion)
         case (.defaultPage, .safari):
             execute(["prepare-new-tab", windowID], on: actionQueue, after: newTabExecutor, completion: completion)
+        case (.defaultPage, _) where store != nil:
+            execute(["new-tab", windowID] + reuse + contained, on: actionQueue, completion: completion)
         case (.defaultPage, _): execute(["new-tab", windowID], on: actionQueue, completion: completion)
-        case (.url(let url), _): execute(["url", windowID, url] + reuse, on: actionQueue, completion: completion)
+        case (.url(let url), _): execute(["url", windowID, url] + reuse + contained, on: actionQueue, completion: completion)
         case (.search(let query), .chrome):
             execute(["url", windowID, Browser.googleSearch(query)] + reuse, on: actionQueue, completion: completion)
         // Safari's script and the Firefox extension search with the browser's own engine.
-        case (.search(let query), _): execute(["search", windowID, query] + reuse, on: actionQueue, completion: completion)
+        case (.search(let query), _): execute(["search", windowID, query] + reuse + contained, on: actionQueue, completion: completion)
         }
     }
 

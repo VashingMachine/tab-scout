@@ -52,7 +52,7 @@ struct ZenSessionTests {
     {"lastCollected": 1, "spaces": [
       {"uuid": "{home}", "name": "Home", "icon": "🏠", "containerTabId": 0,
        "theme": {"type": "gradient", "gradientColors": [{"c": [200, 200, 200], "isPrimary": false}, {"c": [59, 140, 246], "isPrimary": true}]}},
-      {"uuid": "{work}", "name": " Work ", "icon": "chrome://browser/skin/zen-icons/selectable/briefcase.svg",
+      {"uuid": "{work}", "name": " Work ", "icon": "chrome://browser/skin/zen-icons/selectable/briefcase.svg", "containerTabId": 7,
        "theme": {"type": "gradient", "gradientColors": [{"c": "#F43F5E", "isCustom": true}]}},
       {"uuid": "{side}", "name": "", "theme": {"type": "gradient", "gradientColors": []}},
       {"uuid": "{rgb}", "name": "Work", "icon": "", "theme": {"gradientColors": [{"c": "rgb(20, 184, 166)", "isCustom": true}]}},
@@ -80,6 +80,7 @@ struct ZenSessionTests {
         expect(session.spaces[1].color == ProfileColor(hex: 0xF43F5E) && session.spaces[3].color == ProfileColor(red: 20 / 255, green: 184 / 255, blue: 166 / 255),
                "A color picked by hand is read from its text, either way Zen writes it")
         expect(session.spaces[2].color == nil, "A theme without colors gives none")
+        expect(session.spaces.map(\.container) == [0, 7, 0, 0], "Each space's container is read; a space without one has none")
         expect(session.pages == ["{home}": ["https://news.example/", "https://mail.example/"],
                                  "{work}": ["https://jira.example/T-1", "https://docs.example/plan"]],
                "Each space holds the page each of its tabs shows now; essentials, empty tabs and tabs of no space are left out")

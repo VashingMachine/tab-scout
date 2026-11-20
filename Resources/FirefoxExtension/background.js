@@ -67,9 +67,9 @@ async function dispatch(operation, args) {
     if (operation === 'list') return JSON.stringify(rows(await normalWindows()));
     if (operation === 'active') return JSON.stringify(front(await normalWindows()));
     if (operation === 'switch') return select(Number(args[0]), Number(args[1]), args[2], args[3]);
-    if (operation === 'url') return open(Number(args[0]), {url: args[1]}, Number(args[2] || 0), args[3]);
-    if (operation === 'search') return open(Number(args[0]), {search: args[1]}, Number(args[2] || 0), args[3]);
-    if (operation === 'new-tab') return open(Number(args[0]), {}, 0, '');
+    if (operation === 'url') return open(Number(args[0]), {url: args[1]}, Number(args[2] || 0), args[3], args[4]);
+    if (operation === 'search') return open(Number(args[0]), {search: args[1]}, Number(args[2] || 0), args[3], args[4]);
+    if (operation === 'new-tab') return open(Number(args[0]), {}, Number(args[1] || 0), args[2] || '', args[3]);
     if (operation === 'close') return close(args);
     if (operation === 'reopen') return reopen(args);
     throw new Error('unknown request');
@@ -147,26 +147,50 @@ async function select(windowId, index, url, title) {
 // Opens an address, a search with the browser's own search engine, or the new-tab page, in a new tab of the
 // given window. The empty tab at `reuseIndex` is used instead while it still shows `reuseURL`. Without a normal
 // window, a new one is made.
-async function open(windowId, what, reuseIndex, reuseURL) {
+//
+// `cookieStoreId` names the container the page opens in. Zen gives the new tabs of a space that space's
+// container, but leaves the tabs an extension opens in none, so Tab Scout names it. An empty tab in another
+// container gives way to a new tab there. A container that is gone, as when it was deleted meanwhile, is left out,
+// as Zen then leaves it out of the space too.
+async function open(windowId, what, reuseIndex, reuseURL, cookieStoreId) {
     let window = await normalWindow(windowId) || (await normalWindows())[0];
     let tab = null;
+    let leftover = null;
     if (!window) {
         // A new window starts with one new-tab page.
-        window = await browser.windows.create({});
+        window = await contained({}, cookieStoreId, options => browser.windows.create(options));
         tab = (window.tabs || []).find(candidate => candidate.active) || (window.tabs || [])[0] || null;
     } else if (reuseIndex > 0) {
         tab = unchanged(window.tabs || [], reuseIndex, reuseURL);
+        if (tab && !inContainer(tab, cookieStoreId)) [leftover, tab] = [tab, null];
     }
     if (tab && what.url) {
         await browser.tabs.update(tab.id, {url: what.url, active: true});
     } else if (tab) {
         await browser.tabs.update(tab.id, {active: true});
     } else {
-        tab = await browser.tabs.create(what.url ? {windowId: window.id, url: what.url, active: true} : {windowId: window.id, active: true});
+        const options = what.url ? {windowId: window.id, url: what.url, active: true} : {windowId: window.id, active: true};
+        tab = await contained(options, cookieStoreId, choice => browser.tabs.create(choice));
     }
+    if (leftover) await browser.tabs.remove(leftover.id).catch(() => {});
     if (what.search) await browser.search.search({query: what.search, tabId: tab.id});
     await browser.windows.update(window.id, {focused: true});
     return 'ok';
+}
+
+// Whether a tab is in the container named, or no container is asked for.
+function inContainer(tab, cookieStoreId) {
+    return !cookieStoreId || (tab.cookieStoreId || 'firefox-default') === cookieStoreId;
+}
+
+// Makes a tab or window in the container named, else as the browser chooses when that container cannot be had.
+async function contained(options, cookieStoreId, make) {
+    if (!cookieStoreId) return make(options);
+    try {
+        return await make(Object.assign({}, options, {cookieStoreId: cookieStoreId}));
+    } catch (error) {
+        return make(options);
+    }
 }
 
 // Closes the tabs given as window id, position and address. A tab no longer at its position with its address

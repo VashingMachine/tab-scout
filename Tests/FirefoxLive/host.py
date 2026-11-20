@@ -130,6 +130,29 @@ def folders(base, window):
     again = ask({"type": "ungroup"}, 30)
     expect(again.get("folders") == 0 and again.get("ungrouped") == 0, "With no folder of its own left, nothing is unpacked")
 
+def containers(base, window, boxes):
+    # Pages asked into the containers run.py made; it then reads which container each tab is in, which no command
+    # answers.
+    one, two, three = ("firefox-container-%d" % box for box in boxes)
+    count = len(rows())
+    expect(bridge("url", window, base + "a.html?box=one", 0, "", one).get("result") == "ok", "An address opens in a container")
+    expect(bridge("search", window, "box two", 0, "", two).get("result") == "ok", "A search opens in a container")
+    expect(bridge("url", window, base + "b.html?box=gone", 0, "", "firefox-container-999").get("result") == "ok",
+           "An address asked into a container that is gone still opens")
+    expect(bridge("new-tab", window).get("result") == "ok", "A new tab opens with no container")
+    # Until its new-tab page has loaded, the tab shows about:blank, which an empty tab is not reused by.
+    empty = lambda x: x[4] and x[3].startswith("about:") and x[3] != "about:blank"
+    now = settle(lambda now: any(empty(x) for x in now))
+    blank = next((x for x in now if empty(x)), None)
+    expect(blank is not None and len(now) == count + 4, "That new tab is on screen")
+    expect(bridge("url", window, base + "c.html?box=reuse", blank[1], blank[3], one).get("result") == "ok",
+           "An address opens in a container while an empty tab of none is on screen")
+    now = settle(lambda now: len(now) == count + 4 and any(x[3] == base + "c.html?box=reuse" for x in now))
+    expect(len(now) == count + 4 and not any(x[3].startswith("about:") and x[1] == blank[1] for x in now) and active()[3] == base + "c.html?box=reuse",
+           "It opens in a new tab of that container, which takes the empty tab's place")
+    expect(bridge("new-tab", window, 0, "", three).get("result") == "ok", "A new tab opens in a container")
+    settle(lambda now: len(now) == count + 5)
+
 def settle_tabs(window, done, seconds=10):
     end = time.time() + seconds
     while time.time() < end:
@@ -156,6 +179,7 @@ def main():
         scenario(config["base"])
         if config.get("folders"): folders(config["base"], rows()[0][0])
         else: no_folders()
+        containers(config["base"], rows()[0][0], config["containers"])
         out["passed"] = len(checks)
     except Exception as error:
         out["failure"] = repr(error)

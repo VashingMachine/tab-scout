@@ -36,13 +36,16 @@ struct ZenSpace: Equatable {
     /// How Zen titles the space's item in its Spaces menu: the name, after its icon and two spaces unless the icon
     /// is one of Zen's drawings.
     let menuTitle: String
+    /// The container the space's tabs open in, by Firefox's number for it; 0 is no container.
+    let container: Int
 
-    init(id: String, name: String, emblem: String? = nil, color: ProfileColor? = nil, menuTitle: String? = nil) {
+    init(id: String, name: String, emblem: String? = nil, color: ProfileColor? = nil, menuTitle: String? = nil, container: Int = 0) {
         self.id = id
         self.name = name
         self.emblem = emblem
         self.color = color
         self.menuTitle = menuTitle ?? emblem.map { $0 + "  " + name } ?? name
+        self.container = max(container, 0)
     }
 }
 
@@ -73,7 +76,8 @@ struct ZenSession: Equatable {
             let emblem = icon.isEmpty || icon.count > 4 || icon.contains("/") || icon.contains(".") ? nil : icon
             spaces.append(ZenSpace(id: id, name: String((name.isEmpty ? "Space" : name).prefix(64)), emblem: emblem,
                                    color: Self.color(ofTheme: entry["theme"]),
-                                   menuTitle: rawIcon.isEmpty || rawIcon.hasSuffix(".svg") ? rawName : rawIcon + "  " + rawName))
+                                   menuTitle: rawIcon.isEmpty || rawIcon.hasSuffix(".svg") ? rawName : rawIcon + "  " + rawName,
+                                   container: (entry["containerTabId"] as? NSNumber)?.intValue ?? 0))
         }
         for tab in root["tabs"] as? [[String: Any]] ?? [] {
             guard tab["zenEssential"] as? Bool != true, let space = tab["zenWorkspace"] as? String,
